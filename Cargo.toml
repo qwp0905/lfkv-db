@@ -7,8 +7,18 @@ edition = "2021"
 
 [dependencies]
 raft = "0.7.0"
+crossbeam = "0.8.2"
+utils = { workspace = true }
+bytes = "1.5.0"
+protobuf = "2"
 
 [dependencies.hashbrown]
 version = "0.14.1"
 default-features = false
 features = ["raw"]
+
+[workspace]
+members = ["libraries/utils"]
+
+[workspace.dependencies]
+utils = { path = "./libraries/utils" }
