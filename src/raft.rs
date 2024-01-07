@@ -69,12 +69,14 @@ impl Node {
           cc.merge_from_bytes(entry.get_data())?;
           let cs = self.raw.apply_conf_change(&cc)?;
           self.raw.store().set_conf_state(cs)?;
+          self.transport.apply_conf_change(&cc);
         }
         EntryType::EntryConfChangeV2 => {
           let mut cc = ConfChangeV2::default();
           cc.merge_from_bytes(entry.get_data())?;
           let cs = self.raw.apply_conf_change(&cc)?;
           self.raw.store().set_conf_state(cs)?;
+          self.transport.apply_conf_change_v2(&cc);
         }
         EntryType::EntryNormal => {
           self.raw.store().commit(entry)?;

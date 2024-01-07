@@ -1,4 +1,5 @@
 mod buffer;
+mod error;
 mod filesystem;
 mod thread;
 mod transaction;

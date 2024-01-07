@@ -32,6 +32,14 @@ impl Page {
   pub fn reader(&self) -> ReadablePage<'_> {
     ReadablePage::new(&self.bytes)
   }
+
+  pub fn is_empty(&self) -> bool {
+    self.bytes[0] == 0
+  }
+
+  pub fn set_empty(&mut self) {
+    self.bytes[0] = 0
+  }
 }
 
 impl AsRef<[u8]> for Page {
@@ -84,7 +92,7 @@ pub struct ReadablePage<'a> {
 }
 impl<'a> ReadablePage<'a> {
   fn new(inner: &'a [u8; PAGE_SIZE]) -> Self {
-    Self { inner, offset: 0 }
+    Self { inner, offset: 1 }
   }
 
   pub fn read(&mut self) -> Option<u8> {

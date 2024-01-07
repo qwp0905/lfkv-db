@@ -1,7 +1,6 @@
 use std::{
   collections::VecDeque,
   sync::{Arc, RwLock},
-  time::Duration,
 };
 
 use crossbeam::channel::{Receiver, Sender};
@@ -12,6 +11,7 @@ use raft::{
 use utils::ShortRwLocker;
 
 use crate::{
+  error::to_raft_error,
   filesystem::{Page, PageSeeker},
   thread::ThreadPool,
 };
@@ -22,7 +22,7 @@ static HEADER_INDEX: usize = 0;
 
 #[derive(Debug)]
 pub struct WAL {
-  core: Arc<RwLock<WALCore>>,
+  core: RwLock<WALCore>,
 }
 impl Storage for WAL {
   fn term(&self, idx: u64) -> raft::Result<u64> {
@@ -71,8 +71,8 @@ impl WAL {
   pub fn commit(&self, entry: Entry) -> raft::Result<()> {
     let mut core = self.core.wl();
     if let Some(de) = core.buffer.remove(entry.get_index() as usize) {
-      core.seeker.append(de.data.into())?;
-      return core.seeker.fsync().map_err(raft::Error::Io);
+      core.seeker.append(de.data.into()).map_err(to_raft_error)?;
+      return core.seeker.fsync().map_err(to_raft_error);
     };
     Ok(())
   }
@@ -106,7 +106,7 @@ impl WALCore {
   }
 
   fn get_header(&self) -> raft::Result<Header> {
-    let page = self.seeker.get(HEADER_INDEX).map_err(raft::Error::Io)?;
+    let page = self.seeker.read(HEADER_INDEX).map_err(to_raft_error)?;
     todo!()
   }
 
@@ -128,8 +128,8 @@ impl WALCore {
 
   pub fn commit(&mut self, entry: Entry) -> raft::Result<()> {
     if let Some(de) = self.buffer.remove(entry.get_index() as usize) {
-      self.seeker.append(de.data.into())?;
-      return self.seeker.fsync().map_err(raft::Error::Io);
+      self.seeker.append(de.data.into()).map_err(to_raft_error)?;
+      return self.seeker.fsync().map_err(to_raft_error);
     };
     Ok(())
   }

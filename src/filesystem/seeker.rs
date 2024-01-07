@@ -7,6 +7,8 @@ use std::{
 
 use utils::ShortRwLocker;
 
+use crate::error::{ErrorKind, Result};
+
 use super::{Page, PAGE_SIZE};
 
 #[derive(Debug)]
@@ -14,7 +16,7 @@ pub struct PageSeeker {
   inner: RwLock<File>,
 }
 impl PageSeeker {
-  pub fn open<T>(path: T) -> std::io::Result<PageSeeker>
+  pub fn open<T>(path: T) -> Result<PageSeeker>
   where
     T: AsRef<Path>,
   {
@@ -25,41 +27,52 @@ impl PageSeeker {
       .open(path)
       .map(|inner| Self {
         inner: RwLock::new(inner),
-      });
+      })
+      .map_err(ErrorKind::IO);
   }
 
-  pub fn get(&self, index: usize) -> std::io::Result<Page> {
+  pub fn read(&self, index: usize) -> Result<Page> {
     let mut inner = self.inner.wl();
-    inner.seek(SeekFrom::Start(get_offset(index)))?;
+    inner
+      .seek(SeekFrom::Start(get_offset(index)))
+      .map_err(ErrorKind::IO)?;
     let mut page = Page::new();
-    inner.read_exact(page.as_mut())?;
+    inner
+      .read_exact(page.as_mut())
+      .map_err(|_| ErrorKind::NotFound)?;
     return Ok(page);
   }
 
-  pub fn write(&self, index: usize, page: Page) -> std::io::Result<()> {
+  pub fn write(&self, index: usize, page: Page) -> Result<()> {
     let mut inner = self.inner.wl();
-    inner.seek(SeekFrom::Start(get_offset(index)))?;
-    inner.write_all(page.as_ref())?;
+    inner
+      .seek(SeekFrom::Start(get_offset(index)))
+      .map_err(ErrorKind::IO)?;
+    inner.write_all(page.as_ref()).map_err(ErrorKind::IO)?;
     return Ok(());
   }
 
-  pub fn append(&self, page: Page) -> std::io::Result<usize> {
+  pub fn append(&self, page: Page) -> Result<usize> {
     let mut inner = self.inner.wl();
-    let n = inner.seek(SeekFrom::End(0))?;
-    inner.write_all(page.as_ref())?;
+    let n = inner.seek(SeekFrom::End(0)).map_err(ErrorKind::IO)?;
+    inner.write_all(page.as_ref()).map_err(ErrorKind::IO)?;
     return Ok(n as usize / PAGE_SIZE);
   }
 
-  pub fn fsync(&self) -> std::io::Result<()> {
-    return self.inner.rl().sync_all();
+  pub fn fsync(&self) -> Result<()> {
+    return self.inner.rl().sync_all().map_err(ErrorKind::IO);
   }
 
-  pub fn truncate(&self, size: usize) -> std::io::Result<()> {
-    return self.inner.wl().set_len(get_offset(size));
+  pub fn truncate(&self, size: usize) -> Result<()> {
+    return self
+      .inner
+      .wl()
+      .set_len(get_offset(size))
+      .map_err(ErrorKind::IO);
   }
 
-  pub fn len(&self) -> std::io::Result<usize> {
-    let metadata = self.inner.rl().metadata()?;
+  pub fn len(&self) -> Result<usize> {
+    let metadata = self.inner.rl().metadata().map_err(ErrorKind::IO)?;
     Ok(metadata.len() as usize)
   }
 }
