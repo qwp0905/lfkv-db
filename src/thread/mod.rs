@@ -2,7 +2,7 @@ mod counter;
 mod worker;
 
 use std::{
-  panic::{set_hook, UnwindSafe},
+  panic::{set_hook, RefUnwindSafe, UnwindSafe},
   sync::{Arc, Once},
   thread::{current, Builder},
   time::Duration,
@@ -144,3 +144,5 @@ impl<T: 'static> Default for ThreadPool<T> {
     Self::new(1024, size::mb(2), "default", Some(Duration::from_secs(300)))
   }
 }
+impl<T: 'static> UnwindSafe for ThreadPool<T> {}
+impl<T: 'static> RefUnwindSafe for ThreadPool<T> {}

@@ -87,5 +87,5 @@ impl Drop for TransactionManager {
   }
 }
 
-impl UnwindSafe for TransactionManager {}
-impl RefUnwindSafe for TransactionManager {}
+// impl UnwindSafe for TransactionManager {}
+// impl RefUnwindSafe for TransactionManager {}
