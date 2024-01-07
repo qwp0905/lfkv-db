@@ -5,7 +5,7 @@ use std::{
   sync::RwLock,
 };
 
-use utils::RwLocker;
+use utils::ShortRwLocker;
 
 use super::{Page, PAGE_SIZE};
 

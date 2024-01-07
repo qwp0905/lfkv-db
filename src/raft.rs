@@ -1,5 +1,6 @@
 use std::{
   collections::HashMap,
+  sync::Mutex,
   time::{Duration, Instant},
 };
 
@@ -9,6 +10,7 @@ use raft::{
   eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType, Message},
   RaftLog, RawNode, StateRole, Storage,
 };
+use utils::ShortLocker;
 
 use crate::{transport::Transport, wal::WAL};
 
@@ -18,7 +20,7 @@ pub struct Node {
   transport: Transport,
   stop: Receiver<()>,
   proposed: Receiver<Proposal>,
-  in_progress: HashMap<u64, Sender<bool>>,
+  in_progress: Mutex<HashMap<u64, Sender<bool>>>,
 }
 impl Node {
   fn start(&mut self) -> Result<(), raft::Error> {
@@ -44,14 +46,14 @@ impl Node {
         while let Ok(proposal) = self.proposed.try_recv() {
           let index = proposal.entry.get_index();
           self.raw.handle_proposal(proposal.entry)?;
-          self.in_progress.insert(index, proposal.done);
+          self.in_progress.l().insert(index, proposal.done);
         }
       }
 
       self.on_ready()?;
     }
 
-    Ok(())
+    return Ok(());
   }
 
   fn handle_committed(&mut self, entries: Vec<Entry>) -> raft::Result<()> {
@@ -84,10 +86,11 @@ impl Node {
 
       self
         .in_progress
+        .l()
         .remove(&index)
         .map(|c| c.send(true).unwrap());
     }
-    Ok(())
+    return Ok(());
   }
 
   fn on_ready(&mut self) -> raft::Result<()> {
@@ -115,7 +118,8 @@ impl Node {
     }
     self.handle_committed(light.take_committed_entries())?;
     self.raw.advance_apply();
-    Ok(())
+
+    return Ok(());
   }
 }
 

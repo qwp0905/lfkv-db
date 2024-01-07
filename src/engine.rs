@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::raft::Node;
 
 pub struct Engine {
-  node: Arc<Mutex<Node>>,
+  node: Arc<Node>,
 }
 
 impl Engine {}

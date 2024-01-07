@@ -1,4 +1,10 @@
+use std::sync::Arc;
+
+use crate::{buffer::BufferPool, transaction::TransactionManager};
+
 mod node;
 
-#[derive(Debug)]
-pub struct Cursor {}
+pub struct Cursor {
+  buffer: Arc<BufferPool>,
+  transactions: Arc<TransactionManager>,
+}

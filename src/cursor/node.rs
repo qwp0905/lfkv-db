@@ -3,4 +3,6 @@ pub enum Node {
   Leaf(),
 }
 
-pub struct CursorEntry {}
+pub struct CursorEntry {
+  node: Node,
+}

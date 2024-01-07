@@ -9,7 +9,7 @@ use raft::{
   eraftpb::{ConfState, Entry, HardState, Snapshot},
   Storage,
 };
-use utils::RwLocker;
+use utils::ShortRwLocker;
 
 use crate::{
   filesystem::{Page, PageSeeker},
