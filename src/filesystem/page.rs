@@ -9,7 +9,8 @@ pub struct Page {
 }
 impl Page {
   pub fn new() -> Self {
-    let bytes = [0; PAGE_SIZE];
+    let mut bytes = [0; PAGE_SIZE];
+    bytes[0] = 1;
     Self { bytes }
   }
 
@@ -29,8 +30,8 @@ impl Page {
     return p;
   }
 
-  pub fn reader(&self) -> ReadablePage<'_> {
-    ReadablePage::new(&self.bytes)
+  pub fn scanner(&self) -> PageScanner<'_> {
+    PageScanner::new(&self.bytes)
   }
 
   pub fn is_empty(&self) -> bool {
@@ -86,11 +87,11 @@ impl From<Bytes> for Page {
   }
 }
 
-pub struct ReadablePage<'a> {
+pub struct PageScanner<'a> {
   inner: &'a [u8; PAGE_SIZE],
   offset: usize,
 }
-impl<'a> ReadablePage<'a> {
+impl<'a> PageScanner<'a> {
   fn new(inner: &'a [u8; PAGE_SIZE]) -> Self {
     Self { inner, offset: 1 }
   }

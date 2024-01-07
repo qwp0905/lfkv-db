@@ -18,7 +18,7 @@ pub struct BufferPool {
   cache: Mutex<Cache<usize, Page>>,
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
-  channel: Sender<Option<(usize, Page)>>,
+  channel: Sender<Option<Vec<(usize, Page)>>>,
 }
 impl BufferPool {
   fn start_background(&self, rx: Receiver<Option<Vec<(usize, Page)>>>) {
@@ -52,9 +52,17 @@ impl BufferPool {
       return Err(ErrorKind::NotFound);
     }
 
-    if let Some((ei, evicted)) = { self.cache.l().insert(index, page.copy()) } {
-      self.channel.send(Some((ei, evicted))).unwrap();
-    }
+    self.cache.l().insert(index, page.copy());
     return Ok(page);
+  }
+
+  pub fn insert(&self, index: usize, page: Page) -> Result<()> {
+    if let Some(p) = { self.cache.l().get_mut(&index) } {
+      *p = page;
+      return Ok(());
+    };
+
+    self.cache.l().insert(index, page);
+    return Ok(());
   }
 }
