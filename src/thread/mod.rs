@@ -1,3 +1,6 @@
+mod channel;
+pub use channel::*;
+
 mod counter;
 mod worker;
 
@@ -62,6 +65,8 @@ impl<T: 'static> ThreadPool<T> {
         logger::error(message);
       }));
     });
+
+    let (dc, dr) = ThreadChannel::<ThreadWorker<T>>::new();
 
     let (ready_s, ready_r) = unbounded();
     let (done_s, done_r) = unbounded::<Message<ThreadWorker<T>>>();

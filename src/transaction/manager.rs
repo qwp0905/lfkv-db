@@ -1,6 +1,5 @@
 use std::{
   collections::HashMap,
-  panic::{RefUnwindSafe, UnwindSafe},
   sync::{Arc, Mutex},
 };
 
@@ -86,6 +85,3 @@ impl Drop for TransactionManager {
     self.release.send(None).unwrap();
   }
 }
-
-// impl UnwindSafe for TransactionManager {}
-// impl RefUnwindSafe for TransactionManager {}
