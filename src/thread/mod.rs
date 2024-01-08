@@ -2,7 +2,9 @@ mod channel;
 pub use channel::*;
 
 mod counter;
+use counter::*;
 mod worker;
+use worker::*;
 
 use std::{
   panic::{set_hook, RefUnwindSafe, UnwindSafe},
@@ -13,11 +15,6 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver};
 use utils::{logger, size, DroppableReceiver};
-
-use self::{
-  counter::Counter,
-  worker::{ThreadWorker, WorkerConfig},
-};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -39,7 +36,7 @@ impl BaseConfig {
 #[allow(unused)]
 pub struct ThreadPool<T = ()> {
   ready: Box<Receiver<ThreadWorker<T>>>,
-  done: Box<ThreadChannel<ThreadWorker<T>>>,
+  done: Box<StoppableChannel<ThreadWorker<T>>>,
   main: Option<ThreadWorker<std::io::Result<()>>>,
   count: Arc<Counter>,
   config: BaseConfig,
@@ -65,10 +62,10 @@ impl<T: 'static> ThreadPool<T> {
       }));
     });
 
-    let (dc, dr) = ThreadChannel::<ThreadWorker<T>>::new();
+    let (dc, dr) = StoppableChannel::<ThreadWorker<T>>::new();
 
     let (ready_s, ready_r) = unbounded();
-    let (done_s, done_r) = ThreadChannel::<ThreadWorker<T>>::new();
+    let (done_s, done_r) = StoppableChannel::<ThreadWorker<T>>::new();
 
     let count = Arc::new(Counter::new(max_len));
     let mut main = ThreadWorker::new(WorkerConfig {

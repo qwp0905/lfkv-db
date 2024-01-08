@@ -24,17 +24,5 @@ impl ErrorKind {
     }
   }
 }
-impl From<ErrorKind> for raft::Error {
-  fn from(value: ErrorKind) -> Self {
-    if let ErrorKind::IO(err) = value {
-      return raft::Error::Io(err);
-    }
-    return raft::Error::Store(raft::StorageError::Other(Box::new(value)));
-  }
-}
 
 pub type Result<T> = std::result::Result<T, ErrorKind>;
-
-pub fn to_raft_error(err: ErrorKind) -> raft::Error {
-  err.into()
-}

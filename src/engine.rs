@@ -1,9 +1,3 @@
-use std::sync::Arc;
-
-use crate::raft::Node;
-
-pub struct Engine {
-  node: Arc<Node>,
-}
+pub struct Engine {}
 
 impl Engine {}

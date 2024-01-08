@@ -9,7 +9,7 @@ use std::{
 use crossbeam::channel::Receiver;
 use utils::{logger, DroppableReceiver, EmptySender};
 
-use super::{ContextReceiver, ThreadChannel, ThreadContext};
+use super::{ContextReceiver, StoppableChannel, StoppableContext};
 
 #[allow(unused)]
 type Work<E> = dyn FnOnce() -> E + Send + UnwindSafe + 'static;
@@ -30,7 +30,7 @@ pub struct WorkerConfig {
 
 #[allow(unused)]
 pub struct ThreadWorker<T> {
-  channel: ThreadChannel<Box<Work<T>>>,
+  channel: StoppableChannel<Box<Work<T>>>,
   done: VecDeque<Receiver<()>>,
   thread: Option<JoinHandle<()>>,
   config: WorkerConfig,
@@ -116,8 +116,8 @@ fn spawn<T: 'static>(
   stack_size: usize,
   name: String,
   timeout: Option<Duration>,
-) -> (JoinHandle<()>, ThreadChannel<Box<Work<T>>>) {
-  let (tx, rx) = ThreadChannel::new();
+) -> (JoinHandle<()>, StoppableChannel<Box<Work<T>>>) {
+  let (tx, rx) = StoppableChannel::new();
   let thread = Builder::new()
     .stack_size(stack_size)
     .name(name)
@@ -131,7 +131,7 @@ fn handle_thread<T: 'static>(
   timeout: Option<Duration>,
 ) -> impl FnOnce() + Send + 'static {
   move || loop {
-    while let Ok(ThreadContext::WithDone((job, done))) =
+    while let Ok(StoppableContext::WithDone((job, done))) =
       rx.maybe_timeout(timeout)
     {
       catch_unwind(job).ok();

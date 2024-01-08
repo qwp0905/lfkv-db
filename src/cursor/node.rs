@@ -1,19 +1,19 @@
 pub enum Node {
-  Interior(InteriorNode),
+  Internal(InternalNode),
   Leaf(LeafNode),
 }
 
-pub struct InteriorNode {
+pub struct InternalNode {
   keys: Vec<String>,
   children: Vec<usize>,
 }
-impl InteriorNode {
+impl InternalNode {
   fn split(&mut self) -> (Node, String) {
     let c = self.keys.len() / 2;
     let mut keys = self.keys.split_off(c - 1);
     let m = keys.remove(0);
     let children = self.children.split_off(c);
-    return (Node::Interior(InteriorNode { keys, children }), m);
+    return (Node::Internal(InternalNode { keys, children }), m);
   }
 }
 
@@ -51,7 +51,7 @@ impl CursorEntry {
 
   pub fn find_next(&self, key: &String) -> Result<usize, Option<usize>> {
     match &self.node {
-      Node::Interior(node) => {
+      Node::Internal(node) => {
         let i = node
           .keys
           .binary_search_by(|k| k.cmp(key))
@@ -68,7 +68,7 @@ impl CursorEntry {
 
   pub fn split(&mut self, added: usize) -> (Self, String) {
     match &mut self.node {
-      Node::Interior(node) => {
+      Node::Internal(node) => {
         let (n, s) = node.split();
         return (Self::new(added, n), s);
       }
