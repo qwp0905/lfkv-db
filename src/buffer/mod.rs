@@ -4,8 +4,8 @@ use crossbeam::channel::{Receiver, Sender};
 use utils::ShortLocker;
 
 use crate::{
+  disk::{Page, PageSeeker},
   error::{ErrorKind, Result},
-  filesystem::{Page, PageSeeker},
   thread::ThreadPool,
 };
 

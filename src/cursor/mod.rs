@@ -2,8 +2,8 @@ use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
   buffer::BufferPool,
+  disk::Page,
   error::Result,
-  filesystem::Page,
   transaction::{PageLock, TransactionManager},
   wal::WAL,
 };

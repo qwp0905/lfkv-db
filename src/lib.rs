@@ -1,6 +1,6 @@
 mod buffer;
+mod disk;
 mod error;
-mod filesystem;
 mod thread;
 mod transaction;
 mod wal;

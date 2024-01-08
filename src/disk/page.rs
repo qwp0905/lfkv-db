@@ -1,6 +1,8 @@
 use bytes::Bytes;
 use utils::size;
 
+use crate::error::{ErrorKind, Result};
+
 pub const PAGE_SIZE: usize = size::kb(4);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -32,6 +34,10 @@ impl Page {
 
   pub fn scanner(&self) -> PageScanner<'_> {
     PageScanner::new(&self.bytes)
+  }
+
+  pub fn writer(&mut self) -> PageWriter<'_> {
+    PageWriter::new(&mut self.bytes)
   }
 
   pub fn is_empty(&self) -> bool {
@@ -118,5 +124,24 @@ impl<'a> PageScanner<'a> {
 
   pub fn is_eof(&self) -> bool {
     self.inner.len() <= self.offset
+  }
+}
+
+pub struct PageWriter<'a> {
+  inner: &'a mut [u8; PAGE_SIZE],
+  offset: usize,
+}
+impl<'a> PageWriter<'a> {
+  fn new(inner: &'a mut [u8; PAGE_SIZE]) -> Self {
+    Self { inner, offset: 1 }
+  }
+
+  pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+    let end = bytes.len() + self.offset;
+    if end >= PAGE_SIZE {
+      return Err(ErrorKind::ByteOverflow);
+    };
+    self.inner[self.offset..end].copy_from_slice(&bytes);
+    return Ok(());
   }
 }

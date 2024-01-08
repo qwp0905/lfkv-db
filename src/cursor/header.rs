@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::{error::ErrorKind, filesystem::Page};
+use crate::{disk::Page, error::ErrorKind};
 
 pub struct TreeHeader {
   root: usize,
