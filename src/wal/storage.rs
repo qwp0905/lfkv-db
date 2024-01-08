@@ -20,7 +20,6 @@ use super::log::Header;
 
 static HEADER_INDEX: usize = 0;
 
-#[derive(Debug)]
 pub struct WAL {
   core: RwLock<WALCore>,
 }
@@ -78,7 +77,6 @@ impl WAL {
   }
 }
 
-#[derive(Debug)]
 pub struct WALCore {
   seeker: Arc<PageSeeker>,
   max_file_size: usize,

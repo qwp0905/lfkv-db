@@ -11,12 +11,12 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use utils::{logger, size};
+use crossbeam::channel::{unbounded, Receiver};
+use utils::{logger, size, DroppableReceiver};
 
 use self::{
   counter::Counter,
-  worker::{Message, ThreadWorker, WorkerConfig},
+  worker::{ThreadWorker, WorkerConfig},
 };
 
 #[allow(unused)]
@@ -37,10 +37,9 @@ impl BaseConfig {
 }
 
 #[allow(unused)]
-#[derive(Debug)]
 pub struct ThreadPool<T = ()> {
   ready: Box<Receiver<ThreadWorker<T>>>,
-  done: Box<Sender<Message<ThreadWorker<T>>>>,
+  done: Box<ThreadChannel<ThreadWorker<T>>>,
   main: Option<ThreadWorker<std::io::Result<()>>>,
   count: Arc<Counter>,
   config: BaseConfig,
@@ -69,7 +68,7 @@ impl<T: 'static> ThreadPool<T> {
     let (dc, dr) = ThreadChannel::<ThreadWorker<T>>::new();
 
     let (ready_s, ready_r) = unbounded();
-    let (done_s, done_r) = unbounded::<Message<ThreadWorker<T>>>();
+    let (done_s, done_r) = ThreadChannel::<ThreadWorker<T>>::new();
 
     let count = Arc::new(Counter::new(max_len));
     let mut main = ThreadWorker::new(WorkerConfig {
@@ -81,7 +80,7 @@ impl<T: 'static> ThreadPool<T> {
     let cc = Arc::clone(&count);
     main.execute(move || {
       let ready_s = Box::new(ready_s);
-      while let Message::New(mut worker) = done_r.recv().unwrap() {
+      while let Ok(mut worker) = done_r.take_new() {
         let ready_s = ready_s.to_owned();
         let count = Arc::clone(&cc);
         Builder::new()
@@ -127,7 +126,7 @@ impl<T: 'static> ThreadPool<T> {
         })
     });
     thread.execute(f);
-    self.done.send(Message::New(thread)).unwrap();
+    self.done.send(thread);
   }
 
   pub fn scale_out(&self, size: usize) {
@@ -136,12 +135,12 @@ impl<T: 'static> ThreadPool<T> {
 }
 impl<T> Drop for ThreadPool<T> {
   fn drop(&mut self) {
-    self.done.send(Message::Term).unwrap();
+    self.done.terminate();
     if let Some(mut main) = self.main.take() {
       main.clear();
       drop(main);
     }
-    self.ready.iter().for_each(drop);
+    self.ready.drop_all();
   }
 }
 impl<T: 'static> Default for ThreadPool<T> {

@@ -3,7 +3,6 @@ use raft::eraftpb::Message;
 
 use crate::thread::ThreadPool;
 
-#[derive(Debug)]
 pub struct GrpcClient {
   threads: ThreadPool,
   mailbox: Sender<Message>,

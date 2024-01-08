@@ -40,7 +40,6 @@ impl Peers {
   }
 }
 
-#[derive(Debug)]
 pub struct Transport {
   peers: Peers,
   client: GrpcClient,

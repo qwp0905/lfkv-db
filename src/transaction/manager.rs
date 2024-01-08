@@ -10,7 +10,6 @@ use crate::thread::ThreadPool;
 
 use super::{lock::PageLocker, PageLock};
 
-#[derive(Debug)]
 pub struct TransactionManager {
   tree_locks: Arc<Mutex<HashMap<usize, PageLocker>>>,
   background: ThreadPool,

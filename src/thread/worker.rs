@@ -6,8 +6,10 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::channel::{unbounded, Receiver, RecvError, Sender};
-use utils::logger;
+use crossbeam::channel::Receiver;
+use utils::{logger, DroppableReceiver, EmptySender};
+
+use super::{ContextReceiver, ThreadChannel, ThreadContext};
 
 #[allow(unused)]
 type Work<E> = dyn FnOnce() -> E + Send + UnwindSafe + 'static;
@@ -27,9 +29,8 @@ pub struct WorkerConfig {
 }
 
 #[allow(unused)]
-#[derive(Debug)]
 pub struct ThreadWorker<T> {
-  channel: Sender<Message<(Box<Work<T>>, Sender<()>)>>,
+  channel: ThreadChannel<Box<Work<T>>>,
   done: VecDeque<Receiver<()>>,
   thread: Option<JoinHandle<()>>,
   config: WorkerConfig,
@@ -37,11 +38,11 @@ pub struct ThreadWorker<T> {
 
 impl<T: 'static> ThreadWorker<T> {
   pub fn new(config: WorkerConfig) -> Self {
-    let (thread, tx) =
+    let (thread, channel) =
       spawn(config.stack_size, config.name.to_owned(), config.timeout);
 
     Self {
-      channel: tx,
+      channel,
       done: VecDeque::new(),
       thread: Some(thread),
       config,
@@ -53,7 +54,7 @@ impl<T: 'static> ThreadWorker<T> {
       if !t.is_finished() {
         return;
       }
-      let (thread, tx) = spawn(
+      let (thread, channel) = spawn(
         self.config.stack_size,
         self.config.name.to_owned(),
         self.config.timeout,
@@ -64,7 +65,7 @@ impl<T: 'static> ThreadWorker<T> {
           self.config.name
         ));
       }
-      drop(replace(&mut self.channel, tx));
+      drop(replace(&mut self.channel, channel));
       return;
     }
 
@@ -82,16 +83,15 @@ impl<T: 'static> ThreadWorker<T> {
     F: FnOnce() -> T + Send + UnwindSafe + 'static,
   {
     self.respawn();
-    let (tx, rx) = unbounded();
     let job = Box::new(f);
-    self.channel.send(Message::New((job, tx))).unwrap();
+    let rx = self.channel.send_with_done(job);
     self.done.push_back(rx);
   }
 
   #[inline]
   pub fn clear(&mut self) {
     while let Some(done) = self.done.pop_front() {
-      done.iter().for_each(drop);
+      done.drop_all();
     }
   }
 
@@ -103,7 +103,7 @@ impl<T> Drop for ThreadWorker<T> {
   fn drop(&mut self) {
     if let Some(t) = self.thread.take() {
       if !t.is_finished() {
-        self.channel.send(Message::Term).unwrap();
+        self.channel.terminate();
       }
       if let Err(_) = t.join() {
         logger::error(format!("error on thread {}", self.config.name));
@@ -116,8 +116,8 @@ fn spawn<T: 'static>(
   stack_size: usize,
   name: String,
   timeout: Option<Duration>,
-) -> (JoinHandle<()>, Sender<Message<(Box<Work<T>>, Sender<()>)>>) {
-  let (tx, rx) = unbounded::<Message<(Box<Work<T>>, Sender<()>)>>();
+) -> (JoinHandle<()>, ThreadChannel<Box<Work<T>>>) {
+  let (tx, rx) = ThreadChannel::new();
   let thread = Builder::new()
     .stack_size(stack_size)
     .name(name)
@@ -127,16 +127,15 @@ fn spawn<T: 'static>(
 }
 
 fn handle_thread<T: 'static>(
-  rx: Receiver<Message<(Box<Work<T>>, Sender<()>)>>,
+  rx: ContextReceiver<Box<Work<T>>>,
   timeout: Option<Duration>,
 ) -> impl FnOnce() + Send + 'static {
   move || loop {
-    while let Ok(Message::New((job, done))) = timeout
-      .map(|to| rx.recv_timeout(to).map_err(|_| RecvError))
-      .unwrap_or(rx.recv())
+    while let Ok(ThreadContext::WithDone((job, done))) =
+      rx.maybe_timeout(timeout)
     {
       catch_unwind(job).ok();
-      done.send(()).unwrap();
+      done.close();
     }
   }
 }
