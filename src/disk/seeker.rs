@@ -5,7 +5,7 @@ use std::{
   sync::RwLock,
 };
 
-use utils::ShortRwLocker;
+use utils::ShortenedRwLock;
 
 use crate::error::{ErrorKind, Result};
 

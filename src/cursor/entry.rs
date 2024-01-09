@@ -1,3 +1,5 @@
+use crate::{disk::Page, error::Result};
+
 use super::node::Node;
 
 pub struct CursorEntry {
@@ -9,7 +11,14 @@ impl CursorEntry {
     Self { index, node }
   }
 
-  pub fn find_next(&self, key: &String) -> Result<usize, Option<usize>> {
+  pub fn from(index: usize, page: Page) -> Result<Self> {
+    Ok(Self::new(index, page.try_into()?))
+  }
+
+  pub fn find_next(
+    &self,
+    key: &String,
+  ) -> core::result::Result<usize, Option<usize>> {
     match &self.node {
       Node::Internal(node) => {
         let i = node
@@ -36,6 +45,13 @@ impl CursorEntry {
         let (n, s) = node.split(self.index, added);
         return (Self::new(added, n), s);
       }
+    }
+  }
+
+  pub fn add(&mut self, key: String, index: usize) {
+    match &mut self.node {
+      Node::Internal(node) => {}
+      Node::Leaf(node) => {}
     }
   }
 }

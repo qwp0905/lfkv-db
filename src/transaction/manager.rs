@@ -3,7 +3,7 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use utils::{size, DroppableReceiver, EmptySender, ShortLocker};
+use utils::{size, DroppableReceiver, EmptySender, ShortenedMutex};
 
 use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
 

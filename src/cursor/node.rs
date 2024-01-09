@@ -1,6 +1,24 @@
+use crate::{disk::Page, error::ErrorKind};
+
 pub enum Node {
   Internal(InternalNode),
   Leaf(LeafNode),
+}
+impl TryFrom<Page> for Node {
+  type Error = ErrorKind;
+  fn try_from(value: Page) -> Result<Self, Self::Error> {
+    match value.as_ref()[0] {
+      0 => Ok(Self::Leaf(LeafNode::try_from(value)?)),
+      1 => Ok(Self::Internal(InternalNode::try_from(value)?)),
+      _ => Err(ErrorKind::Invalid),
+    }
+  }
+}
+impl TryFrom<Node> for Page {
+  type Error = ErrorKind;
+  fn try_from(value: Node) -> Result<Self, Self::Error> {
+    value.try_into()
+  }
 }
 
 pub struct InternalNode {
@@ -14,6 +32,42 @@ impl InternalNode {
     let m = keys.remove(0);
     let children = self.children.split_off(c);
     return (Node::Internal(InternalNode { keys, children }), m);
+  }
+}
+impl TryFrom<InternalNode> for Page {
+  type Error = ErrorKind;
+  fn try_from(value: InternalNode) -> Result<Self, Self::Error> {
+    let mut p = Page::new();
+    let mut wt = p.writer();
+    wt.write(&[1])?;
+    wt.write(&[value.keys.len() as u8])?;
+    for k in &value.keys {
+      wt.write(&[k.len() as u8])?;
+      wt.write(k.as_bytes())?;
+    }
+    for i in 0..(value.keys.len() + 1) {
+      wt.write(&value.children[i].to_be_bytes())?;
+    }
+    return Ok(p);
+  }
+}
+impl TryFrom<Page> for InternalNode {
+  type Error = ErrorKind;
+  fn try_from(value: Page) -> Result<Self, Self::Error> {
+    let mut sc = value.scanner();
+    sc.read();
+    let kl = sc.read().unwrap();
+    let mut keys = vec![];
+    let mut children = vec![];
+    for _ in 0..kl {
+      let n = sc.read().unwrap();
+      keys.push(String::from_utf8_lossy(sc.read_n(n as usize)).to_string());
+    }
+    for _ in 0..(kl + 1) {
+      children.push(sc.read_usize());
+    }
+
+    return Ok(InternalNode { keys, children });
   }
 }
 
@@ -37,5 +91,46 @@ impl LeafNode {
       }),
       m,
     );
+  }
+}
+
+impl TryFrom<LeafNode> for Page {
+  type Error = ErrorKind;
+  fn try_from(value: LeafNode) -> Result<Self, Self::Error> {
+    let mut p = Page::new();
+    let mut wt = p.writer();
+    wt.write(&[0])?;
+    wt.write(&[value.keys.len() as u8])?;
+    for (k, i) in &value.keys {
+      wt.write(&[k.len() as u8])?;
+      wt.write(k.as_bytes())?;
+      wt.write(&i.to_be_bytes())?;
+    }
+    let prev = value.prev.unwrap_or(0);
+    wt.write(&prev.to_be_bytes())?;
+    let next = value.next.unwrap_or(0);
+    wt.write(&next.to_be_bytes())?;
+    return Ok(p);
+  }
+}
+
+impl TryFrom<Page> for LeafNode {
+  type Error = ErrorKind;
+  fn try_from(value: Page) -> Result<Self, Self::Error> {
+    let mut sc = value.scanner();
+    sc.read();
+    let mut keys = vec![];
+    let kl = sc.read().unwrap();
+    for _ in 0..kl {
+      let n = sc.read().unwrap();
+      let k = String::from_utf8_lossy(sc.read_n(n as usize)).to_string();
+      let i = sc.read_usize();
+      keys.push((k, i));
+    }
+    let prev = sc.read_usize();
+    let prev = if prev == 0 { None } else { Some(prev) };
+    let next = sc.read_usize();
+    let next = if next == 0 { None } else { Some(next) };
+    return Ok(Self { keys, prev, next });
   }
 }

@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::Arc};
 use crate::{
   buffer::BufferPool,
   disk::Page,
-  error::Result,
+  error::{ErrorKind, Result},
   transaction::{PageLock, TransactionManager},
   wal::WAL,
 };
@@ -11,7 +11,7 @@ use crate::{
 mod header;
 use header::*;
 mod node;
-use node::*;
+// use node::*;
 mod entry;
 use entry::*;
 
@@ -22,6 +22,19 @@ pub struct Cursor {
   locks: VecDeque<PageLock>,
 }
 impl Cursor {
+  pub fn new(
+    buffer: Arc<BufferPool>,
+    transactions: Arc<TransactionManager>,
+    wal: Arc<WAL>,
+  ) -> Self {
+    Self {
+      buffer,
+      transactions,
+      wal,
+      locks: Default::default(),
+    }
+  }
+
   pub fn get<T>(&mut self, key: String) -> Result<T>
   where
     T: TryFrom<Page>,
@@ -33,7 +46,21 @@ impl Cursor {
       self.locks.push_back(l);
 
       let page = self.buffer.get(index)?;
-      // let entry =
+      let entry = CursorEntry::from(index, page)?;
+      match entry.find_next(&key) {
+        Ok(i) => {
+          let l = self.transactions.fetch_read(i);
+          self.locks.push_back(l);
+          let p = self.buffer.get(i)?;
+          return p.try_into().map_err(|_| ErrorKind::Unknown);
+        }
+        Err(c) => match c {
+          None => return Err(ErrorKind::NotFound),
+          Some(i) => {
+            index = i;
+          }
+        },
+      }
     }
   }
 }
