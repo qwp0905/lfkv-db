@@ -66,8 +66,8 @@ impl PageLocker {
 
   pub fn release(&mut self) -> Option<impl Iterator<Item = Sender<()>> + '_> {
     if let LockStatus::Read(count) = self.status {
-      if count != 1 {
-        self.status = LockStatus::Read(count.checked_sub(1).unwrap_or(0));
+      self.status = LockStatus::Read(count.checked_sub(1).unwrap_or(0));
+      if count > 0 {
         return None;
       }
     }

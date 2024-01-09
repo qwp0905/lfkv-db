@@ -3,7 +3,6 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use crossbeam::channel;
 use utils::{size, DroppableReceiver, EmptySender, ShortLocker};
 
 use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
