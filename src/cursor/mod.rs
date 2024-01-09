@@ -12,6 +12,8 @@ mod header;
 use header::*;
 mod node;
 use node::*;
+mod entry;
+use entry::*;
 
 pub struct Cursor {
   buffer: Arc<BufferPool>,
