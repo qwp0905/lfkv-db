@@ -27,7 +27,7 @@ impl BufferPool {
     self.background.schedule(move || {
       while let Ok((entries, done_c)) = rx.recv_done() {
         for (index, page) in entries {
-          let lock = tx.fetch_write(index);
+          let lock = tx.fetch_write_lock(index);
           disk.write(index, page)?;
           drop(lock);
         }

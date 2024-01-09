@@ -42,14 +42,14 @@ impl Cursor {
     let header = self.read_header()?;
     let mut index = header.get_root();
     loop {
-      let l = self.transactions.fetch_rlock(index);
+      let l = self.transactions.fetch_read_lock(index);
       self.locks.push_back(l);
 
       let page = self.buffer.get(index)?;
       let entry = CursorEntry::from(index, page)?;
       match entry.find_next(&key) {
         Ok(i) => {
-          let l = self.transactions.fetch_read(i);
+          let l = self.transactions.fetch_read_lock(i);
           self.locks.push_back(l);
           let p = self.buffer.get(i)?;
           return p.try_into().map_err(|_| ErrorKind::Unknown);
@@ -67,7 +67,7 @@ impl Cursor {
 
 impl Cursor {
   fn read_header(&mut self) -> Result<TreeHeader> {
-    let tx = self.transactions.fetch_rlock(0);
+    let tx = self.transactions.fetch_read_lock(0);
     self.locks.push_back(tx);
     let page = self.buffer.get(0)?;
     return page.try_into();

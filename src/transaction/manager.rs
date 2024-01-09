@@ -44,7 +44,7 @@ impl TransactionManager {
     })
   }
 
-  pub fn fetch_rlock(&self, index: usize) -> PageLock {
+  pub fn fetch_read_lock(&self, index: usize) -> PageLock {
     loop {
       let rx = {
         let mut tree_locks = self.tree_locks.l();
@@ -66,7 +66,7 @@ impl TransactionManager {
     }
   }
 
-  pub fn fetch_wlock(&self, index: usize) -> PageLock {
+  pub fn fetch_write_lock(&self, index: usize) -> PageLock {
     loop {
       let rx = {
         let mut tree_locks = self.tree_locks.l();
