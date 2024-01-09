@@ -29,7 +29,7 @@ impl Cursor {
     let header = self.read_header()?;
     let mut index = header.get_root();
     loop {
-      let l = self.transactions.fetch_read(index);
+      let l = self.transactions.fetch_rlock(index);
       self.locks.push_back(l);
 
       let page = self.buffer.get(index)?;
@@ -40,7 +40,7 @@ impl Cursor {
 
 impl Cursor {
   fn read_header(&mut self) -> Result<TreeHeader> {
-    let tx = self.transactions.fetch_read(0);
+    let tx = self.transactions.fetch_rlock(0);
     self.locks.push_back(tx);
     let page = self.buffer.get(0)?;
     return page.try_into();
