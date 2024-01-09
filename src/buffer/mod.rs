@@ -1,43 +1,42 @@
 use std::sync::{Arc, Mutex};
 
-use crossbeam::channel::{Receiver, Sender};
-use utils::ShortLocker;
+use crossbeam::channel::Receiver;
+use utils::{EmptySender, ShortenedMutex};
 
 use crate::{
   disk::{Page, PageSeeker},
   error::{ErrorKind, Result},
-  thread::ThreadPool,
+  thread::{ContextReceiver, ThreadPool},
+  transaction::TransactionManager,
 };
 
-use self::cache::Cache;
-
 mod cache;
+use cache::*;
 mod list;
 
 pub struct BufferPool {
   cache: Mutex<Cache<usize, Page>>,
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
-  channel: Sender<Option<Vec<(usize, Page)>>>,
+  transactions: Arc<TransactionManager>,
 }
 impl BufferPool {
-  fn start_background(&self, rx: Receiver<Option<Vec<(usize, Page)>>>) {
+  fn start_background(&self, rx: ContextReceiver<Receiver<(usize, Page)>>) {
     let disk = Arc::clone(&self.disk);
+    let tx = Arc::clone(&self.transactions);
     self.background.schedule(move || {
-      while let Ok(Some(entries)) = rx.recv() {
+      while let Ok((entries, done_c)) = rx.recv_done() {
         for (index, page) in entries {
+          let lock = tx.fetch_write(index);
           disk.write(index, page)?;
+          drop(lock);
         }
         disk.fsync()?;
+        done_c.close();
       }
 
       return Ok(());
     })
-  }
-}
-impl Drop for BufferPool {
-  fn drop(&mut self) {
-    self.channel.send(None).unwrap();
   }
 }
 

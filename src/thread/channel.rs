@@ -74,6 +74,13 @@ impl<T, R> ContextReceiver<T, R> {
     return Err(RecvError);
   }
 
+  pub fn recv_done(&self) -> Result<(T, Sender<R>), RecvError> {
+    if let Ok(StoppableContext::WithDone(v)) = self.recv() {
+      return Ok(v);
+    };
+    return Err(RecvError);
+  }
+
   #[inline]
   pub fn recv(&self) -> Result<StoppableContext<T, R>, RecvError> {
     self.recv.recv()
