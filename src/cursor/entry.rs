@@ -48,10 +48,13 @@ impl CursorEntry {
     }
   }
 
-  pub fn add(&mut self, key: String, index: usize) {
+  pub fn add(&mut self, key: String, index: usize) -> Option<String> {
     match &mut self.node {
-      Node::Internal(node) => {}
-      Node::Leaf(node) => {}
+      Node::Internal(node) => {
+        node.add(key, index);
+        return None;
+      }
+      Node::Leaf(node) => return node.add(key, index),
     }
   }
 }

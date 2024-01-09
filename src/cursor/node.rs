@@ -33,6 +33,17 @@ impl InternalNode {
     let children = self.children.split_off(c);
     return (Node::Internal(InternalNode { keys, children }), m);
   }
+
+  pub fn add(&mut self, key: String, index: usize) {
+    if let Err(i) = self.keys.binary_search_by(|k| k.cmp(&key)) {
+      let mut keys = self.keys.split_off(i);
+      self.keys.push(key);
+      self.keys.append(keys.as_mut());
+      let mut c = self.children.split_off(i);
+      self.children.push(index);
+      self.children.append(c.as_mut());
+    };
+  }
 }
 impl TryFrom<InternalNode> for Page {
   type Error = ErrorKind;
@@ -91,6 +102,16 @@ impl LeafNode {
       }),
       m,
     );
+  }
+
+  pub fn add(&mut self, key: String, index: usize) -> Option<String> {
+    if let Err(i) = self.keys.binary_search_by(|k| k.0.cmp(&key)) {
+      let mut keys = self.keys.split_off(i);
+      self.keys.push((key.to_owned(), index));
+      self.keys.append(keys.as_mut());
+      return i.eq(&0).then(|| key);
+    };
+    return None;
   }
 }
 
