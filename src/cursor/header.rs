@@ -30,19 +30,12 @@ impl TreeHeader {
 impl From<TreeHeader> for Page {
   fn from(value: TreeHeader) -> Self {
     let mut p = Page::new();
-    let mut o = 1;
-    p.range_mut(o, o + 8)
-      .copy_from_slice(&value.root.to_be_bytes());
-    o += 8;
-    p.range_mut(o, o + 8)
-      .copy_from_slice(&value.last_index.to_be_bytes());
-    o += 8;
-    p.range_mut(o, o + 8)
-      .copy_from_slice(&value.fragments.len().to_be_bytes());
-    o += 8;
+    let mut wt = p.writer();
+    wt.write(&value.root.to_be_bytes()).unwrap();
+    wt.write(&value.last_index.to_be_bytes()).unwrap();
+    wt.write(&value.fragments.len().to_be_bytes()).unwrap();
     for f in value.fragments {
-      p.range_mut(o, o + 8).copy_from_slice(&f.to_be_bytes());
-      o += 8;
+      wt.write(&f.to_be_bytes()).unwrap();
     }
     return p;
   }

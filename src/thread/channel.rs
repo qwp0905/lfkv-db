@@ -67,7 +67,7 @@ impl<T, R> ContextReceiver<T, R> {
     Self { recv }
   }
 
-  pub fn take_new(&self) -> Result<T, RecvError> {
+  pub fn recv_new(&self) -> Result<T, RecvError> {
     if let Ok(StoppableContext::New(v)) = self.recv() {
       return Ok(v);
     };

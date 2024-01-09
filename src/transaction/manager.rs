@@ -3,31 +3,41 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use crossbeam::channel::{Receiver, Sender};
-use utils::ShortLocker;
+use crossbeam::channel;
+use utils::{size, DroppableReceiver, EmptySender, ShortLocker};
 
-use crate::thread::ThreadPool;
+use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
 
-use super::{lock::PageLocker, PageLock};
+use super::{PageLock, PageLocker};
 
 pub struct TransactionManager {
   tree_locks: Arc<Mutex<HashMap<usize, PageLocker>>>,
   background: ThreadPool,
-  release: Sender<Option<usize>>,
+  release: StoppableChannel<usize>,
 }
 impl TransactionManager {
-  fn start_release(&self, rx: Receiver<Option<usize>>) {
+  pub fn new() -> Self {
+    let (channel, recv) = StoppableChannel::new();
+    let tm = Self {
+      tree_locks: Default::default(),
+      background: ThreadPool::new(1, size::kb(2), "transaction_manager", None),
+      release: channel,
+    };
+    tm.start_release(recv);
+    return tm;
+  }
+
+  fn start_release(&self, rx: ContextReceiver<usize>) {
     let cloned = Arc::clone(&self.tree_locks);
     self.background.schedule(move || {
-      while let Ok(Some(index)) = rx.recv() {
+      while let Ok(index) = rx.recv_new() {
         let mut locks = cloned.l();
         if let Some(pl) = locks.get_mut(&index) {
-          let blocked = pl.release();
-          if blocked.is_none() {
+          if let Some(blocked) = pl.release() {
+            for tx in blocked {
+              tx.close();
+            }
             continue;
-          }
-          for tx in blocked.unwrap() {
-            tx.send(()).unwrap();
           }
           locks.remove(&index);
         }
@@ -53,7 +63,7 @@ impl TransactionManager {
           }
         }
       };
-      rx.recv().unwrap();
+      rx.drop_one();
     }
   }
 
@@ -75,12 +85,12 @@ impl TransactionManager {
           }
         }
       };
-      rx.recv().unwrap();
+      rx.drop_one();
     }
   }
 }
 impl Drop for TransactionManager {
   fn drop(&mut self) {
-    self.release.send(None).unwrap();
+    self.release.terminate();
   }
 }

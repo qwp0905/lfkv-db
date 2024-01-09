@@ -1,5 +1,7 @@
 use crossbeam::channel::{bounded, Receiver, Sender};
 
+use crate::thread::StoppableChannel;
+
 #[derive(Debug)]
 pub enum LockStatus {
   Released,
@@ -28,7 +30,7 @@ impl PageLocker {
   pub fn fetch_read(
     &mut self,
     index: usize,
-    releaser: Sender<Option<usize>>,
+    releaser: StoppableChannel<usize>,
   ) -> Result<PageLock, Receiver<()>> {
     match self.status {
       LockStatus::Released => {
@@ -50,7 +52,7 @@ impl PageLocker {
   pub fn fetch_write(
     &mut self,
     index: usize,
-    releaser: Sender<Option<usize>>,
+    releaser: StoppableChannel<usize>,
   ) -> Result<PageLock, Receiver<()>> {
     if let LockStatus::Released = self.status {
       self.status = LockStatus::Write;
@@ -80,15 +82,15 @@ impl PageLocker {
 }
 pub struct PageLock {
   index: usize,
-  releaser: Sender<Option<usize>>,
+  releaser: StoppableChannel<usize>,
 }
 impl PageLock {
-  fn new(releaser: Sender<Option<usize>>, index: usize) -> Self {
+  fn new(releaser: StoppableChannel<usize>, index: usize) -> Self {
     Self { releaser, index }
   }
 }
 impl Drop for PageLock {
   fn drop(&mut self) {
-    self.releaser.send(Some(self.index)).unwrap();
+    self.releaser.send(self.index);
   }
 }

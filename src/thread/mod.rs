@@ -77,7 +77,7 @@ impl<T: 'static> ThreadPool<T> {
     let cc = Arc::clone(&count);
     main.execute(move || {
       let ready_s = Box::new(ready_s);
-      while let Ok(mut worker) = done_r.take_new() {
+      while let Ok(mut worker) = done_r.recv_new() {
         let ready_s = ready_s.to_owned();
         let count = Arc::clone(&cc);
         Builder::new()
