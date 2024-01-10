@@ -25,21 +25,22 @@ impl TryFrom<Page> for FileHeader {
   type Error = ErrorKind;
   fn try_from(value: Page) -> Result<Self, Self::Error> {
     let mut sc = value.scanner();
-    let last_index = sc.read_usize();
-    let applied = sc.read_usize();
-    let last_transaction = sc.read_usize();
+    let last_index = sc.read_usize()?;
+    let applied = sc.read_usize()?;
+    let last_transaction = sc.read_usize()?;
 
     Ok(Self::new(last_index, applied, last_transaction))
   }
 }
-impl From<FileHeader> for Page {
-  fn from(value: FileHeader) -> Self {
+impl TryFrom<FileHeader> for Page {
+  type Error = ErrorKind;
+  fn try_from(value: FileHeader) -> Result<Self, Self::Error> {
     let mut page = Page::new();
     let mut wt = page.writer();
-    wt.write(&value.last_index.to_be_bytes()).unwrap();
-    wt.write(&value.applied.to_be_bytes()).unwrap();
-    wt.write(&value.last_transaction.to_be_bytes()).unwrap();
-    return page;
+    wt.write(&value.last_index.to_be_bytes())?;
+    wt.write(&value.applied.to_be_bytes())?;
+    wt.write(&value.last_transaction.to_be_bytes())?;
+    return Ok(page);
   }
 }
 
@@ -57,15 +58,16 @@ pub struct LogEntryHeader {
   page_index: usize,
   op: Operation,
 }
-impl From<LogEntryHeader> for Page {
-  fn from(value: LogEntryHeader) -> Self {
+impl TryFrom<LogEntryHeader> for Page {
+  type Error = ErrorKind;
+  fn try_from(value: LogEntryHeader) -> Result<Self, Self::Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
-    wt.write(&[value.op as u8]).unwrap();
-    wt.write(&value.log_index.to_be_bytes()).unwrap();
-    wt.write(&value.transaction_id.to_be_bytes()).unwrap();
-    wt.write(&value.page_index.to_be_bytes()).unwrap();
-    return p;
+    wt.write(&[value.op as u8])?;
+    wt.write(&value.log_index.to_be_bytes())?;
+    wt.write(&value.transaction_id.to_be_bytes())?;
+    wt.write(&value.page_index.to_be_bytes())?;
+    return Ok(p);
   }
 }
 
@@ -92,8 +94,9 @@ impl LogEntry {
     }
   }
 }
-impl From<LogEntry> for (Page, Page) {
-  fn from(value: LogEntry) -> Self {
-    (value.header.into(), value.data)
+impl TryFrom<LogEntry> for (Page, Page) {
+  type Error = ErrorKind;
+  fn try_from(value: LogEntry) -> Result<Self, Self::Error> {
+    Ok((value.header.try_into()?, value.data))
   }
 }

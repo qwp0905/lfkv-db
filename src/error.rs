@@ -14,8 +14,8 @@ pub enum ErrorKind {
   #[error("io error")]
   IO(std::io::Error),
 
-  #[error("bytes overflow")]
-  ByteOverflow,
+  #[error("end of file")]
+  EOF,
 }
 impl ErrorKind {
   pub fn to_string(&self) -> String {
@@ -23,7 +23,7 @@ impl ErrorKind {
       Self::NotFound => format!("not found"),
       Self::Invalid => format!("invalid"),
       Self::Unknown => format!("unknown error"),
-      Self::ByteOverflow => format!("bytes overflow"),
+      Self::EOF => format!("end of file"),
       Self::IO(err) => err.to_string(),
     }
   }

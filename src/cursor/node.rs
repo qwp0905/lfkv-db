@@ -66,16 +66,16 @@ impl TryFrom<Page> for InternalNode {
   type Error = ErrorKind;
   fn try_from(value: Page) -> Result<Self, Self::Error> {
     let mut sc = value.scanner();
-    sc.read();
+    sc.read()?;
     let kl = sc.read().unwrap();
     let mut keys = vec![];
     let mut children = vec![];
     for _ in 0..kl {
       let n = sc.read().unwrap();
-      keys.push(String::from_utf8_lossy(sc.read_n(n as usize)).to_string());
+      keys.push(String::from_utf8_lossy(sc.read_n(n as usize)?).to_string());
     }
     for _ in 0..(kl + 1) {
-      children.push(sc.read_usize());
+      children.push(sc.read_usize()?);
     }
 
     return Ok(InternalNode { keys, children });
@@ -139,18 +139,18 @@ impl TryFrom<Page> for LeafNode {
   type Error = ErrorKind;
   fn try_from(value: Page) -> Result<Self, Self::Error> {
     let mut sc = value.scanner();
-    sc.read();
+    sc.read()?;
     let mut keys = vec![];
     let kl = sc.read().unwrap();
     for _ in 0..kl {
       let n = sc.read().unwrap();
-      let k = String::from_utf8_lossy(sc.read_n(n as usize)).to_string();
-      let i = sc.read_usize();
+      let k = String::from_utf8_lossy(sc.read_n(n as usize)?).to_string();
+      let i = sc.read_usize()?;
       keys.push((k, i));
     }
-    let prev = sc.read_usize();
+    let prev = sc.read_usize()?;
     let prev = if prev == 0 { None } else { Some(prev) };
-    let next = sc.read_usize();
+    let next = sc.read_usize()?;
     let next = if next == 0 { None } else { Some(next) };
     return Ok(Self { keys, prev, next });
   }

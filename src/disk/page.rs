@@ -102,24 +102,28 @@ impl<'a> PageScanner<'a> {
     Self { inner, offset: 1 }
   }
 
-  pub fn read(&mut self) -> Option<u8> {
-    self.inner.get(self.offset).map(|&i| {
+  pub fn read(&mut self) -> Result<u8> {
+    if let Some(&i) = self.inner.get(self.offset) {
       self.offset += 1;
-      return i;
-    })
+      return Ok(i);
+    }
+    return Err(ErrorKind::EOF);
   }
 
-  pub fn read_n(&mut self, n: usize) -> &[u8] {
-    let end = (self.offset + n).min(self.inner.len());
+  pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
+    if self.offset + n >= self.inner.len() {
+      return Err(ErrorKind::EOF);
+    }
+    let end = self.offset + n;
     let b = &self.inner[self.offset..end];
     self.offset = end;
-    return b;
+    return Ok(b);
   }
 
-  pub fn read_usize(&mut self) -> usize {
+  pub fn read_usize(&mut self) -> Result<usize> {
     let mut b = [0; 8];
-    b.copy_from_slice(self.read_n(8));
-    return usize::from_be_bytes(b);
+    b.copy_from_slice(self.read_n(8)?);
+    return Ok(usize::from_be_bytes(b));
   }
 
   pub fn is_eof(&self) -> bool {
@@ -139,7 +143,7 @@ impl<'a> PageWriter<'a> {
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
     let end = bytes.len() + self.offset;
     if end >= PAGE_SIZE {
-      return Err(ErrorKind::ByteOverflow);
+      return Err(ErrorKind::EOF);
     };
     self.inner[self.offset..end].copy_from_slice(&bytes);
     return Ok(());
