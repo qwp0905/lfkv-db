@@ -81,7 +81,7 @@ impl PageLocker {
   }
 }
 pub struct PageLock {
-  index: usize,
+  pub index: usize,
   releaser: StoppableChannel<usize>,
 }
 impl PageLock {
