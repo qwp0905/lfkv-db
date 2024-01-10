@@ -1,8 +1,18 @@
 use crate::{disk::Page, error::ErrorKind};
 
+pub static MAX_NODE_LEN: usize = 12;
+
 pub enum Node {
   Internal(InternalNode),
   Leaf(LeafNode),
+}
+impl Node {
+  pub fn len(&self) -> usize {
+    match self {
+      Self::Internal(n) => n.keys.len(),
+      Self::Leaf(n) => n.keys.len(),
+    }
+  }
 }
 impl TryFrom<Page> for Node {
   type Error = ErrorKind;
@@ -105,13 +115,12 @@ impl LeafNode {
   }
 
   pub fn add(&mut self, key: String, index: usize) -> Option<String> {
-    if let Err(i) = self.keys.binary_search_by(|k| k.0.cmp(&key)) {
+    if let Err(i) = self.keys.binary_search_by(|(k, _)| k.cmp(&key)) {
       let mut keys = self.keys.split_off(i);
-      self.keys.push((key.to_owned(), index));
+      self.keys.push((key, index));
       self.keys.append(keys.as_mut());
-      return i.eq(&0).then(|| key);
     };
-    return None;
+    return self.keys.last().map(|(k, _)| k.to_owned());
   }
 }
 

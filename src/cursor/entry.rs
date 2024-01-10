@@ -1,10 +1,13 @@
-use crate::{disk::Page, error::Result};
+use crate::{
+  disk::Page,
+  error::{ErrorKind, Result},
+};
 
-use super::node::Node;
+use super::Node;
 
 pub struct CursorEntry {
-  index: usize,
-  node: Node,
+  pub index: usize,
+  pub node: Node,
 }
 impl CursorEntry {
   fn new(index: usize, node: Node) -> Self {
@@ -56,5 +59,18 @@ impl CursorEntry {
       }
       Node::Leaf(node) => return node.add(key, index),
     }
+  }
+
+  pub fn len(&self) -> usize {
+    self.node.len()
+  }
+}
+
+impl TryFrom<CursorEntry> for Page {
+  type Error = ErrorKind;
+  fn try_from(
+    value: CursorEntry,
+  ) -> std::prelude::v1::Result<Self, Self::Error> {
+    value.node.try_into()
   }
 }
