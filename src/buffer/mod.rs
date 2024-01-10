@@ -6,7 +6,7 @@ use utils::{EmptySender, ShortenedMutex};
 use crate::{
   disk::{Page, PageSeeker},
   error::{ErrorKind, Result},
-  thread::{ContextReceiver, ThreadPool},
+  thread::{ContextReceiver, StoppableChannel, ThreadPool},
   transaction::TransactionManager,
 };
 
@@ -19,6 +19,7 @@ pub struct BufferPool {
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
   transactions: Arc<TransactionManager>,
+  channel: StoppableChannel<Receiver<(usize, Page)>>,
 }
 impl BufferPool {
   fn start_background(&self, rx: ContextReceiver<Receiver<(usize, Page)>>) {
