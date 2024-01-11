@@ -5,7 +5,6 @@ use crate::{
   disk::Page,
   error::{ErrorKind, Result},
   transaction::{PageLock, TransactionManager},
-  wal::WAL,
 };
 
 mod header;
@@ -18,19 +17,16 @@ use entry::*;
 pub struct Cursor {
   buffer: Arc<BufferPool>,
   transactions: Arc<TransactionManager>,
-  wal: Arc<WAL>,
   locks: Vec<PageLock>,
 }
 impl Cursor {
   pub fn new(
     buffer: Arc<BufferPool>,
     transactions: Arc<TransactionManager>,
-    wal: Arc<WAL>,
   ) -> Self {
     Self {
       buffer,
       transactions,
-      wal,
       locks: Default::default(),
     }
   }

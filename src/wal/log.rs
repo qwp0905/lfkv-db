@@ -5,19 +5,13 @@ pub static HEADER_INDEX: usize = 0;
 pub struct FileHeader {
   pub last_index: usize,
   pub applied: usize,
-  pub last_transaction: usize,
 }
 
 impl FileHeader {
-  pub fn new(
-    last_index: usize,
-    applied: usize,
-    last_transaction: usize,
-  ) -> Self {
+  pub fn new(last_index: usize, applied: usize) -> Self {
     Self {
       last_index,
       applied,
-      last_transaction,
     }
   }
 }
@@ -27,9 +21,8 @@ impl TryFrom<Page> for FileHeader {
     let mut sc = value.scanner();
     let last_index = sc.read_usize()?;
     let applied = sc.read_usize()?;
-    let last_transaction = sc.read_usize()?;
 
-    Ok(Self::new(last_index, applied, last_transaction))
+    Ok(Self::new(last_index, applied))
   }
 }
 impl TryFrom<FileHeader> for Page {
@@ -39,17 +32,13 @@ impl TryFrom<FileHeader> for Page {
     let mut wt = page.writer();
     wt.write(&value.last_index.to_be_bytes())?;
     wt.write(&value.applied.to_be_bytes())?;
-    wt.write(&value.last_transaction.to_be_bytes())?;
     return Ok(page);
   }
 }
 
 pub enum Operation {
   Insert = 0,
-  Start = 1,
-  Commit = 2,
-  Abort = 3,
-  CheckPoint = 4,
+  Remove = 1,
 }
 
 pub struct LogEntryHeader {

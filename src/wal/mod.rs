@@ -1,5 +1,4 @@
 mod log;
-use crossbeam::channel::Receiver;
 pub use log::*;
 
 use utils::ShortenedMutex;
@@ -12,27 +11,23 @@ use std::{
 use crate::{
   disk::{Page, PageSeeker},
   error::Result,
-  thread::StoppableChannel,
 };
 
 pub struct WAL {
   core: Mutex<WALCore>,
 }
 impl WAL {
-  pub fn new<T>(
-    path: T,
-    channel: StoppableChannel<Receiver<(usize, Page)>>,
-  ) -> Result<Self>
+  pub fn new<T>(path: T) -> Result<Self>
   where
     T: AsRef<Path>,
   {
     let seeker = PageSeeker::open(path)?;
     if seeker.len()? == 0 {
-      let header = FileHeader::new(0, 0, 0);
+      let header = FileHeader::new(0, 0);
       seeker.write(0, header.try_into()?)?;
     }
     return Ok(Self {
-      core: Mutex::new(WALCore::new(Arc::new(seeker), 2048, channel)),
+      core: Mutex::new(WALCore::new(Arc::new(seeker), 2048)),
     });
   }
 
@@ -51,18 +46,12 @@ impl WAL {
 pub struct WALCore {
   seeker: Arc<PageSeeker>,
   max_file_size: usize,
-  channel: StoppableChannel<Receiver<(usize, Page)>>,
 }
 impl WALCore {
-  fn new(
-    seeker: Arc<PageSeeker>,
-    max_file_size: usize,
-    channel: StoppableChannel<Receiver<(usize, Page)>>,
-  ) -> Self {
+  fn new(seeker: Arc<PageSeeker>, max_file_size: usize) -> Self {
     Self {
       seeker,
       max_file_size,
-      channel,
     }
   }
 
@@ -86,4 +75,6 @@ impl WALCore {
     self.seeker.write(HEADER_INDEX, header.try_into()?)?;
     return Ok(());
   }
+
+  fn checkpoint() {}
 }

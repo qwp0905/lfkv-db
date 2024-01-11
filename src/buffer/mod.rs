@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::Receiver;
-use utils::{EmptySender, ShortenedMutex};
+use utils::ShortenedMutex;
 
 use crate::{
   disk::{Page, PageSeeker},
@@ -26,14 +26,13 @@ impl BufferPool {
     let disk = Arc::clone(&self.disk);
     let tx = Arc::clone(&self.transactions);
     self.background.schedule(move || {
-      while let Ok((entries, done_c)) = rx.recv_done() {
+      while let Ok(entries) = rx.recv_new() {
         for (index, page) in entries {
           let lock = tx.fetch_write_lock(index);
           disk.write(index, page)?;
           drop(lock);
         }
         disk.fsync()?;
-        done_c.close();
       }
 
       return Ok(());
@@ -65,4 +64,6 @@ impl BufferPool {
     self.cache.l().insert(index, page);
     return Ok(());
   }
+
+  pub fn remove(&self, index: usize) {}
 }
