@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use utils::size;
 
-use crate::error::{ErrorKind, Result};
+use crate::error::{Error, Result};
 
 pub const PAGE_SIZE: usize = size::kb(4);
 
@@ -107,12 +107,12 @@ impl<'a> PageScanner<'a> {
       self.offset += 1;
       return Ok(i);
     }
-    return Err(ErrorKind::EOF);
+    return Err(Error::EOF);
   }
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
     if self.offset + n >= self.inner.len() {
-      return Err(ErrorKind::EOF);
+      return Err(Error::EOF);
     }
     let end = self.offset + n;
     let b = &self.inner[self.offset..end];
@@ -143,7 +143,7 @@ impl<'a> PageWriter<'a> {
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
     let end = bytes.len() + self.offset;
     if end >= PAGE_SIZE {
-      return Err(ErrorKind::EOF);
+      return Err(Error::EOF);
     };
     self.inner[self.offset..end].copy_from_slice(&bytes);
     return Ok(());

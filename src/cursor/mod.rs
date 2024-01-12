@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::{
   buffer::BufferPool,
-  disk::Page,
-  error::{ErrorKind, Result},
+  disk::Serializable,
+  error::{Error, Result},
   transaction::{PageLock, TransactionManager},
 };
 
@@ -33,7 +33,7 @@ impl Cursor {
 
   pub fn get<T>(&mut self, key: String) -> Result<T>
   where
-    T: TryFrom<Page>,
+    T: Serializable,
   {
     let header = self.read_header()?;
     let mut index = header.get_root();
@@ -48,10 +48,10 @@ impl Cursor {
           let l = self.transactions.fetch_read_lock(i);
           self.locks.push(l);
           let p = self.buffer.get(i)?;
-          return p.try_into().map_err(|_| ErrorKind::Unknown);
+          return p.deserialize().map_err(Error::unknown);
         }
         Err(c) => match c {
-          None => return Err(ErrorKind::NotFound),
+          None => return Err(Error::NotFound),
           Some(i) => {
             index = i;
           }
@@ -77,7 +77,7 @@ impl Cursor {
     let tx = self.transactions.fetch_read_lock(0);
     self.locks.push(tx);
     let page = self.buffer.get(0)?;
-    return page.try_into();
+    return page.deserialize();
   }
 
   // fn insert_at(

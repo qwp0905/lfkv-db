@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
-use crate::{disk::Page, error::ErrorKind};
+use crate::{
+  disk::{Page, Serializable},
+  error::Error,
+};
 
 pub struct TreeHeader {
   root: usize,
@@ -27,24 +30,20 @@ impl TreeHeader {
   }
 }
 
-impl TryFrom<TreeHeader> for Page {
-  type Error = ErrorKind;
-  fn try_from(value: TreeHeader) -> Result<Self, Self::Error> {
+impl Serializable for TreeHeader {
+  fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
-    wt.write(&value.root.to_be_bytes())?;
-    wt.write(&value.last_index.to_be_bytes())?;
-    wt.write(&value.fragments.len().to_be_bytes())?;
-    for f in value.fragments {
+    wt.write(&self.root.to_be_bytes())?;
+    wt.write(&self.last_index.to_be_bytes())?;
+    wt.write(&self.fragments.len().to_be_bytes())?;
+    for f in &self.fragments {
       wt.write(&f.to_be_bytes()).unwrap();
     }
     return Ok(p);
   }
-}
 
-impl TryFrom<Page> for TreeHeader {
-  type Error = ErrorKind;
-  fn try_from(value: Page) -> Result<Self, Self::Error> {
+  fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut s = value.scanner();
     let root = s.read_usize()?;
     let last_index = s.read_usize()?;

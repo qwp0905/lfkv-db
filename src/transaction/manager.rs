@@ -16,11 +16,11 @@ pub struct TransactionManager {
 }
 impl TransactionManager {
   pub fn new() -> Self {
-    let (channel, recv) = StoppableChannel::new();
+    let (release, recv) = StoppableChannel::new();
     let tm = Self {
       tree_locks: Default::default(),
       background: ThreadPool::new(1, size::kb(2), "transaction_manager", None),
-      release: channel,
+      release,
     };
     tm.start_release(recv);
     return tm;

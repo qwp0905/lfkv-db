@@ -1,6 +1,6 @@
 use crate::{
-  disk::Page,
-  error::{ErrorKind, Result},
+  disk::{Page, Serializable},
+  error::{Error, Result},
 };
 
 use super::Node;
@@ -15,7 +15,7 @@ impl CursorEntry {
   }
 
   pub fn from(index: usize, page: Page) -> Result<Self> {
-    Ok(Self::new(index, page.try_into()?))
+    Ok(Self::new(index, page.deserialize()?))
   }
 
   pub fn find_next(
@@ -65,12 +65,12 @@ impl CursorEntry {
     self.node.len()
   }
 }
+impl Serializable for CursorEntry {
+  fn serialize(&self) -> std::prelude::v1::Result<Page, Error> {
+    self.node.serialize()
+  }
 
-impl TryFrom<CursorEntry> for Page {
-  type Error = ErrorKind;
-  fn try_from(
-    value: CursorEntry,
-  ) -> std::prelude::v1::Result<Self, Self::Error> {
-    value.node.try_into()
+  fn deserialize(_: &Page) -> std::prelude::v1::Result<Self, Error> {
+    Err(Error::Invalid)
   }
 }

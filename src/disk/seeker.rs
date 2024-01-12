@@ -7,7 +7,7 @@ use std::{
 
 use utils::ShortenedRwLock;
 
-use crate::error::{ErrorKind, Result};
+use crate::error::{Error, Result};
 
 use super::{Page, PAGE_SIZE};
 
@@ -28,18 +28,18 @@ impl PageSeeker {
       .map(|inner| Self {
         inner: RwLock::new(inner),
       })
-      .map_err(ErrorKind::IO);
+      .map_err(Error::IO);
   }
 
   pub fn read(&self, index: usize) -> Result<Page> {
     let mut inner = self.inner.wl();
     inner
       .seek(SeekFrom::Start(get_offset(index)))
-      .map_err(ErrorKind::IO)?;
+      .map_err(Error::IO)?;
     let mut page = Page::new();
     inner
       .read_exact(page.as_mut())
-      .map_err(|_| ErrorKind::NotFound)?;
+      .map_err(|_| Error::NotFound)?;
     return Ok(page);
   }
 
@@ -47,32 +47,28 @@ impl PageSeeker {
     let mut inner = self.inner.wl();
     inner
       .seek(SeekFrom::Start(get_offset(index)))
-      .map_err(ErrorKind::IO)?;
-    inner.write_all(page.as_ref()).map_err(ErrorKind::IO)?;
+      .map_err(Error::IO)?;
+    inner.write_all(page.as_ref()).map_err(Error::IO)?;
     return Ok(());
   }
 
   pub fn append(&self, page: Page) -> Result<usize> {
     let mut inner = self.inner.wl();
-    let n = inner.seek(SeekFrom::End(0)).map_err(ErrorKind::IO)?;
-    inner.write_all(page.as_ref()).map_err(ErrorKind::IO)?;
+    let n = inner.seek(SeekFrom::End(0)).map_err(Error::IO)?;
+    inner.write_all(page.as_ref()).map_err(Error::IO)?;
     return Ok(n as usize / PAGE_SIZE);
   }
 
   pub fn fsync(&self) -> Result<()> {
-    return self.inner.rl().sync_all().map_err(ErrorKind::IO);
+    return self.inner.rl().sync_all().map_err(Error::IO);
   }
 
   pub fn truncate(&self, size: usize) -> Result<()> {
-    return self
-      .inner
-      .wl()
-      .set_len(get_offset(size))
-      .map_err(ErrorKind::IO);
+    return self.inner.wl().set_len(get_offset(size)).map_err(Error::IO);
   }
 
   pub fn len(&self) -> Result<usize> {
-    let metadata = self.inner.rl().metadata().map_err(ErrorKind::IO)?;
+    let metadata = self.inner.rl().metadata().map_err(Error::IO)?;
     Ok(metadata.len() as usize)
   }
 }

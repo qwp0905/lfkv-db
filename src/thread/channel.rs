@@ -68,30 +68,29 @@ impl<T, R> ContextReceiver<T, R> {
   }
 
   pub fn recv_new(&self) -> Result<T, RecvError> {
-    if let Ok(StoppableContext::New(v)) = self.recv() {
+    if let StoppableContext::New(v) = self.recv()? {
       return Ok(v);
     };
     return Err(RecvError);
   }
 
   pub fn recv_done(&self) -> Result<(T, Sender<R>), RecvError> {
-    if let Ok(StoppableContext::WithDone(v)) = self.recv() {
+    if let StoppableContext::WithDone(v) = self.recv()? {
       return Ok(v);
     };
     return Err(RecvError);
   }
 
-  #[inline]
   pub fn recv(&self) -> Result<StoppableContext<T, R>, RecvError> {
     self.recv.recv()
   }
 
-  #[inline]
-  pub fn recv_timeout(
-    &self,
-    timeout: Duration,
-  ) -> Result<StoppableContext<T, R>, RecvTimeoutError> {
-    self.recv.recv_timeout(timeout)
+  pub fn recv_all(&self) -> Result<(T, Option<Sender<R>>), RecvError> {
+    match self.recv.recv()? {
+      StoppableContext::Term => Err(RecvError),
+      StoppableContext::WithDone((r, t)) => Ok((r, Some(t))),
+      StoppableContext::New(r) => Ok((r, None)),
+    }
   }
 
   pub fn maybe_timeout(
@@ -99,7 +98,7 @@ impl<T, R> ContextReceiver<T, R> {
     timeout: Option<Duration>,
   ) -> Result<StoppableContext<T, R>, RecvTimeoutError> {
     timeout
-      .map(|to| self.recv_timeout(to))
-      .unwrap_or(self.recv().map_err(|_| RecvTimeoutError::Disconnected))
+      .map(|to| self.recv.recv_timeout(to))
+      .unwrap_or(self.recv.recv().map_err(|_| RecvTimeoutError::Disconnected))
   }
 }

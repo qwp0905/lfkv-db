@@ -1,4 +1,4 @@
-use crate::{disk::Page, error::ErrorKind};
+use crate::{disk::Page, error::Error};
 
 pub static HEADER_INDEX: usize = 0;
 
@@ -16,7 +16,7 @@ impl FileHeader {
   }
 }
 impl TryFrom<Page> for FileHeader {
-  type Error = ErrorKind;
+  type Error = Error;
   fn try_from(value: Page) -> Result<Self, Self::Error> {
     let mut sc = value.scanner();
     let last_index = sc.read_usize()?;
@@ -26,7 +26,7 @@ impl TryFrom<Page> for FileHeader {
   }
 }
 impl TryFrom<FileHeader> for Page {
-  type Error = ErrorKind;
+  type Error = Error;
   fn try_from(value: FileHeader) -> Result<Self, Self::Error> {
     let mut page = Page::new();
     let mut wt = page.writer();
@@ -48,7 +48,7 @@ pub struct LogEntryHeader {
   op: Operation,
 }
 impl TryFrom<LogEntryHeader> for Page {
-  type Error = ErrorKind;
+  type Error = Error;
   fn try_from(value: LogEntryHeader) -> Result<Self, Self::Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
@@ -88,7 +88,7 @@ impl LogEntry {
   }
 }
 impl TryFrom<LogEntry> for (Page, Page) {
-  type Error = ErrorKind;
+  type Error = Error;
   fn try_from(value: LogEntry) -> Result<Self, Self::Error> {
     Ok((value.header.try_into()?, value.data))
   }

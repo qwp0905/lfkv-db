@@ -1,38 +1,94 @@
-use std::sync::{Arc, Mutex};
+use std::{
+  path::Path,
+  sync::{Arc, Mutex},
+};
 
-use crossbeam::channel::Receiver;
-use utils::ShortenedMutex;
+use utils::{size, EmptySender, ShortenedMutex};
 
 use crate::{
   disk::{Page, PageSeeker},
-  error::{ErrorKind, Result},
+  error::{Error, Result},
   thread::{ContextReceiver, StoppableChannel, ThreadPool},
   transaction::TransactionManager,
+  wal::WAL,
 };
 
 mod cache;
 use cache::*;
 mod list;
 
+struct PageBuffer {
+  page: Page,
+  dirty: bool,
+}
+impl PageBuffer {
+  fn new(page: Page, dirty: bool) -> Self {
+    Self { page, dirty }
+  }
+
+  fn copy(&self) -> Page {
+    self.page.copy()
+  }
+
+  fn remove_dirty(&mut self) {
+    self.dirty = false
+  }
+}
+
 pub struct BufferPool {
-  cache: Mutex<Cache<usize, Page>>,
+  cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
   transactions: Arc<TransactionManager>,
-  channel: StoppableChannel<Receiver<(usize, Page)>>,
+  channel: StoppableChannel<Vec<(usize, Page)>>,
 }
+
 impl BufferPool {
-  fn start_background(&self, rx: ContextReceiver<Receiver<(usize, Page)>>) {
+  pub fn open<T>(
+    path: T,
+    cache_size: usize,
+    transactions: Arc<TransactionManager>,
+    channel: StoppableChannel<Vec<(usize, Page)>>,
+  ) -> Result<Self>
+  where
+    T: AsRef<Path>,
+  {
+    let disk = Arc::new(PageSeeker::open(path)?);
+    let cache = Arc::new(Mutex::new(Cache::new(cache_size)));
+    let background = ThreadPool::new(1, size::mb(30), "buffer pool", None);
+    Ok(Self::new(cache, disk, background, transactions, channel))
+  }
+
+  fn new(
+    cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
+    disk: Arc<PageSeeker>,
+    background: ThreadPool<Result<()>>,
+    transactions: Arc<TransactionManager>,
+    channel: StoppableChannel<Vec<(usize, Page)>>,
+  ) -> Self {
+    Self {
+      cache,
+      disk,
+      background,
+      transactions,
+      channel,
+    }
+  }
+
+  fn start_background(&self, rx: ContextReceiver<Vec<(usize, Page)>>) {
     let disk = Arc::clone(&self.disk);
     let tx = Arc::clone(&self.transactions);
+    let cache = Arc::clone(&self.cache);
     self.background.schedule(move || {
-      while let Ok(entries) = rx.recv_new() {
+      while let Ok((entries, done_c)) = rx.recv_all() {
         for (index, page) in entries {
           let lock = tx.fetch_write_lock(index);
           disk.write(index, page)?;
+          cache.l().get_mut(&index).map(|pb| pb.remove_dirty());
           drop(lock);
         }
         disk.fsync()?;
+        done_c.map(|d| d.close());
       }
 
       return Ok(());
@@ -42,26 +98,33 @@ impl BufferPool {
 
 impl BufferPool {
   pub fn get(&self, index: usize) -> Result<Page> {
-    if let Some(page) = { self.cache.l().get(&index) } {
-      return Ok(page.copy());
+    if let Some(pb) = { self.cache.l().get(&index) } {
+      return Ok(pb.copy());
     };
 
     let page = self.disk.read(index)?;
     if page.is_empty() {
-      return Err(ErrorKind::NotFound);
+      return Err(Error::NotFound);
     }
 
-    self.cache.l().insert(index, page.copy());
+    self
+      .cache
+      .l()
+      .insert(index, PageBuffer::new(page.copy(), false));
     return Ok(page);
   }
 
   pub fn insert(&self, index: usize, page: Page) -> Result<()> {
-    if let Some(p) = { self.cache.l().get_mut(&index) } {
-      *p = page;
+    if let Some(pb) = { self.cache.l().get_mut(&index) } {
+      pb.page = page;
       return Ok(());
     };
 
-    self.cache.l().insert(index, page);
+    if let Some((i, pb)) =
+      self.cache.l().insert(index, PageBuffer::new(page, true))
+    {
+      self.channel.send(vec![(i, pb.page)]);
+    };
     return Ok(());
   }
 

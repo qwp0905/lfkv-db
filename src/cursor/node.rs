@@ -1,4 +1,7 @@
-use crate::{disk::Page, error::ErrorKind};
+use crate::{
+  disk::{Page, Serializable},
+  error::Error,
+};
 
 pub static MAX_NODE_LEN: usize = 12;
 
@@ -14,20 +17,19 @@ impl Node {
     }
   }
 }
-impl TryFrom<Page> for Node {
-  type Error = ErrorKind;
-  fn try_from(value: Page) -> Result<Self, Self::Error> {
-    match value.as_ref()[0] {
-      0 => Ok(Self::Leaf(LeafNode::try_from(value)?)),
-      1 => Ok(Self::Internal(InternalNode::try_from(value)?)),
-      _ => Err(ErrorKind::Invalid),
+impl Serializable for Node {
+  fn serialize(&self) -> Result<Page, Error> {
+    match self {
+      Self::Leaf(node) => node.serialize(),
+      Self::Internal(node) => node.serialize(),
     }
   }
-}
-impl TryFrom<Node> for Page {
-  type Error = ErrorKind;
-  fn try_from(value: Node) -> Result<Self, Self::Error> {
-    value.try_into()
+  fn deserialize(value: &Page) -> Result<Self, Error> {
+    match value.as_ref()[0] {
+      0 => Ok(Self::Leaf(value.deserialize()?)),
+      1 => Ok(Self::Internal(value.deserialize()?)),
+      _ => Err(Error::Invalid),
+    }
   }
 }
 
@@ -55,26 +57,23 @@ impl InternalNode {
     };
   }
 }
-impl TryFrom<InternalNode> for Page {
-  type Error = ErrorKind;
-  fn try_from(value: InternalNode) -> Result<Self, Self::Error> {
+
+impl Serializable for InternalNode {
+  fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
     wt.write(&[1])?;
-    wt.write(&[value.keys.len() as u8])?;
-    for k in &value.keys {
+    wt.write(&[self.keys.len() as u8])?;
+    for k in &self.keys {
       wt.write(&[k.len() as u8])?;
       wt.write(k.as_bytes())?;
     }
-    for i in 0..(value.keys.len() + 1) {
-      wt.write(&value.children[i].to_be_bytes())?;
+    for i in 0..(self.keys.len() + 1) {
+      wt.write(&self.children[i].to_be_bytes())?;
     }
     return Ok(p);
   }
-}
-impl TryFrom<Page> for InternalNode {
-  type Error = ErrorKind;
-  fn try_from(value: Page) -> Result<Self, Self::Error> {
+  fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     sc.read()?;
     let kl = sc.read().unwrap();
@@ -123,30 +122,25 @@ impl LeafNode {
     return self.keys.last().map(|(k, _)| k.to_owned());
   }
 }
-
-impl TryFrom<LeafNode> for Page {
-  type Error = ErrorKind;
-  fn try_from(value: LeafNode) -> Result<Self, Self::Error> {
+impl Serializable for LeafNode {
+  fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
     wt.write(&[0])?;
-    wt.write(&[value.keys.len() as u8])?;
-    for (k, i) in &value.keys {
+    wt.write(&[self.keys.len() as u8])?;
+    for (k, i) in &self.keys {
       wt.write(&[k.len() as u8])?;
       wt.write(k.as_bytes())?;
       wt.write(&i.to_be_bytes())?;
     }
-    let prev = value.prev.unwrap_or(0);
+    let prev = self.prev.unwrap_or(0);
     wt.write(&prev.to_be_bytes())?;
-    let next = value.next.unwrap_or(0);
+    let next = self.next.unwrap_or(0);
     wt.write(&next.to_be_bytes())?;
     return Ok(p);
   }
-}
 
-impl TryFrom<Page> for LeafNode {
-  type Error = ErrorKind;
-  fn try_from(value: Page) -> Result<Self, Self::Error> {
+  fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     sc.read()?;
     let mut keys = vec![];
