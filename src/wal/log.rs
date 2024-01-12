@@ -82,6 +82,10 @@ impl LogEntry {
       data,
     }
   }
+
+  pub fn get_index(&self) -> usize {
+    self.header.log_index
+  }
 }
 impl TryFrom<LogEntry> for (Page, Page) {
   type Error = ErrorKind;
