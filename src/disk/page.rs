@@ -3,6 +3,8 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 
+use super::Serializable;
+
 pub const PAGE_SIZE: usize = size::kb(4);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,6 +48,16 @@ impl Page {
 
   pub fn set_empty(&mut self) {
     self.bytes[0] = 0
+  }
+}
+
+impl Serializable for Page {
+  fn deserialize(value: &Page) -> std::prelude::v1::Result<Self, Error> {
+    Ok(value.copy())
+  }
+
+  fn serialize(&self) -> std::prelude::v1::Result<Page, Error> {
+    Ok(self.copy())
   }
 }
 

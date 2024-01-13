@@ -60,6 +60,10 @@ impl WAL {
     let core = self.core.l();
     core.next_transaction()
   }
+
+  pub fn replay(&self) -> Result<()> {
+    self.core.l().replay()
+  }
 }
 
 pub struct WALCore {
@@ -106,7 +110,7 @@ impl WALCore {
         };
         let entries = entries
           .into_iter()
-          .map(|entry| (entry.get_index(), entry.into()))
+          .map(|entry| (entry.get_page_index(), entry.into()))
           .collect();
 
         flush_c.send_with_done(entries).drop_one();
@@ -130,7 +134,7 @@ impl WALCore {
     let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
 
-    let current = header.next_index;
+    let current = header.last_index + 1;
     let entry = LogEntry::new(current, transaction_id, page_index, data);
     {
       self.buffer.wl().push(entry.clone())
@@ -141,7 +145,7 @@ impl WALCore {
     self.seeker.write(wi, entry_header)?;
     self.seeker.write(wi + 1, entry_data)?;
 
-    header.next_index += 1;
+    header.last_index = current;
     self.seeker.write(HEADER_INDEX, header.serialize()?)?;
     self.seeker.fsync()?;
     {
@@ -155,10 +159,32 @@ impl WALCore {
   fn next_transaction(&self) -> Result<usize> {
     let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
-    let next = header.next_transaction;
-    header.next_transaction += 1;
+    let next = header.last_transaction + 1;
+    header.last_transaction = next;
     self.seeker.write(HEADER_INDEX, header.serialize()?)?;
     self.seeker.fsync()?;
     return Ok(next);
+  }
+
+  fn replay(&self) -> Result<()> {
+    let mut header: WALFileHeader =
+      self.seeker.read(HEADER_INDEX)?.deserialize()?;
+    let mut entries = BTreeMap::new();
+    for index in (header.applied + 1)..header.last_index {
+      let i = ((index * 2) % self.max_file_size) + 1;
+      let h = self.seeker.read(i)?.deserialize()?;
+      let p = self.seeker.read(i + 1)?;
+      let entry = LogEntry::try_from((h, p))?;
+      if entry.get_index() != index {
+        continue;
+      }
+      entries.insert(entry.get_page_index(), entry.take_data());
+    }
+
+    let rx = self.flush_c.send_with_done(entries);
+    rx.drop_one();
+    header.applied = header.last_index;
+    self.seeker.write(HEADER_INDEX, header.serialize()?)?;
+    self.seeker.fsync()
   }
 }

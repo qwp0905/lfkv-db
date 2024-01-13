@@ -101,6 +101,13 @@ pub struct LeafNode {
   pub prev: Option<usize>,
 }
 impl LeafNode {
+  pub fn empty() -> Self {
+    Self {
+      keys: vec![],
+      prev: None,
+      next: None,
+    }
+  }
   pub fn split(&mut self, current: usize, added: usize) -> (Node, String) {
     let c = self.keys.len() / 2;
     let keys = self.keys.split_off(c - 1);

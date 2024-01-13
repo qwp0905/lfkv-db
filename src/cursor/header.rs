@@ -14,6 +14,14 @@ pub struct TreeHeader {
 }
 
 impl TreeHeader {
+  pub fn initial_state() -> Self {
+    Self {
+      root: 1,
+      last_index: 1,
+      fragments: Default::default(),
+    }
+  }
+
   pub fn acquire_index(&mut self) -> usize {
     if let Some(i) = self.fragments.pop_first() {
       return i;
@@ -40,7 +48,7 @@ impl Serializable for TreeHeader {
     wt.write(&self.last_index.to_be_bytes())?;
     wt.write(&self.fragments.len().to_be_bytes())?;
     for f in &self.fragments {
-      wt.write(&f.to_be_bytes()).unwrap();
+      wt.write(&f.to_be_bytes())?;
     }
     return Ok(p);
   }

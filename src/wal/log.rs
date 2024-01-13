@@ -6,20 +6,20 @@ use crate::{
 pub static HEADER_INDEX: usize = 0;
 
 pub struct WALFileHeader {
-  pub next_index: usize,
+  pub last_index: usize,
   pub applied: usize,
-  pub next_transaction: usize,
+  pub last_transaction: usize,
 }
 
 impl WALFileHeader {
   pub fn new(
-    next_index: usize,
+    last_index: usize,
     applied: usize,
-    next_transaction: usize,
+    last_transaction: usize,
   ) -> Self {
     Self {
-      next_transaction,
-      next_index,
+      last_transaction,
+      last_index,
       applied,
     }
   }
@@ -28,7 +28,7 @@ impl Serializable for WALFileHeader {
   fn serialize(&self) -> Result<Page, Error> {
     let mut page = Page::new();
     let mut wt = page.writer();
-    wt.write(&self.next_index.to_be_bytes())?;
+    wt.write(&self.last_index.to_be_bytes())?;
     wt.write(&self.applied.to_be_bytes())?;
     return Ok(page);
   }
@@ -98,11 +98,24 @@ impl LogEntry {
   pub fn take_data(self) -> Page {
     self.data
   }
+
+  pub fn get_page_index(&self) -> usize {
+    self.header.page_index
+  }
 }
 impl TryFrom<LogEntry> for (Page, Page) {
   type Error = Error;
   fn try_from(value: LogEntry) -> Result<Self, Self::Error> {
     Ok((value.header.serialize()?, value.data))
+  }
+}
+impl TryFrom<(Page, Page)> for LogEntry {
+  type Error = Error;
+  fn try_from((header, data): (Page, Page)) -> Result<Self, Self::Error> {
+    Ok(Self {
+      header: header.deserialize()?,
+      data,
+    })
   }
 }
 impl From<LogEntry> for Page {
