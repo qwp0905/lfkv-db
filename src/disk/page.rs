@@ -1,5 +1,5 @@
+use crate::utils::size;
 use bytes::Bytes;
-use utils::size;
 
 use crate::error::{Error, Result};
 

@@ -30,12 +30,14 @@ impl<K, V> AsRef<V> for Bucket<K, V> {
   }
 }
 
+#[allow(unused)]
 pub struct Cache<K, V, S = RandomState> {
   raw: RawTable<Pointer<Bucket<K, V>>>,
   entries: Entries<K, V>,
   hasher: S,
   capacity: usize,
 }
+#[allow(unused)]
 impl<K, V, S> Cache<K, V, S> {
   pub fn with_hasher(hasher: S, capacity: usize) -> Self {
     Self {
@@ -58,6 +60,7 @@ impl<K, V> Cache<K, V, RandomState> {
   }
 }
 
+#[allow(unused)]
 impl<K, V, S> Cache<K, V, S>
 where
   K: Eq + Hash,
@@ -204,6 +207,7 @@ impl<K, V> Default for Entries<K, V> {
     }
   }
 }
+#[allow(unused)]
 impl<K, V> Entries<K, V> {
   fn move_back(&mut self, e: &mut Pointer<Bucket<K, V>>) {
     let bucket = unsafe { e.as_mut() }.as_mut();

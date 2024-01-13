@@ -3,13 +3,12 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use utils::{size, EmptySender, ShortenedMutex};
-
 use crate::{
   disk::{Page, PageSeeker},
   error::{Error, Result},
   thread::{ContextReceiver, StoppableChannel, ThreadPool},
   transaction::LockManager,
+  utils::{size, EmptySender, ShortenedMutex},
 };
 
 mod cache;
@@ -132,5 +131,5 @@ impl BufferPool {
     return Ok(());
   }
 
-  pub fn remove(&self, index: usize) {}
+  // pub fn remove(&self, index: usize) {}
 }

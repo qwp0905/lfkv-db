@@ -1,7 +1,7 @@
 mod log;
 pub use log::*;
 
-use utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock};
+use crate::utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock};
 
 use std::{
   path::Path,

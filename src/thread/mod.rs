@@ -13,8 +13,8 @@ use std::{
   time::Duration,
 };
 
+use crate::utils::{logger, size, DroppableReceiver};
 use crossbeam::channel::{unbounded, Receiver};
-use utils::{logger, size, DroppableReceiver};
 
 #[allow(unused)]
 #[derive(Debug)]

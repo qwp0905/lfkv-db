@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
-use utils::size;
+use crate::utils::size;
 
 use crate::{
   buffer::BufferPool, error::Result, transaction::LockManager, wal::WAL, Cursor,

@@ -1,6 +1,6 @@
 use std::sync::RwLock;
 
-use utils::ShortenedRwLock;
+use crate::utils::ShortenedRwLock;
 
 #[allow(unused)]
 #[derive(Debug)]

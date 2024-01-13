@@ -6,8 +6,8 @@ use std::{
   time::Duration,
 };
 
+use crate::utils::{logger, DroppableReceiver, EmptySender};
 use crossbeam::channel::Receiver;
-use utils::{logger, DroppableReceiver, EmptySender};
 
 use super::{ContextReceiver, StoppableChannel, StoppableContext};
 
