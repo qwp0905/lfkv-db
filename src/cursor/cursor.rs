@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-  CursorEntry, CursorLocks, CursorWriter, InternalNode, TreeHeader,
-  HEADER_INDEX, MAX_NODE_LEN,
+  entry::LeafNode, CursorEntry, CursorLocks, CursorWriter, InternalNode,
+  TreeHeader, HEADER_INDEX, MAX_NODE_LEN,
 };
 
 pub struct Cursor {
@@ -26,6 +26,18 @@ impl Cursor {
       writer: CursorWriter::new(id, wal, buffer),
       locks: CursorLocks::new(locks),
     }
+  }
+
+  pub fn initialize(&self) -> Result<()> {
+    logger::info(format!("initialize tree header"));
+    let header = TreeHeader::initial_state();
+    let root = CursorEntry::Leaf(LeafNode::empty());
+
+    let hp = header.serialize()?;
+    let rp = root.serialize()?;
+    self.writer.insert(HEADER_INDEX, hp)?;
+    self.writer.insert(header.get_root(), rp)?;
+    Ok(())
   }
 
   pub fn get<T>(&mut self, key: String) -> Result<T>

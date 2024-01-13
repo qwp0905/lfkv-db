@@ -29,6 +29,11 @@ impl<K, V> AsRef<V> for Bucket<K, V> {
     &self.value
   }
 }
+impl<K, V> AsMut<V> for Bucket<K, V> {
+  fn as_mut(&mut self) -> &mut V {
+    &mut self.value
+  }
+}
 
 #[allow(unused)]
 pub struct Cache<K, V, S = RandomState> {
@@ -89,7 +94,7 @@ where
     self
       .raw
       .get_mut(h, eq)
-      .map(|e| &mut unsafe { e.as_mut() }.as_mut().value)
+      .map(|e| unsafe { e.as_mut() }.element.as_mut())
   }
 
   pub fn insert(&mut self, k: K, v: V) -> Option<(K, V)> {
@@ -304,5 +309,17 @@ mod tests {
     assert_eq!(p.insert(1, 1), None);
     assert_eq!(p.insert(2, 2), Some((1, 1)));
     assert_eq!(p.remove(&1), None);
+  }
+
+  #[test]
+  fn _4() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct T {
+      i: usize,
+    }
+
+    let mut p = Cache::<usize, T>::new(10);
+    assert_eq!(p.insert(123, T { i: 1 }), None);
+    assert_eq!(p.get(&123), Some(&T { i: 1 }));
   }
 }

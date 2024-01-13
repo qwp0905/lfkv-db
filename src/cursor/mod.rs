@@ -12,6 +12,3 @@ use writer::*;
 
 mod cursor;
 pub use cursor::*;
-
-mod initializer;
-pub use initializer::*;

@@ -1,11 +1,15 @@
+use std::time::Duration;
 use std::{path::Path, sync::Arc};
 
 use crate::utils::size;
-use crate::Initializer;
+use crate::Error;
 
 use crate::{
   buffer::BufferPool, error::Result, transaction::LockManager, wal::WAL, Cursor,
 };
+
+static WAL_FILE: &str = "log.wal";
+static DB_FILE: &str = "nodb";
 
 pub struct EngineConfig<T>
 where
@@ -52,7 +56,40 @@ impl Engine {
   where
     T: AsRef<Path>,
   {
-    Initializer::new(config).bootstrap()
+    let wal_path = Path::join(config.base_dir.as_ref(), WAL_FILE);
+    let db_path = Path::join(config.base_dir.as_ref(), DB_FILE);
+
+    let lock_manager = Arc::new(LockManager::new());
+    let (buffer_pool, flush_c) = BufferPool::open(
+      db_path,
+      config.max_cache_size,
+      lock_manager.clone(),
+      config.max_wal_buffer_size,
+    )?;
+    let buffer_pool = Arc::new(buffer_pool);
+
+    let wal = Arc::new(WAL::new(
+      wal_path,
+      flush_c,
+      Duration::from_millis(config.checkpoint_interval as u64),
+      config.max_log_size,
+      config.max_wal_buffer_size,
+    )?);
+
+    match buffer_pool.get(0) {
+      Ok(_) => wal.replay()?,
+      Err(Error::NotFound) => {
+        Cursor::new(
+          wal.next_transaction()?,
+          buffer_pool.clone(),
+          wal.clone(),
+          lock_manager.clone(),
+        )
+        .initialize()?;
+      }
+      Err(err) => return Err(err),
+    };
+    Ok(Self::from_components(buffer_pool, wal, lock_manager))
   }
 }
 
