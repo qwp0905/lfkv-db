@@ -43,12 +43,12 @@ impl Serializable for WALFileHeader {
   }
 }
 
-pub struct LogEntryHeader {
+pub struct RecordHeader {
   log_index: usize,
   transaction_id: usize,
   page_index: usize,
 }
-impl Serializable for LogEntryHeader {
+impl Serializable for RecordHeader {
   fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     let log_index = sc.read_usize()?;
@@ -70,11 +70,11 @@ impl Serializable for LogEntryHeader {
   }
 }
 
-pub struct LogEntry {
-  header: LogEntryHeader,
+pub struct WALRecord {
+  header: RecordHeader,
   data: Page,
 }
-impl LogEntry {
+impl WALRecord {
   pub fn new(
     log_index: usize,
     transaction_id: usize,
@@ -82,7 +82,7 @@ impl LogEntry {
     data: Page,
   ) -> Self {
     Self {
-      header: LogEntryHeader {
+      header: RecordHeader {
         log_index,
         transaction_id,
         page_index,
@@ -103,13 +103,13 @@ impl LogEntry {
     self.header.page_index
   }
 }
-impl TryFrom<LogEntry> for (Page, Page) {
+impl TryFrom<WALRecord> for (Page, Page) {
   type Error = Error;
-  fn try_from(value: LogEntry) -> Result<Self, Self::Error> {
+  fn try_from(value: WALRecord) -> Result<Self, Self::Error> {
     Ok((value.header.serialize()?, value.data))
   }
 }
-impl TryFrom<(Page, Page)> for LogEntry {
+impl TryFrom<(Page, Page)> for WALRecord {
   type Error = Error;
   fn try_from((header, data): (Page, Page)) -> Result<Self, Self::Error> {
     Ok(Self {
@@ -118,15 +118,15 @@ impl TryFrom<(Page, Page)> for LogEntry {
     })
   }
 }
-impl From<LogEntry> for Page {
-  fn from(value: LogEntry) -> Self {
+impl From<WALRecord> for Page {
+  fn from(value: WALRecord) -> Self {
     value.data
   }
 }
-impl Clone for LogEntry {
+impl Clone for WALRecord {
   fn clone(&self) -> Self {
     Self {
-      header: LogEntryHeader {
+      header: RecordHeader {
         log_index: self.header.log_index,
         transaction_id: self.header.transaction_id,
         page_index: self.header.page_index,

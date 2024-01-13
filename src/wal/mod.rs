@@ -1,5 +1,5 @@
-mod log;
-pub use log::*;
+mod record;
+pub use record::*;
 
 use crate::utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock};
 
@@ -69,7 +69,7 @@ impl WAL {
 pub struct WALCore {
   seeker: Arc<PageSeeker>,
   max_file_size: usize,
-  buffer: Arc<RwLock<Vec<LogEntry>>>,
+  buffer: Arc<RwLock<Vec<WALRecord>>>,
   background: ThreadPool<Result<()>>,
   max_buffer_size: usize,
   checkpoint_c: StoppableChannel<()>,
@@ -103,7 +103,7 @@ impl WALCore {
     let buffer = self.buffer.clone();
     self.background.schedule(move || {
       while let Ok(_) = recv.recv_new_or_timeout(timeout) {
-        let entries: Vec<LogEntry> = { buffer.wl().drain(..).collect() };
+        let entries: Vec<WALRecord> = { buffer.wl().drain(..).collect() };
         let to_be_applied = match entries.last() {
           Some(e) => e.get_index(),
           None => continue,
@@ -135,7 +135,7 @@ impl WALCore {
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
 
     let current = header.last_index + 1;
-    let entry = LogEntry::new(current, transaction_id, page_index, data);
+    let entry = WALRecord::new(current, transaction_id, page_index, data);
     {
       self.buffer.wl().push(entry.clone())
     };
@@ -180,11 +180,11 @@ impl WALCore {
         let i = ((index * 2) % self.max_file_size) + 1;
         let h = self.seeker.read(i)?.deserialize()?;
         let p = self.seeker.read(i + 1)?;
-        let entry = LogEntry::try_from((h, p))?;
+        let entry = WALRecord::try_from((h, p))?;
         if entry.get_index() != index {
           continue;
         }
-        entries.insert(entry.get_page_index(), entry.take_data());
+        entries.insert(entry.get_page_index(), entry.into());
       }
 
       let rx = self.flush_c.send_with_done(entries);
