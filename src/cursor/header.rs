@@ -7,6 +7,7 @@ use crate::{
 
 pub static HEADER_INDEX: usize = 0;
 
+#[derive(Debug)]
 pub struct TreeHeader {
   root: usize,
   last_index: usize,

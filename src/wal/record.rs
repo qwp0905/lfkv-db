@@ -5,6 +5,7 @@ use crate::{
 
 pub static HEADER_INDEX: usize = 0;
 
+#[derive(Debug)]
 pub struct WALFileHeader {
   pub last_index: usize,
   pub applied: usize,
@@ -30,6 +31,7 @@ impl Serializable for WALFileHeader {
     let mut wt = page.writer();
     wt.write(&self.last_index.to_be_bytes())?;
     wt.write(&self.applied.to_be_bytes())?;
+    wt.write(&self.last_transaction.to_be_bytes())?;
     return Ok(page);
   }
 
@@ -43,6 +45,7 @@ impl Serializable for WALFileHeader {
   }
 }
 
+#[derive(Debug)]
 pub struct RecordHeader {
   log_index: usize,
   transaction_id: usize,
@@ -70,6 +73,7 @@ impl Serializable for RecordHeader {
   }
 }
 
+#[derive(Debug)]
 pub struct WALRecord {
   header: RecordHeader,
   data: Page,

@@ -161,3 +161,23 @@ impl<'a> PageWriter<'a> {
     return Ok(());
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use crate::Page;
+
+  #[test]
+  fn _1() {
+    let mut page = Page::new();
+    let mut wt = page.writer();
+    wt.write(&[1, 2, 3, 5, 6]).unwrap();
+
+    assert_eq!(page.bytes[0], 1);
+    assert_eq!(page.bytes[1], 1);
+    assert_eq!(page.bytes[2], 2);
+    assert_eq!(page.bytes[3], 3);
+    assert_eq!(page.bytes[4], 5);
+    assert_eq!(page.bytes[5], 6);
+    assert_eq!(page.bytes[6], 0);
+  }
+}

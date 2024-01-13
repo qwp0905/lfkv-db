@@ -1,8 +1,8 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
-  buffer::BufferPool, transaction::LockManager, wal::WAL, Engine, EngineConfig,
-  Error, Result, Serializable,
+  buffer::BufferPool, logger, transaction::LockManager, wal::WAL, Engine,
+  EngineConfig, Error, Result, Serializable,
 };
 
 use super::{CursorEntry, LeafNode, TreeHeader, HEADER_INDEX};
@@ -50,6 +50,7 @@ where
     match buffer_pool.get(HEADER_INDEX) {
       Ok(_) => wal.replay()?,
       Err(Error::NotFound) => {
+        logger::info(format!("initialize tree header"));
         let header = TreeHeader::initial_state();
         let root = CursorEntry::Leaf(LeafNode::empty());
         buffer_pool.insert(HEADER_INDEX, header.serialize()?)?;
