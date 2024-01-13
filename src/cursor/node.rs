@@ -54,10 +54,11 @@ impl InternalNode {
   }
 
   pub fn next(&self, key: &String) -> usize {
-    self
+    let i = self
       .keys
       .binary_search_by(|k| k.cmp(key))
-      .unwrap_or_else(|i| i)
+      .unwrap_or_else(|i| i);
+    self.children[i]
   }
 }
 
