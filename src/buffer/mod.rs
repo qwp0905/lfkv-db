@@ -47,13 +47,15 @@ impl BufferPool {
     path: T,
     cache_size: usize,
     locks: Arc<LockManager>,
+    flush_size: usize,
   ) -> Result<(Self, StoppableChannel<BTreeMap<usize, Page>>)>
   where
     T: AsRef<Path>,
   {
     let disk = Arc::new(PageSeeker::open(path)?);
     let cache = Arc::new(Mutex::new(Cache::new(cache_size)));
-    let background = ThreadPool::new(1, size::mb(30), "buffer pool", None);
+    let background =
+      ThreadPool::new(1, flush_size * size::kb(8), "buffer pool", None);
     let (flush_c, rx) = StoppableChannel::new();
     let buffer_pool =
       Self::new(cache, disk, background, locks, flush_c.clone());
@@ -83,7 +85,7 @@ impl BufferPool {
     let cache = self.cache.clone();
     self.background.schedule(move || {
       while let Ok((entries, done_c)) = rx.recv_all() {
-        for (index, page) in entries {
+        for (index, page) in entries.into_iter() {
           let lock = locks.fetch_write_lock(index);
           disk.write(index, page)?;
           cache.l().get_mut(&index).map(|pb| pb.remove_dirty());

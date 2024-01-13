@@ -36,6 +36,7 @@ where
       db_path,
       self.config.max_cache_size,
       lock_manager.clone(),
+      self.config.max_wal_buffer_size,
     )?;
     let buffer_pool = Arc::new(buffer_pool);
 

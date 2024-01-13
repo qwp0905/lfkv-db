@@ -173,22 +173,26 @@ impl WALCore {
       return Ok(());
     };
 
-    let mut entries = BTreeMap::new();
-    for index in (header.applied + 1)..header.last_index {
-      let i = ((index * 2) % self.max_file_size) + 1;
-      let h = self.seeker.read(i)?.deserialize()?;
-      let p = self.seeker.read(i + 1)?;
-      let entry = LogEntry::try_from((h, p))?;
-      if entry.get_index() != index {
-        continue;
+    while header.applied < header.last_index {
+      let mut entries = BTreeMap::new();
+      let end = (header.applied + self.max_buffer_size).min(header.last_index);
+      for index in header.applied..end {
+        let i = ((index * 2) % self.max_file_size) + 1;
+        let h = self.seeker.read(i)?.deserialize()?;
+        let p = self.seeker.read(i + 1)?;
+        let entry = LogEntry::try_from((h, p))?;
+        if entry.get_index() != index {
+          continue;
+        }
+        entries.insert(entry.get_page_index(), entry.take_data());
       }
-      entries.insert(entry.get_page_index(), entry.take_data());
-    }
 
-    let rx = self.flush_c.send_with_done(entries);
-    rx.drop_one();
-    header.applied = header.last_index;
-    self.seeker.write(HEADER_INDEX, header.serialize()?)?;
-    self.seeker.fsync()
+      let rx = self.flush_c.send_with_done(entries);
+      rx.drop_one();
+      header.applied = end;
+      self.seeker.write(HEADER_INDEX, header.serialize()?)?;
+      self.seeker.fsync()?;
+    }
+    return Ok(());
   }
 }
