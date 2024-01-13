@@ -13,29 +13,4 @@
     "./Cargo.toml"
   ],
   "rust-analyzer.showUnlinkedFileNotification": false,
-  "yaml.schemas": {
-    "https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json": "docker-compose*.yml",
-  },
-  "[yaml]": {
-    "editor.insertSpaces": true,
-    "editor.tabSize": 2,
-    "editor.autoIndent": "keep",
-    "diffEditor.ignoreTrimWhitespace": false,
-    "editor.quickSuggestions": {
-      "other": true,
-      "comments": false,
-      "strings": true
-    },
-    "editor.defaultFormatter": "redhat.vscode-yaml"
-  },
-  "files.associations": {
-    "*.yml": "yaml",
-    "*.json": "json"
-  },
-  "[dockerfile]": {
-    "editor.quickSuggestions": {
-      "strings": true
-    },
-    "editor.defaultFormatter": "ms-azuretools.vscode-docker"
-  },
 }
