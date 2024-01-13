@@ -4,6 +4,7 @@ pub use log::*;
 use crate::utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock};
 
 use std::{
+  collections::BTreeMap,
   path::Path,
   sync::{Arc, Mutex, RwLock},
   time::Duration,
@@ -21,7 +22,7 @@ pub struct WAL {
 impl WAL {
   pub fn new<T>(
     path: T,
-    flush_c: StoppableChannel<Vec<(usize, Page)>>,
+    flush_c: StoppableChannel<BTreeMap<usize, Page>>,
     checkpoint_timeout: Duration,
     max_log_size: usize,
     max_buffer_size: usize,
@@ -31,7 +32,7 @@ impl WAL {
   {
     let seeker = PageSeeker::open(path)?;
     if seeker.len()? == 0 {
-      let header = FileHeader::new(0, 0, 0);
+      let header = WALFileHeader::new(0, 0, 0);
       seeker.write(0, header.serialize()?)?;
     }
     return Ok(Self {
@@ -68,13 +69,13 @@ pub struct WALCore {
   background: ThreadPool<Result<()>>,
   max_buffer_size: usize,
   checkpoint_c: StoppableChannel<()>,
-  flush_c: StoppableChannel<Vec<(usize, Page)>>,
+  flush_c: StoppableChannel<BTreeMap<usize, Page>>,
 }
 impl WALCore {
   fn new(
     seeker: Arc<PageSeeker>,
     max_file_size: usize,
-    flush_c: StoppableChannel<Vec<(usize, Page)>>,
+    flush_c: StoppableChannel<BTreeMap<usize, Page>>,
     checkpoint_timeout: Duration,
     max_buffer_size: usize,
   ) -> Self {
@@ -109,7 +110,7 @@ impl WALCore {
           .collect();
 
         flush_c.send_with_done(entries).drop_one();
-        let mut header: FileHeader =
+        let mut header: WALFileHeader =
           seeker.read(HEADER_INDEX)?.deserialize()?;
         header.applied = to_be_applied;
         seeker.write(HEADER_INDEX, header.serialize()?)?;
@@ -126,7 +127,7 @@ impl WALCore {
     page_index: usize,
     data: Page,
   ) -> Result<()> {
-    let mut header: FileHeader =
+    let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
 
     let current = header.next_index;
@@ -152,7 +153,7 @@ impl WALCore {
   }
 
   fn next_transaction(&self) -> Result<usize> {
-    let mut header: FileHeader =
+    let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
     let next = header.next_transaction;
     header.next_transaction += 1;

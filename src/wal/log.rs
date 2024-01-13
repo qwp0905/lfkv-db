@@ -5,13 +5,13 @@ use crate::{
 
 pub static HEADER_INDEX: usize = 0;
 
-pub struct FileHeader {
+pub struct WALFileHeader {
   pub next_index: usize,
   pub applied: usize,
   pub next_transaction: usize,
 }
 
-impl FileHeader {
+impl WALFileHeader {
   pub fn new(
     next_index: usize,
     applied: usize,
@@ -24,7 +24,7 @@ impl FileHeader {
     }
   }
 }
-impl Serializable for FileHeader {
+impl Serializable for WALFileHeader {
   fn serialize(&self) -> Result<Page, Error> {
     let mut page = Page::new();
     let mut wt = page.writer();

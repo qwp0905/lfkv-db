@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::BTreeSet;
 
 use crate::{
   disk::{Page, Serializable},
@@ -10,12 +10,12 @@ pub static HEADER_INDEX: usize = 0;
 pub struct TreeHeader {
   root: usize,
   last_index: usize,
-  fragments: VecDeque<usize>,
+  fragments: BTreeSet<usize>,
 }
 
 impl TreeHeader {
   pub fn acquire_index(&mut self) -> usize {
-    if let Some(i) = self.fragments.pop_front() {
+    if let Some(i) = self.fragments.pop_first() {
       return i;
     };
 
@@ -49,10 +49,10 @@ impl Serializable for TreeHeader {
     let mut s = value.scanner();
     let root = s.read_usize()?;
     let last_index = s.read_usize()?;
-    let mut fragments = VecDeque::new();
+    let mut fragments = BTreeSet::new();
     let len = s.read_usize()?;
     for _ in 0..len {
-      fragments.push_back(s.read_usize()?);
+      fragments.insert(s.read_usize()?);
     }
 
     Ok(TreeHeader {

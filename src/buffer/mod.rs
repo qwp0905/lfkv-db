@@ -1,4 +1,5 @@
 use std::{
+  collections::BTreeMap,
   path::Path,
   sync::{Arc, Mutex},
 };
@@ -38,7 +39,7 @@ pub struct BufferPool {
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
   locks: Arc<LockManager>,
-  flush_c: StoppableChannel<Vec<(usize, Page)>>,
+  flush_c: StoppableChannel<BTreeMap<usize, Page>>,
 }
 
 impl BufferPool {
@@ -46,7 +47,7 @@ impl BufferPool {
     path: T,
     cache_size: usize,
     locks: Arc<LockManager>,
-  ) -> Result<(Self, StoppableChannel<Vec<(usize, Page)>>)>
+  ) -> Result<(Self, StoppableChannel<BTreeMap<usize, Page>>)>
   where
     T: AsRef<Path>,
   {
@@ -65,7 +66,7 @@ impl BufferPool {
     disk: Arc<PageSeeker>,
     background: ThreadPool<Result<()>>,
     locks: Arc<LockManager>,
-    flush_c: StoppableChannel<Vec<(usize, Page)>>,
+    flush_c: StoppableChannel<BTreeMap<usize, Page>>,
   ) -> Self {
     Self {
       cache,
@@ -76,7 +77,7 @@ impl BufferPool {
     }
   }
 
-  fn start_background(&self, rx: ContextReceiver<Vec<(usize, Page)>>) {
+  fn start_background(&self, rx: ContextReceiver<BTreeMap<usize, Page>>) {
     let disk = self.disk.clone();
     let locks = self.locks.clone();
     let cache = self.cache.clone();
@@ -125,7 +126,7 @@ impl BufferPool {
       self.cache.l().insert(index, PageBuffer::new(page, true))
     {
       if pb.dirty {
-        self.flush_c.send(vec![(i, pb.page)]);
+        self.flush_c.send(BTreeMap::from_iter(vec![(i, pb.page)]));
       }
     };
     return Ok(());
@@ -135,7 +136,7 @@ impl BufferPool {
     self.cache.l().remove(&index).map(|pb| {
       let mut page = pb.page;
       page.set_empty();
-      self.flush_c.send(vec![(index, page)])
+      self.flush_c.send(BTreeMap::from_iter(vec![(index, page)]))
     });
 
     Ok(())
