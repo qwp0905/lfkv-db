@@ -41,7 +41,7 @@ pub struct Engine {
 }
 
 impl Engine {
-  pub fn from_components(
+  fn from_components(
     buffer_pool: Arc<BufferPool>,
     wal: Arc<WAL>,
     lock_manager: Arc<LockManager>,
@@ -52,7 +52,7 @@ impl Engine {
       lock_manager,
     }
   }
-  pub fn new<T>(config: EngineConfig<T>) -> Result<Self>
+  pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
   where
     T: AsRef<Path>,
   {

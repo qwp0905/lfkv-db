@@ -1,5 +1,5 @@
 fn main() -> no_db::Result<()> {
-  let engine = no_db::Engine::new(no_db::EngineConfig {
+  let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
     max_log_size: 2048,
     max_wal_buffer_size: 100,
     checkpoint_interval: 2000,
