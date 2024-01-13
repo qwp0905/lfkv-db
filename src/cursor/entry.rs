@@ -23,13 +23,7 @@ impl CursorEntry {
     key: &String,
   ) -> core::result::Result<usize, Option<usize>> {
     match &self.node {
-      Node::Internal(node) => {
-        let i = node
-          .keys
-          .binary_search_by(|k| k.cmp(key))
-          .unwrap_or_else(|i| i);
-        return Err(Some(node.children[i]));
-      }
+      Node::Internal(node) => Err(Some(node.next(key))),
       Node::Leaf(node) => node
         .keys
         .binary_search_by(|(k, _)| k.cmp(key))
