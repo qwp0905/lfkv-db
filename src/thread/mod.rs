@@ -74,12 +74,12 @@ impl<T: 'static> ThreadPool<T> {
       timeout: None,
     });
 
-    let cc = Arc::clone(&count);
+    let cc = count.clone();
     main.execute(move || {
       let ready_s = Box::new(ready_s);
       while let Ok(mut worker) = done_r.recv_new() {
         let ready_s = ready_s.to_owned();
-        let count = Arc::clone(&cc);
+        let count = cc.clone();
         Builder::new()
           .name(format!("{}_clear", worker.get_name()))
           .stack_size(size::byte(20))

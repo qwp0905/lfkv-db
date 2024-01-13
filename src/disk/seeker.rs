@@ -1,7 +1,7 @@
 use std::{
-  fs::{File, OpenOptions},
+  fs::{remove_file, File, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
-  path::Path,
+  path::{Path, PathBuf},
   sync::RwLock,
 };
 
@@ -14,6 +14,7 @@ use super::{Page, PAGE_SIZE};
 #[derive(Debug)]
 pub struct PageSeeker {
   inner: RwLock<File>,
+  path: PathBuf,
 }
 impl PageSeeker {
   pub fn open<T>(path: T) -> Result<PageSeeker>
@@ -24,9 +25,10 @@ impl PageSeeker {
       .create(true)
       .read(true)
       .write(true)
-      .open(path)
+      .open(path.as_ref())
       .map(|inner| Self {
         inner: RwLock::new(inner),
+        path: PathBuf::from(path.as_ref()),
       })
       .map_err(Error::IO);
   }
@@ -65,6 +67,11 @@ impl PageSeeker {
 
   pub fn truncate(&self, size: usize) -> Result<()> {
     return self.inner.wl().set_len(get_offset(size)).map_err(Error::IO);
+  }
+
+  pub fn delete(self) -> Result<()> {
+    drop(self.inner);
+    remove_file(self.path).map_err(Error::IO)
   }
 
   pub fn len(&self) -> Result<usize> {

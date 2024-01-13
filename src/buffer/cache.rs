@@ -83,10 +83,10 @@ where
   {
     let h = hash(k, &self.hasher);
     let eq = equivalent(k);
-    self.raw.get_mut(h, eq).map(|e| {
-      self.entries.move_back(e);
-      &mut unsafe { e.as_mut() }.as_mut().value
-    })
+    self
+      .raw
+      .get_mut(h, eq)
+      .map(|e| &mut unsafe { e.as_mut() }.as_mut().value)
   }
 
   pub fn insert(&mut self, k: K, v: V) -> Option<(K, V)> {

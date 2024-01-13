@@ -9,12 +9,12 @@ use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
 
 use super::{PageLock, PageLocker};
 
-pub struct TransactionManager {
+pub struct LockManager {
   tree_locks: Arc<Mutex<HashMap<usize, PageLocker>>>,
   background: ThreadPool,
   release: StoppableChannel<usize>,
 }
-impl TransactionManager {
+impl LockManager {
   pub fn new() -> Self {
     let (release, recv) = StoppableChannel::new();
     let tm = Self {
@@ -27,7 +27,7 @@ impl TransactionManager {
   }
 
   fn start_release(&self, rx: ContextReceiver<usize>) {
-    let cloned = Arc::clone(&self.tree_locks);
+    let cloned = self.tree_locks.clone();
     self.background.schedule(move || {
       while let Ok(index) = rx.recv_new() {
         let mut locks = cloned.l();
@@ -88,7 +88,7 @@ impl TransactionManager {
     }
   }
 }
-impl Drop for TransactionManager {
+impl Drop for LockManager {
   fn drop(&mut self) {
     self.release.terminate();
   }

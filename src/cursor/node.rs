@@ -9,14 +9,6 @@ pub enum Node {
   Internal(InternalNode),
   Leaf(LeafNode),
 }
-impl Node {
-  pub fn len(&self) -> usize {
-    match self {
-      Self::Internal(n) => n.keys.len(),
-      Self::Leaf(n) => n.keys.len(),
-    }
-  }
-}
 impl Serializable for Node {
   fn serialize(&self) -> Result<Page, Error> {
     match self {
@@ -55,6 +47,17 @@ impl InternalNode {
       self.children.push(index);
       self.children.append(c.as_mut());
     };
+  }
+
+  pub fn len(&self) -> usize {
+    self.keys.len()
+  }
+
+  pub fn next(&self, key: &String) -> usize {
+    self
+      .keys
+      .binary_search_by(|k| k.cmp(key))
+      .unwrap_or_else(|i| i)
   }
 }
 
@@ -120,6 +123,10 @@ impl LeafNode {
       self.keys.append(keys.as_mut());
     };
     return self.keys.last().map(|(k, _)| k.to_owned());
+  }
+
+  pub fn len(&self) -> usize {
+    self.keys.len()
   }
 }
 impl Serializable for LeafNode {

@@ -5,6 +5,8 @@ use crate::{
   error::Error,
 };
 
+pub static HEADER_INDEX: usize = 0;
+
 pub struct TreeHeader {
   root: usize,
   last_index: usize,

@@ -9,8 +9,7 @@ use crate::{
   disk::{Page, PageSeeker},
   error::{Error, Result},
   thread::{ContextReceiver, StoppableChannel, ThreadPool},
-  transaction::TransactionManager,
-  wal::WAL,
+  transaction::LockManager,
 };
 
 mod cache;
@@ -39,50 +38,53 @@ pub struct BufferPool {
   cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
-  transactions: Arc<TransactionManager>,
-  channel: StoppableChannel<Vec<(usize, Page)>>,
+  locks: Arc<LockManager>,
+  flush_c: StoppableChannel<Vec<(usize, Page)>>,
 }
 
 impl BufferPool {
   pub fn open<T>(
     path: T,
     cache_size: usize,
-    transactions: Arc<TransactionManager>,
-    channel: StoppableChannel<Vec<(usize, Page)>>,
-  ) -> Result<Self>
+    locks: Arc<LockManager>,
+  ) -> Result<(Self, StoppableChannel<Vec<(usize, Page)>>)>
   where
     T: AsRef<Path>,
   {
     let disk = Arc::new(PageSeeker::open(path)?);
     let cache = Arc::new(Mutex::new(Cache::new(cache_size)));
     let background = ThreadPool::new(1, size::mb(30), "buffer pool", None);
-    Ok(Self::new(cache, disk, background, transactions, channel))
+    let (flush_c, rx) = StoppableChannel::new();
+    let buffer_pool =
+      Self::new(cache, disk, background, locks, flush_c.clone());
+    buffer_pool.start_background(rx);
+    Ok((buffer_pool, flush_c))
   }
 
   fn new(
     cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
     disk: Arc<PageSeeker>,
     background: ThreadPool<Result<()>>,
-    transactions: Arc<TransactionManager>,
-    channel: StoppableChannel<Vec<(usize, Page)>>,
+    locks: Arc<LockManager>,
+    flush_c: StoppableChannel<Vec<(usize, Page)>>,
   ) -> Self {
     Self {
       cache,
       disk,
       background,
-      transactions,
-      channel,
+      locks,
+      flush_c,
     }
   }
 
   fn start_background(&self, rx: ContextReceiver<Vec<(usize, Page)>>) {
-    let disk = Arc::clone(&self.disk);
-    let tx = Arc::clone(&self.transactions);
-    let cache = Arc::clone(&self.cache);
+    let disk = self.disk.clone();
+    let locks = self.locks.clone();
+    let cache = self.cache.clone();
     self.background.schedule(move || {
       while let Ok((entries, done_c)) = rx.recv_all() {
         for (index, page) in entries {
-          let lock = tx.fetch_write_lock(index);
+          let lock = locks.fetch_write_lock(index);
           disk.write(index, page)?;
           cache.l().get_mut(&index).map(|pb| pb.remove_dirty());
           drop(lock);
@@ -123,7 +125,9 @@ impl BufferPool {
     if let Some((i, pb)) =
       self.cache.l().insert(index, PageBuffer::new(page, true))
     {
-      self.channel.send(vec![(i, pb.page)]);
+      if pb.dirty {
+        self.flush_c.send(vec![(i, pb.page)]);
+      }
     };
     return Ok(());
   }

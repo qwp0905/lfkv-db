@@ -74,6 +74,22 @@ impl<T, R> ContextReceiver<T, R> {
     return Err(RecvError);
   }
 
+  pub fn recv_new_or_timeout(
+    &self,
+    timeout: Duration,
+  ) -> Result<Option<T>, RecvError> {
+    match self.recv.recv_timeout(timeout) {
+      Ok(c) => {
+        if let StoppableContext::New(v) = c {
+          return Ok(Some(v));
+        };
+      }
+      Err(RecvTimeoutError::Timeout) => return Ok(None),
+      _ => {}
+    }
+    return Err(RecvError);
+  }
+
   pub fn recv_done(&self) -> Result<(T, Sender<R>), RecvError> {
     if let StoppableContext::WithDone(v) = self.recv()? {
       return Ok(v);

@@ -1,61 +1,71 @@
-use crate::{disk::Page, error::Error};
+use crate::{
+  disk::{Page, Serializable},
+  error::Error,
+};
 
 pub static HEADER_INDEX: usize = 0;
 
 pub struct FileHeader {
-  pub last_index: usize,
+  pub next_index: usize,
   pub applied: usize,
+  pub next_transaction: usize,
 }
 
 impl FileHeader {
-  pub fn new(last_index: usize, applied: usize) -> Self {
+  pub fn new(
+    next_index: usize,
+    applied: usize,
+    next_transaction: usize,
+  ) -> Self {
     Self {
-      last_index,
+      next_transaction,
+      next_index,
       applied,
     }
   }
 }
-impl TryFrom<Page> for FileHeader {
-  type Error = Error;
-  fn try_from(value: Page) -> Result<Self, Self::Error> {
+impl Serializable for FileHeader {
+  fn serialize(&self) -> Result<Page, Error> {
+    let mut page = Page::new();
+    let mut wt = page.writer();
+    wt.write(&self.next_index.to_be_bytes())?;
+    wt.write(&self.applied.to_be_bytes())?;
+    return Ok(page);
+  }
+
+  fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     let last_index = sc.read_usize()?;
     let applied = sc.read_usize()?;
+    let last_transaction = sc.read_usize()?;
 
-    Ok(Self::new(last_index, applied))
+    Ok(Self::new(last_index, applied, last_transaction))
   }
-}
-impl TryFrom<FileHeader> for Page {
-  type Error = Error;
-  fn try_from(value: FileHeader) -> Result<Self, Self::Error> {
-    let mut page = Page::new();
-    let mut wt = page.writer();
-    wt.write(&value.last_index.to_be_bytes())?;
-    wt.write(&value.applied.to_be_bytes())?;
-    return Ok(page);
-  }
-}
-
-pub enum Operation {
-  Insert = 0,
-  Remove = 1,
 }
 
 pub struct LogEntryHeader {
   log_index: usize,
   transaction_id: usize,
   page_index: usize,
-  op: Operation,
 }
-impl TryFrom<LogEntryHeader> for Page {
-  type Error = Error;
-  fn try_from(value: LogEntryHeader) -> Result<Self, Self::Error> {
+impl Serializable for LogEntryHeader {
+  fn deserialize(value: &Page) -> Result<Self, Error> {
+    let mut sc = value.scanner();
+    let log_index = sc.read_usize()?;
+    let transaction_id = sc.read_usize()?;
+    let page_index = sc.read_usize()?;
+    return Ok(Self {
+      log_index,
+      transaction_id,
+      page_index,
+    });
+  }
+  fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
-    wt.write(&[value.op as u8])?;
-    wt.write(&value.log_index.to_be_bytes())?;
-    wt.write(&value.transaction_id.to_be_bytes())?;
-    wt.write(&value.page_index.to_be_bytes())?;
+    wt.write(&self.log_index.to_be_bytes())?;
+    wt.write(&self.transaction_id.to_be_bytes())?;
+    wt.write(&self.page_index.to_be_bytes())?;
     return Ok(p);
   }
 }
@@ -69,7 +79,6 @@ impl LogEntry {
     log_index: usize,
     transaction_id: usize,
     page_index: usize,
-    op: Operation,
     data: Page,
   ) -> Self {
     Self {
@@ -77,7 +86,6 @@ impl LogEntry {
         log_index,
         transaction_id,
         page_index,
-        op,
       },
       data,
     }
@@ -86,10 +94,31 @@ impl LogEntry {
   pub fn get_index(&self) -> usize {
     self.header.log_index
   }
+
+  pub fn take_data(self) -> Page {
+    self.data
+  }
 }
 impl TryFrom<LogEntry> for (Page, Page) {
   type Error = Error;
   fn try_from(value: LogEntry) -> Result<Self, Self::Error> {
-    Ok((value.header.try_into()?, value.data))
+    Ok((value.header.serialize()?, value.data))
+  }
+}
+impl From<LogEntry> for Page {
+  fn from(value: LogEntry) -> Self {
+    value.data
+  }
+}
+impl Clone for LogEntry {
+  fn clone(&self) -> Self {
+    Self {
+      header: LogEntryHeader {
+        log_index: self.header.log_index,
+        transaction_id: self.header.transaction_id,
+        page_index: self.header.page_index,
+      },
+      data: self.data.copy(),
+    }
   }
 }
