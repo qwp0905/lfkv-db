@@ -5,7 +5,7 @@ use crate::{
   Error, Result, Serializable,
 };
 
-use super::{LeafNode, Node, TreeHeader, HEADER_INDEX};
+use super::{CursorEntry, LeafNode, TreeHeader, HEADER_INDEX};
 
 static WAL_FILE: &str = "log.wal";
 static DB_FILE: &str = "nodb";
@@ -50,7 +50,7 @@ where
       Ok(_) => wal.replay()?,
       Err(Error::NotFound) => {
         let header = TreeHeader::initial_state();
-        let root = Node::Leaf(LeafNode::empty());
+        let root = CursorEntry::Leaf(LeafNode::empty());
         buffer_pool.insert(HEADER_INDEX, header.serialize()?)?;
         buffer_pool.insert(header.get_root(), root.serialize()?)?;
       }

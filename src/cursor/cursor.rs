@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::{
-  CursorEntry, CursorLocks, CursorWriter, InternalNode, Node, TreeHeader,
+  CursorEntry, CursorLocks, CursorWriter, InternalNode, TreeHeader,
   HEADER_INDEX, MAX_NODE_LEN,
 };
 
@@ -56,7 +56,7 @@ impl Cursor {
         match self.append_at(&mut header, root_index, key, page)? {
           Ok((s, i)) => {
             let nri = header.acquire_index();
-            let new_root = Node::Internal(InternalNode {
+            let new_root = CursorEntry::Internal(InternalNode {
               keys: vec![s],
               children: vec![root_index, i],
             });
@@ -81,8 +81,8 @@ impl Cursor {
     loop {
       self.locks.fetch_read(index);
       let page = self.writer.get(index)?;
-      let entry = CursorEntry::from(index, page)?;
-      match entry.find_next(key) {
+      let entry: CursorEntry = page.deserialize()?;
+      match entry.find_or_next(key) {
         Ok(i) => return Ok(i),
         Err(c) => match c {
           None => return Err(Error::NotFound),
@@ -102,9 +102,9 @@ impl Cursor {
     page: Page,
   ) -> Result<core::result::Result<(String, usize), Option<String>>> {
     self.locks.fetch_write(index);
-    let entry = CursorEntry::from(index, self.writer.get(index)?)?;
-    match entry.node {
-      Node::Internal(mut node) => {
+    let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
+    match entry {
+      CursorEntry::Internal(mut node) => {
         let i = node.next(&key);
         match self.append_at(header, index, key, page)? {
           Ok((s, ni)) => {
@@ -130,7 +130,7 @@ impl Cursor {
           }
         };
       }
-      Node::Leaf(mut node) => {
+      CursorEntry::Leaf(mut node) => {
         let i = header.acquire_index();
         self.writer.insert(i, page)?;
         let lk = node.add(key, i);

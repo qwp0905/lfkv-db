@@ -169,6 +169,10 @@ impl WALCore {
   fn replay(&self) -> Result<()> {
     let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
+    if header.last_index == header.applied {
+      return Ok(());
+    };
+
     let mut entries = BTreeMap::new();
     for index in (header.applied + 1)..header.last_index {
       let i = ((index * 2) % self.max_file_size) + 1;
