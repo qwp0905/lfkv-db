@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-  buffer::BufferPool, transaction::LockManager, wal::WAL, Error, Page, Result,
-  Serializable,
+  buffer::BufferPool, logger, transaction::LockManager, wal::WAL, Error, Page,
+  Result, Serializable,
 };
 
 use super::{
@@ -21,6 +21,7 @@ impl Cursor {
     wal: Arc<WAL>,
     locks: Arc<LockManager>,
   ) -> Self {
+    logger::info(format!("transaction id {} cursor born", id));
     Self {
       writer: CursorWriter::new(id, wal, buffer),
       locks: CursorLocks::new(locks),
@@ -106,7 +107,7 @@ impl Cursor {
     match entry {
       CursorEntry::Internal(mut node) => {
         let i = node.next(&key);
-        match self.append_at(header, index, key, page)? {
+        match self.append_at(header, i, key, page)? {
           Ok((s, ni)) => {
             node.add(s, ni);
             if node.len() <= MAX_NODE_LEN {

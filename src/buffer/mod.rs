@@ -144,3 +144,9 @@ impl BufferPool {
     Ok(())
   }
 }
+
+impl Drop for BufferPool {
+  fn drop(&mut self) {
+    self.flush_c.terminate()
+  }
+}

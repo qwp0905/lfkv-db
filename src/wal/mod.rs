@@ -1,7 +1,10 @@
 mod record;
 pub use record::*;
 
-use crate::utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock};
+use crate::{
+  logger,
+  utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock},
+};
 
 use std::{
   collections::BTreeMap,
@@ -34,7 +37,10 @@ impl WAL {
     if seeker.len()? == 0 {
       let header = WALFileHeader::new(0, 0, 0);
       seeker.write(0, header.serialize()?)?;
+      logger::info(format!("wal initialized"));
     }
+
+    logger::info(format!("wal started"));
     return Ok(Self {
       core: Mutex::new(WALCore::new(
         Arc::new(seeker),
@@ -170,9 +176,14 @@ impl WALCore {
     let mut header: WALFileHeader =
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
     if header.last_index == header.applied {
+      logger::info(format!("nothing to replay in wal records"));
       return Ok(());
     };
 
+    logger::info(format!(
+      "last applied index {} will be {}",
+      header.applied, header.last_index
+    ));
     while header.applied < header.last_index {
       let mut entries = BTreeMap::new();
       let end = (header.applied + self.max_buffer_size).min(header.last_index);
@@ -194,5 +205,10 @@ impl WALCore {
       self.seeker.fsync()?;
     }
     return Ok(());
+  }
+}
+impl Drop for WALCore {
+  fn drop(&mut self) {
+    self.checkpoint_c.terminate()
   }
 }
