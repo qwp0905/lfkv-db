@@ -131,5 +131,13 @@ impl BufferPool {
     return Ok(());
   }
 
-  // pub fn remove(&self, index: usize) {}
+  pub fn remove(&self, index: usize) -> Result<()> {
+    self.cache.l().remove(&index).map(|pb| {
+      let mut page = pb.page;
+      page.set_empty();
+      self.flush_c.send(vec![(index, page)])
+    });
+
+    Ok(())
+  }
 }
