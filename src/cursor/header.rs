@@ -64,10 +64,10 @@ impl Serializable for TreeHeader {
       fragments.insert(s.read_usize()?);
     }
 
-    Ok(TreeHeader {
+    return Ok(TreeHeader {
       root,
       last_index,
       fragments,
-    })
+    });
   }
 }

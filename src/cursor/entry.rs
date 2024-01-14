@@ -87,8 +87,8 @@ impl Serializable for InternalNode {
       wt.write(&[k.len() as u8])?;
       wt.write(k.as_bytes())?;
     }
-    for i in 0..(self.keys.len() + 1) {
-      wt.write(&self.children[i].to_be_bytes())?;
+    for &i in &self.children {
+      wt.write(&i.to_be_bytes())?;
     }
     return Ok(p);
   }

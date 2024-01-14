@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use crossbeam::channel::unbounded;
-
 fn main() -> no_db::Result<()> {
   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
     max_log_size: 2048,
@@ -14,22 +12,21 @@ fn main() -> no_db::Result<()> {
   let a = Arc::new(engine);
   println!("engine created");
 
-  let mut done = vec![];
+  let t = no_db::ThreadPool::<no_db::Result<()>>::new(
+    10,
+    1024 * 1024,
+    "sdfsdf",
+    None,
+  );
 
   for i in 0..100 {
     let engine = a.clone();
-    let (tx, rx) = unbounded();
-    done.push(rx);
-    std::thread::spawn(move || {
-      println!("{i} sldkfjlskdjflksjdlfkjsldkjflksjdflkjsldfkjlskjdfl");
-      let mut cursor = engine.new_transaction().unwrap();
+    t.schedule(move || {
+      let mut cursor = engine.new_transaction()?;
       let tt = T { i };
-      cursor.insert(format!("{i}"), tt).unwrap();
-      tx.send(()).unwrap();
+      cursor.insert(format!("{i}"), tt)?;
+      Ok(())
     });
-  }
-  for t in done.drain(..) {
-    t.recv().unwrap();
   }
 
   let mut cursor = a.new_transaction()?;

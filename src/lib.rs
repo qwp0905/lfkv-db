@@ -1,7 +1,9 @@
 mod buffer;
-mod thread;
 mod transaction;
 mod wal;
+
+mod thread;
+pub use thread::*;
 
 mod engine;
 pub use engine::*;

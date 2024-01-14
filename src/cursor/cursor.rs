@@ -125,16 +125,15 @@ impl Cursor {
           Ok((s, ni)) => {
             node.add(s, ni);
             if node.len() <= MAX_NODE_LEN {
-              let np = node.serialize()?;
-              self.writer.insert(index, np)?;
+              self.writer.insert(index, node.serialize()?)?;
               return Ok(Err(None));
             }
 
             let (n, s) = node.split();
-            let ni = header.acquire_index();
-            self.writer.insert(ni, n.serialize()?)?;
+            let new_i = header.acquire_index();
+            self.writer.insert(new_i, n.serialize()?)?;
             self.writer.insert(index, node.serialize()?)?;
-            return Ok(Ok((s, ni)));
+            return Ok(Ok((s, new_i)));
           }
           Err(oi) => {
             if let Some(s) = oi {

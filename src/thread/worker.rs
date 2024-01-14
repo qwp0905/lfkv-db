@@ -9,7 +9,7 @@ use std::{
 use crate::utils::{logger, DroppableReceiver, EmptySender};
 use crossbeam::channel::Receiver;
 
-use super::{ContextReceiver, StoppableChannel, StoppableContext};
+use super::{StoppableChannel, StoppableContext};
 
 #[allow(unused)]
 type Work<E> = dyn FnOnce() -> E + Send + UnwindSafe + 'static;
@@ -59,23 +59,23 @@ impl<T: 'static> ThreadWorker<T> {
         self.config.name.to_owned(),
         self.config.timeout,
       );
-      if let Err(_) = replace(t, thread).join() {
+      if let Err(err) = replace(t, thread).join() {
         logger::error(format!(
-          "error on thread {}... will be respawn..",
-          self.config.name
+          "error on thread {}... will be respawn..\n{:?}",
+          self.config.name, err
         ));
       }
       drop(replace(&mut self.channel, channel));
       return;
     }
 
-    let (thread, tx) = spawn(
+    let (thread, channel) = spawn(
       self.config.stack_size,
       self.config.name.to_owned(),
       self.config.timeout,
     );
     self.thread = Some(thread);
-    self.channel = tx;
+    self.channel = channel;
   }
 
   pub fn execute<F>(&mut self, f: F)
@@ -105,8 +105,11 @@ impl<T> Drop for ThreadWorker<T> {
       if !t.is_finished() {
         self.channel.terminate();
       }
-      if let Err(_) = t.join() {
-        logger::error(format!("error on thread {}", self.config.name));
+      if let Err(err) = t.join() {
+        logger::error(format!(
+          "error on thread {}\n{:?}",
+          self.config.name, err
+        ));
       }
     }
   }
@@ -121,21 +124,14 @@ fn spawn<T: 'static>(
   let thread = Builder::new()
     .stack_size(stack_size)
     .name(name)
-    .spawn(handle_thread(rx, timeout))
+    .spawn(move || {
+      while let Ok(StoppableContext::WithDone((job, done))) =
+        rx.maybe_timeout(timeout)
+      {
+        catch_unwind(job).ok();
+        done.close();
+      }
+    })
     .unwrap();
   (thread, tx)
-}
-
-fn handle_thread<T: 'static>(
-  rx: ContextReceiver<Box<Work<T>>>,
-  timeout: Option<Duration>,
-) -> impl FnOnce() + Send + 'static {
-  move || {
-    while let Ok(StoppableContext::WithDone((job, done))) =
-      rx.maybe_timeout(timeout)
-    {
-      catch_unwind(job).ok();
-      done.close();
-    }
-  }
 }
