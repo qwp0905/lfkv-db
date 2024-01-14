@@ -25,46 +25,40 @@ impl<T, R> StoppableContext<T, R> {
 
 #[allow(unused)]
 #[derive(Debug)]
-pub struct StoppableChannel<T, R = ()> {
-  sender: Sender<StoppableContext<T, R>>,
-}
+pub struct StoppableChannel<T, R = ()>(Sender<StoppableContext<T, R>>);
 #[allow(unused)]
 impl<T, R> StoppableChannel<T, R> {
   pub fn new() -> (Self, ContextReceiver<T, R>) {
     let (tx, rx) = unbounded();
-    return (Self { sender: tx }, ContextReceiver::new(rx));
+    return (Self(tx), ContextReceiver::new(rx));
   }
 
   pub fn terminate(&self) {
-    self.sender.send(StoppableContext::Term).unwrap();
+    self.0.send(StoppableContext::Term).unwrap();
   }
 
   pub fn send_with_done(&self, v: T) -> Receiver<R> {
     let (ctx, rx) = StoppableContext::with_done(v);
-    self.sender.send(ctx).unwrap();
+    self.0.send(ctx).unwrap();
     return rx;
   }
 
   pub fn send(&self, v: T) {
-    self.sender.send(StoppableContext::new(v)).unwrap();
+    self.0.send(StoppableContext::new(v)).unwrap();
   }
 }
 impl<T, R> Clone for StoppableChannel<T, R> {
   fn clone(&self) -> Self {
-    Self {
-      sender: self.sender.clone(),
-    }
+    Self(self.0.clone())
   }
 }
 
 #[allow(unused)]
-pub struct ContextReceiver<T, R = ()> {
-  recv: Receiver<StoppableContext<T, R>>,
-}
+pub struct ContextReceiver<T, R = ()>(Receiver<StoppableContext<T, R>>);
 #[allow(unused)]
 impl<T, R> ContextReceiver<T, R> {
   fn new(recv: Receiver<StoppableContext<T, R>>) -> Self {
-    Self { recv }
+    Self(recv)
   }
 
   pub fn recv_new(&self) -> Result<T, RecvError> {
@@ -78,7 +72,7 @@ impl<T, R> ContextReceiver<T, R> {
     &self,
     timeout: Duration,
   ) -> Result<Option<T>, RecvError> {
-    match self.recv.recv_timeout(timeout) {
+    match self.0.recv_timeout(timeout) {
       Ok(c) => {
         if let StoppableContext::New(v) = c {
           return Ok(Some(v));
@@ -98,11 +92,11 @@ impl<T, R> ContextReceiver<T, R> {
   }
 
   pub fn recv(&self) -> Result<StoppableContext<T, R>, RecvError> {
-    self.recv.recv()
+    self.0.recv()
   }
 
   pub fn recv_all(&self) -> Result<(T, Option<Sender<R>>), RecvError> {
-    match self.recv.recv()? {
+    match self.0.recv()? {
       StoppableContext::Term => Err(RecvError),
       StoppableContext::WithDone((r, t)) => Ok((r, Some(t))),
       StoppableContext::New(r) => Ok((r, None)),
@@ -114,7 +108,7 @@ impl<T, R> ContextReceiver<T, R> {
     timeout: Option<Duration>,
   ) -> Result<StoppableContext<T, R>, RecvTimeoutError> {
     timeout
-      .map(|to| self.recv.recv_timeout(to))
-      .unwrap_or(self.recv.recv().map_err(|_| RecvTimeoutError::Disconnected))
+      .map(|to| self.0.recv_timeout(to))
+      .unwrap_or(self.0.recv().map_err(|_| RecvTimeoutError::Disconnected))
   }
 }

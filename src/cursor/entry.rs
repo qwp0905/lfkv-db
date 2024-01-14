@@ -47,9 +47,9 @@ pub struct InternalNode {
 impl InternalNode {
   pub fn split(&mut self) -> (CursorEntry, String) {
     let c = self.keys.len() / 2;
-    let mut keys = self.keys.split_off(c - 1);
+    let mut keys = self.keys.split_off(c);
     let m = keys.remove(0);
-    let children = self.children.split_off(c);
+    let children = self.children.split_off(c + 1);
     return (CursorEntry::Internal(InternalNode { keys, children }), m);
   }
 
@@ -58,7 +58,7 @@ impl InternalNode {
       let mut keys = self.keys.split_off(i);
       self.keys.push(key);
       self.keys.append(keys.as_mut());
-      let mut c = self.children.split_off(i);
+      let mut c = self.children.split_off(i + 1);
       self.children.push(index);
       self.children.append(c.as_mut());
     };
@@ -72,6 +72,7 @@ impl InternalNode {
     let i = self
       .keys
       .binary_search_by(|k| k.cmp(key))
+      .map(|i| i + 1)
       .unwrap_or_else(|i| i);
     self.children[i]
   }
@@ -96,7 +97,7 @@ impl Serializable for InternalNode {
   fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     sc.read()?;
-    let kl = sc.read().unwrap();
+    let kl = sc.read()?;
     let mut keys = vec![];
     let mut children = vec![];
     for _ in 0..kl {
@@ -132,7 +133,7 @@ impl LeafNode {
     added: usize,
   ) -> (CursorEntry, String) {
     let c = self.keys.len() / 2;
-    let keys = self.keys.split_off(c - 1);
+    let keys = self.keys.split_off(c);
     let m = keys[0].0.clone();
     let next = self.next.take();
     self.next = Some(added);
@@ -149,10 +150,11 @@ impl LeafNode {
   pub fn add(&mut self, key: String, index: usize) -> Option<String> {
     if let Err(i) = self.keys.binary_search_by(|(k, _)| k.cmp(&key)) {
       let mut keys = self.keys.split_off(i);
-      self.keys.push((key, index));
+      self.keys.push((key.to_owned(), index));
       self.keys.append(keys.as_mut());
+      return i.eq(&0).then(|| key);
     };
-    return self.keys.last().map(|(k, _)| k.to_owned());
+    return None;
   }
 
   pub fn len(&self) -> usize {

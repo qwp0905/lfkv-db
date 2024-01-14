@@ -126,15 +126,15 @@ impl Cursor {
               return Ok(Err(None));
             }
 
-            let (n, s) = node.split();
+            let (n, m) = node.split();
             let new_i = header.acquire_index();
             self.writer.insert(new_i, n.serialize()?)?;
             self.writer.insert(index, node.serialize()?)?;
-            return Ok(Ok((s, new_i)));
+            return Ok(Ok((m, new_i)));
           }
           Err(oi) => {
             if let Some(s) = oi {
-              node.keys.insert(i, s);
+              node.keys.insert(i - 1, s);
               self.writer.insert(index, node.serialize()?)?;
             };
             return Ok(Err(None));
@@ -142,21 +142,50 @@ impl Cursor {
         };
       }
       CursorEntry::Leaf(mut node) => {
-        let i = header.acquire_index();
-        self.writer.insert(i, page)?;
-        let lk = node.add(key, i);
+        let pi = header.acquire_index();
+        self.writer.insert(pi, page)?;
+        let lk = node.add(key, pi);
         if node.len() <= MAX_NODE_LEN {
-          let np = node.serialize()?;
-          self.writer.insert(index, np)?;
+          self.writer.insert(index, node.serialize()?)?;
           return Ok(Err(lk));
         }
 
-        let (n, s) = node.split(index, i);
         let ni = header.acquire_index();
+        let (n, s) = node.split(index, ni);
         self.writer.insert(ni, n.serialize()?)?;
         self.writer.insert(index, node.serialize()?)?;
         return Ok(Ok((s, ni)));
       }
     }
   }
+
+  // fn find_next(&mut self, key: &String) -> Result<Page> {
+  //   self.locks.fetch_read(HEADER_INDEX);
+  //   let header: TreeHeader = self.writer.get(HEADER_INDEX)?.deserialize()?;
+  //   let mut index = header.get_root();
+  //   loop {
+  //     self.locks.fetch_read(index);
+  //     let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
+  //     match entry {
+  //       CursorEntry::Internal(node) => {}
+  //       CursorEntry::Leaf(node) => {}
+  //     }
+  //   }
+  // }
 }
+
+// pub struct CursorIterator<'a> {
+//   inner: &'a mut Cursor,
+//   base: &'a String,
+//   next: Option<usize>,
+// }
+// impl<'a> Iterator for CursorIterator<'a> {
+//   type Item = Page;
+//   fn next(&mut self) -> Option<Self::Item> {
+//     None
+//     // match self.next {
+//     // None => {}
+//     // Some(i) => {}
+//     // }
+//   }
+// }

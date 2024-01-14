@@ -8,8 +8,8 @@ use crate::{
   buffer::BufferPool, error::Result, transaction::LockManager, wal::WAL, Cursor,
 };
 
-static WAL_FILE: &str = "wal";
-static DB_FILE: &str = "nodb";
+static WAL_FILE: &str = "wal.db";
+static DB_FILE: &str = "no.db";
 
 pub struct EngineConfig<T>
 where

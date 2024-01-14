@@ -147,9 +147,7 @@ impl WALCore {
 
     let current = header.last_index + 1;
     let entry = WALRecord::new(current, transaction_id, page_index, data);
-    {
-      self.buffer.wl().push(entry.clone())
-    };
+    self.buffer.wl().push(entry.clone());
     let (entry_header, entry_data) = entry.try_into()?;
 
     let wi = ((current * 2) % self.max_file_size) + 1;
@@ -159,11 +157,9 @@ impl WALCore {
     header.last_index = current;
     self.seeker.write(HEADER_INDEX, header.serialize()?)?;
     self.seeker.fsync()?;
-    {
-      if self.buffer.rl().len() >= self.max_buffer_size {
-        self.checkpoint_c.send(());
-      }
-    };
+    if self.buffer.rl().len() >= self.max_buffer_size {
+      self.checkpoint_c.send(());
+    }
     return Ok(());
   }
 
