@@ -95,12 +95,15 @@ impl Cursor {
     self.locks.fetch_read(HEADER_INDEX);
     let header: TreeHeader = self.writer.get(HEADER_INDEX)?.deserialize()?;
     let index = header.get_root();
-    let indexes = self.scan_at(index, &prefix)?;
+    let (node, i) = self.first_entry_at(index, &prefix)?;
+
     let iter = CursorIterator {
-      current: 0,
-      indexes,
       inner: self,
+      current_node: node,
+      current_index: i,
+      prefix,
     };
+
     return Ok(iter.map_while(|page| page.deserialize().ok()));
   }
 }
@@ -203,23 +206,81 @@ impl Cursor {
       }
     }
   }
+
+  fn first_entry_at(
+    &mut self,
+    index: usize,
+    last_key: &String,
+  ) -> Result<(LeafNode, usize)> {
+    self.locks.fetch_read(index);
+    let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
+    match entry {
+      CursorEntry::Internal(node) => {
+        return self.first_entry_at(node.next(last_key), last_key)
+      }
+      CursorEntry::Leaf(node) => {
+        match node.keys.binary_search_by(|(k, _)| k.cmp(last_key)) {
+          Ok(i) => return Ok((node, i)),
+          Err(i) => {
+            if i <= node.len() {
+              return Ok((node, i));
+            };
+            if let Some(next) = node.next {
+              self.locks.fetch_read(next);
+              let ne: CursorEntry = self.writer.get(next)?.deserialize()?;
+              if let CursorEntry::Leaf(ne) = ne {
+                return Ok((ne, 0));
+              }
+            };
+            return Err(Error::NotFound);
+          }
+        }
+      }
+    }
+  }
 }
 
 pub struct CursorIterator<'a> {
   inner: &'a mut Cursor,
-  indexes: Vec<usize>,
-  current: usize,
+  current_node: LeafNode,
+  current_index: usize,
+  prefix: String,
 }
 impl<'a> Iterator for CursorIterator<'a> {
   type Item = Page;
   fn next(&mut self) -> Option<Self::Item> {
-    self
-      .indexes
-      .get(self.current)
-      .and_then(|&i| self.inner.writer.get(i).ok())
-      .map(|page| {
-        self.current += 1;
-        return page;
-      })
+    if self.current_index >= self.current_node.len() {
+      let next = match self.current_node.next {
+        None => return None,
+        Some(next) => next,
+      };
+
+      self.inner.locks.fetch_read(next);
+      self.current_node = match self
+        .inner
+        .writer
+        .get(next)
+        .and_then(|page| page.deserialize())
+      {
+        Ok(e) => match e {
+          CursorEntry::Leaf(node) => node,
+          _ => return None,
+        },
+        _ => return None,
+      };
+
+      self.current_index = 0;
+    }
+
+    let (key, index) = &self.current_node.keys[self.current_index];
+    if !key.starts_with(&self.prefix) {
+      return None;
+    }
+    self.current_index += 1;
+    self.inner.locks.fetch_read(*index);
+    match self.inner.writer.get(*index) {
+      Ok(page) => return Some(page),
+      _ => return None,
+    };
   }
 }
