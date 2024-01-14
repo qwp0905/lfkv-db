@@ -155,6 +155,7 @@ impl Cursor {
             return Ok(Ok((m, new_i)));
           }
           Err(oi) => {
+            // 이부분 수정 필요할듯... 만약 이전엔 없었는데 새로 추가되었다면 업데이트하도록 수정 필요... 아니면 인서트와 업데이트를 명시적으로 분리 필요,,
             if let Some(s) = oi {
               node.keys.insert(i - 1, s);
               self.writer.insert(index, node.serialize()?)?;
@@ -177,32 +178,6 @@ impl Cursor {
         self.writer.insert(ni, n.serialize()?)?;
         self.writer.insert(index, node.serialize()?)?;
         return Ok(Ok((s, ni)));
-      }
-    }
-  }
-
-  fn scan_at(&mut self, index: usize, prefix: &String) -> Result<Vec<usize>> {
-    self.locks.fetch_read(index);
-    let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
-    match entry {
-      CursorEntry::Internal(node) => Ok(
-        node
-          .children
-          .iter()
-          .map(|&i| self.scan_at(i, prefix))
-          .map(|r| r.unwrap_or(vec![]))
-          .flatten()
-          .collect(),
-      ),
-      CursorEntry::Leaf(node) => {
-        return Ok(
-          node
-            .keys
-            .iter()
-            .filter(|(s, _)| s.starts_with(prefix))
-            .map(|&(_, i)| i)
-            .collect(),
-        )
       }
     }
   }
