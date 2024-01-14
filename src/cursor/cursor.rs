@@ -53,6 +53,7 @@ impl Cursor {
   where
     T: Serializable,
   {
+    logger::info(format!("start to insert {}", &key));
     let page = value.serialize()?;
     match self.get_index(&key) {
       Ok(index) => {
@@ -60,6 +61,7 @@ impl Cursor {
         return self.writer.insert(index, page);
       }
       Err(Error::NotFound) => {
+        logger::info(format!("trigger to append {}", &key));
         self.locks.release_all();
         self.locks.fetch_write(HEADER_INDEX);
         let mut header: TreeHeader =

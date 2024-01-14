@@ -1,23 +1,41 @@
+use std::sync::Arc;
+
+use crossbeam::channel::unbounded;
+
 fn main() -> no_db::Result<()> {
   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
     max_log_size: 2048,
     max_wal_buffer_size: 100,
     checkpoint_interval: 2000,
     max_cache_size: no_db::size::mb(512),
-    base_dir: "./",
+    base_dir: "./.local",
   })?;
-  let mut cursor = engine.new_transaction()?;
-  let tt = T { i: 1 };
-  cursor.insert(format!("sdfl"), tt)?;
-  drop(cursor);
 
-  let mut cursor = engine.new_transaction()?;
-  let t: T = cursor.get(format!("sdfl"))?;
+  let a = Arc::new(engine);
+  println!("engine created");
+
+  let mut done = vec![];
+
+  for i in 0..100 {
+    let engine = a.clone();
+    let (tx, rx) = unbounded();
+    done.push(rx);
+    std::thread::spawn(move || {
+      println!("{i} sldkfjlskdjflksjdlfkjsldkjflksjdflkjsldfkjlskjdfl");
+      let mut cursor = engine.new_transaction().unwrap();
+      let tt = T { i };
+      cursor.insert(format!("{i}"), tt).unwrap();
+      tx.send(()).unwrap();
+    });
+  }
+  for t in done.drain(..) {
+    t.recv().unwrap();
+  }
+
+  let mut cursor = a.new_transaction()?;
+  let t: T = cursor.get(format!("0"))?;
   println!("{:?}", t);
-  drop(cursor);
 
-  drop(engine);
-  println!("engine dropppedddddd");
   Ok(())
 }
 

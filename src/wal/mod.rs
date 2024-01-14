@@ -70,10 +70,6 @@ impl WAL {
   pub fn replay(&self) -> Result<()> {
     self.core.l().replay()
   }
-
-  // pub fn close(&self) {
-  //   self.core.l().last_checkpoint()
-  // }
 }
 
 pub struct WALCore {
@@ -113,12 +109,12 @@ impl WALCore {
     let buffer = self.buffer.clone();
     self.background.schedule(move || {
       while let Ok(_) = recv.recv_new_or_timeout(timeout) {
+        logger::info(format!("checkpoint triggered"));
         let entries: Vec<WALRecord> = { buffer.wl().drain(..).collect() };
         let to_be_applied = match entries.last() {
           Some(e) => e.get_index(),
           None => continue,
         };
-        logger::info(format!("checkpoint triggered"));
 
         let entries = entries
           .into_iter()
@@ -131,6 +127,7 @@ impl WALCore {
         header.applied = to_be_applied;
         seeker.write(HEADER_INDEX, header.serialize()?)?;
         seeker.fsync()?;
+        logger::info(format!("check point to {} done", header.applied));
       }
 
       logger::info(format!("wal background terminated"));

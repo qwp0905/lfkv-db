@@ -40,9 +40,11 @@ impl LockManager {
             for tx in blocked {
               tx.close();
             }
+            logger::info(format!("{} page lock released", index));
             continue;
           }
           locks.remove(&index);
+          logger::info(format!("{} page lock released", index));
         }
       }
       logger::info(format!("lock manager background terminated"));
