@@ -97,8 +97,3 @@ impl LockManager {
     self.release.terminate();
   }
 }
-// impl Drop for LockManager {
-//   fn drop(&mut self) {
-//     self.release.terminate();
-//   }
-// }
