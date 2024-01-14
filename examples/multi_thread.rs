@@ -12,28 +12,31 @@ fn main() -> no_db::Result<()> {
   let a = Arc::new(engine);
   println!("engine created");
 
-  let t = no_db::ThreadPool::<no_db::Result<()>>::new(
-    10,
-    1024 * 1024,
-    "sdfsdf",
-    None,
-  );
+  // let t = no_db::ThreadPool::<no_db::Result<()>>::new(
+  //   10,
+  //   1024 * 1024,
+  //   "sdfsdf",
+  //   None,
+  // );
 
-  for i in 0..100 {
-    let engine = a.clone();
-    t.schedule(move || {
-      // let mut cursor = engine.new_transaction()?;
-      // let tt = T { i };
-      // cursor.insert(format!("{i}"), tt)?;
-      // drop(cursor);
-      let mut cursor = engine.new_transaction()?;
-      let t: T = cursor.get(format!("{i}"))?;
-      println!("{i} {:?}", t);
-      Ok(())
-    });
+  // for i in 0..100 {
+  //   let engine = a.clone();
+  //   t.schedule(move || {
+  //     let mut cursor = engine.new_transaction()?;
+  //     let tt = T { i };
+  //     cursor.insert(format!("{i}"), tt)?;
+  //     // drop(cursor);
+  //     // let mut cursor = engine.new_transaction()?;
+  //     // let t: T = cursor.get(format!("{i}"))?;
+  //     // println!("{i} {:?}", t);
+  //     Ok(())
+  //   });
+  // }
+
+  let mut cursor = a.new_transaction()?;
+  for t in cursor.scan::<T>(format!("1"))? {
+    println!("{:?}", t);
   }
-
-  // let mut cursor = a.new_transaction()?;
   // let t: T = cursor.get(format!("2"))?;
   // println!("{:?}", t);
 

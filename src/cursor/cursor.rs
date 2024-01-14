@@ -67,7 +67,7 @@ impl Cursor {
         let root_index = header.get_root();
 
         if let Ok((s, i)) =
-          self.append_at(&mut header, root_index, key.to_owned(), page)?
+          self.append_at(&mut header, root_index, key, page)?
         {
           let nri = header.acquire_index();
           let new_root = CursorEntry::Internal(InternalNode {
@@ -79,11 +79,29 @@ impl Cursor {
         }
 
         self.writer.insert(HEADER_INDEX, header.serialize()?)?;
-        logger::info(format!("done to append {key}"));
         return Ok(());
       }
       Err(err) => return Err(err),
     }
+  }
+
+  pub fn scan<T>(
+    &mut self,
+    prefix: String,
+  ) -> Result<impl Iterator<Item = T> + '_>
+  where
+    T: Serializable,
+  {
+    self.locks.fetch_read(HEADER_INDEX);
+    let header: TreeHeader = self.writer.get(HEADER_INDEX)?.deserialize()?;
+    let index = header.get_root();
+    let indexes = self.scan_at(index, &prefix)?;
+    let iter = CursorIterator {
+      current: 0,
+      indexes,
+      inner: self,
+    };
+    return Ok(iter.map_while(|page| page.deserialize().ok()));
   }
 }
 
@@ -160,33 +178,48 @@ impl Cursor {
     }
   }
 
-  // fn find_next(&mut self, key: &String) -> Result<Page> {
-  //   self.locks.fetch_read(HEADER_INDEX);
-  //   let header: TreeHeader = self.writer.get(HEADER_INDEX)?.deserialize()?;
-  //   let mut index = header.get_root();
-  //   loop {
-  //     self.locks.fetch_read(index);
-  //     let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
-  //     match entry {
-  //       CursorEntry::Internal(node) => {}
-  //       CursorEntry::Leaf(node) => {}
-  //     }
-  //   }
-  // }
+  fn scan_at(&mut self, index: usize, prefix: &String) -> Result<Vec<usize>> {
+    self.locks.fetch_read(index);
+    let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
+    match entry {
+      CursorEntry::Internal(node) => Ok(
+        node
+          .children
+          .iter()
+          .map(|&i| self.scan_at(i, prefix))
+          .map(|r| r.unwrap_or(vec![]))
+          .flatten()
+          .collect(),
+      ),
+      CursorEntry::Leaf(node) => {
+        return Ok(
+          node
+            .keys
+            .iter()
+            .filter(|(s, _)| s.starts_with(prefix))
+            .map(|&(_, i)| i)
+            .collect(),
+        )
+      }
+    }
+  }
 }
 
-// pub struct CursorIterator<'a> {
-//   inner: &'a mut Cursor,
-//   base: &'a String,
-//   next: Option<usize>,
-// }
-// impl<'a> Iterator for CursorIterator<'a> {
-//   type Item = Page;
-//   fn next(&mut self) -> Option<Self::Item> {
-//     None
-//     // match self.next {
-//     // None => {}
-//     // Some(i) => {}
-//     // }
-//   }
-// }
+pub struct CursorIterator<'a> {
+  inner: &'a mut Cursor,
+  indexes: Vec<usize>,
+  current: usize,
+}
+impl<'a> Iterator for CursorIterator<'a> {
+  type Item = Page;
+  fn next(&mut self) -> Option<Self::Item> {
+    self
+      .indexes
+      .get(self.current)
+      .and_then(|&i| self.inner.writer.get(i).ok())
+      .map(|page| {
+        self.current += 1;
+        return page;
+      })
+  }
+}
