@@ -24,8 +24,7 @@ fn main() -> no_db::Result<()> {
     t.schedule(move || {
       let mut cursor = engine.new_transaction()?;
       let tt = T { i };
-      cursor.insert(format!("{i}"), tt)?;
-      Ok(())
+      cursor.insert(format!("{i}"), tt)
     });
   }
 
