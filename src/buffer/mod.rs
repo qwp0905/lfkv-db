@@ -115,10 +115,15 @@ impl BufferPool {
       return Err(Error::NotFound);
     }
 
-    self
+    if let Some((i, pb)) = self
       .cache
       .l()
-      .insert(index, PageBuffer::new(page.copy(), false));
+      .insert(index, PageBuffer::new(page.copy(), false))
+    {
+      if pb.dirty {
+        self.flush_c.send(BTreeMap::from_iter(vec![(i, pb.page)]));
+      }
+    };
     return Ok(page);
   }
 
