@@ -33,10 +33,8 @@ impl Cursor {
     let header = TreeHeader::initial_state();
     let root = CursorEntry::Leaf(LeafNode::empty());
 
-    let hp = header.serialize()?;
-    let rp = root.serialize()?;
-    self.writer.insert(HEADER_INDEX, hp)?;
-    self.writer.insert(header.get_root(), rp)?;
+    self.writer.insert(HEADER_INDEX, header.serialize()?)?;
+    self.writer.insert(header.get_root(), root.serialize()?)?;
     Ok(())
   }
 
@@ -68,20 +66,20 @@ impl Cursor {
           self.writer.get(HEADER_INDEX)?.deserialize()?;
         let root_index = header.get_root();
 
-        match self.append_at(&mut header, root_index, key, page)? {
-          Ok((s, i)) => {
-            let nri = header.acquire_index();
-            let new_root = CursorEntry::Internal(InternalNode {
-              keys: vec![s],
-              children: vec![root_index, i],
-            });
-            self.writer.insert(nri, new_root.serialize()?)?;
-            header.set_root(nri);
-            self.writer.insert(HEADER_INDEX, header.serialize()?)?;
-            return Ok(());
-          }
-          Err(_) => return Ok(()),
+        if let Ok((s, i)) =
+          self.append_at(&mut header, root_index, key, page)?
+        {
+          let nri = header.acquire_index();
+          let new_root = CursorEntry::Internal(InternalNode {
+            keys: vec![s],
+            children: vec![root_index, i],
+          });
+          self.writer.insert(nri, new_root.serialize()?)?;
+          header.set_root(nri);
         }
+
+        self.writer.insert(HEADER_INDEX, header.serialize()?)?;
+        return Ok(());
       }
       Err(err) => return Err(err),
     }
@@ -95,8 +93,7 @@ impl Cursor {
     let mut index = header.get_root();
     loop {
       self.locks.fetch_read(index);
-      let page = self.writer.get(index)?;
-      let entry: CursorEntry = page.deserialize()?;
+      let entry: CursorEntry = self.writer.get(index)?.deserialize()?;
       match entry.find_or_next(key) {
         Ok(i) => return Ok(i),
         Err(c) => match c {
