@@ -32,6 +32,10 @@ impl TreeHeader {
     return self.last_index;
   }
 
+  pub fn add_fragments(&mut self, index: usize) {
+    self.fragments.insert(index);
+  }
+
   pub fn get_root(&self) -> usize {
     self.root
   }

@@ -28,4 +28,10 @@ impl CursorWriter {
     self.wal.append(self.transaction_id, index, page.copy())?;
     self.buffer.insert(index, page)
   }
+
+  pub fn remove(&self, index: usize) -> Result<()> {
+    let page = Page::new_empty();
+    self.wal.append(self.transaction_id, index, page.copy())?;
+    self.buffer.insert(index, page)
+  }
 }

@@ -130,6 +130,7 @@ impl BufferPool {
   pub fn insert(&self, index: usize, page: Page) -> Result<()> {
     if let Some(pb) = { self.cache.l().get_mut(&index) } {
       pb.page = page;
+      pb.dirty = true;
       return Ok(());
     };
 
@@ -141,15 +142,5 @@ impl BufferPool {
       }
     };
     return Ok(());
-  }
-
-  pub fn remove(&self, index: usize) -> Result<()> {
-    self.cache.l().remove(&index).map(|pb| {
-      let mut page = pb.page;
-      page.set_empty();
-      self.flush_c.send(BTreeMap::from_iter(vec![(index, page)]))
-    });
-
-    Ok(())
   }
 }
