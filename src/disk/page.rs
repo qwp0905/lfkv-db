@@ -12,6 +12,11 @@ pub struct Page {
   bytes: [u8; PAGE_SIZE],
 }
 impl Page {
+  pub fn new_empty() -> Self {
+    let bytes = [0; PAGE_SIZE];
+    Self { bytes }
+  }
+
   pub fn new() -> Self {
     let mut bytes = [0; PAGE_SIZE];
     bytes[0] = 1;

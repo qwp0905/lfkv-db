@@ -3,7 +3,10 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use crate::utils::{size, DroppableReceiver, EmptySender, ShortenedMutex};
+use crate::{
+  logger,
+  utils::{size, DroppableReceiver, EmptySender, ShortenedMutex},
+};
 
 use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
 
@@ -19,7 +22,7 @@ impl LockManager {
     let (release, recv) = StoppableChannel::new();
     let tm = Self {
       tree_locks: Default::default(),
-      background: ThreadPool::new(1, size::kb(2), "transaction_manager", None),
+      background: ThreadPool::new(1, size::kb(2), "transaction manager", None),
       release,
     };
     tm.start_release(recv);
@@ -32,6 +35,7 @@ impl LockManager {
       while let Ok(index) = rx.recv_new() {
         let mut locks = cloned.l();
         if let Some(pl) = locks.get_mut(&index) {
+          logger::info(format!("{} page {} lock will be released", index, pl));
           if let Some(blocked) = pl.release() {
             for tx in blocked {
               tx.close();
@@ -41,7 +45,8 @@ impl LockManager {
           locks.remove(&index);
         }
       }
-    })
+      logger::info(format!("lock manager background terminated"));
+    });
   }
 
   pub fn fetch_read_lock(&self, index: usize) -> PageLock {
@@ -87,9 +92,13 @@ impl LockManager {
       rx.drop_one();
     }
   }
-}
-impl Drop for LockManager {
-  fn drop(&mut self) {
+
+  pub fn close_background(&self) {
     self.release.terminate();
   }
 }
+// impl Drop for LockManager {
+//   fn drop(&mut self) {
+//     self.release.terminate();
+//   }
+// }

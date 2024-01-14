@@ -19,6 +19,15 @@ impl Default for PageLocker {
     Self::new()
   }
 }
+impl std::fmt::Display for PageLocker {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self.status {
+      LockStatus::Read(_) => f.write_str("read"),
+      LockStatus::Write => f.write_str("write"),
+      LockStatus::Released => f.write_str("released"),
+    }
+  }
+}
 impl PageLocker {
   pub fn new() -> Self {
     Self {

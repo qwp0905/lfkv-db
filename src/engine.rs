@@ -8,7 +8,7 @@ use crate::{
   buffer::BufferPool, error::Result, transaction::LockManager, wal::WAL, Cursor,
 };
 
-static WAL_FILE: &str = "log.wal";
+static WAL_FILE: &str = "wal";
 static DB_FILE: &str = "nodb";
 
 pub struct EngineConfig<T>
@@ -99,3 +99,8 @@ impl Engine {
     Ok(Cursor::new(id, buffer, wal, locks))
   }
 }
+// impl Drop for Engine {
+//   fn drop(&mut self) {
+//     self.wal.close();
+//   }
+// }

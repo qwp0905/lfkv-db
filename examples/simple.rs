@@ -16,6 +16,8 @@ fn main() -> no_db::Result<()> {
   println!("{:?}", t);
   drop(cursor);
 
+  drop(engine);
+  println!("engine dropppedddddd");
   Ok(())
 }
 

@@ -130,7 +130,7 @@ fn handle_thread<T: 'static>(
   rx: ContextReceiver<Box<Work<T>>>,
   timeout: Option<Duration>,
 ) -> impl FnOnce() + Send + 'static {
-  move || loop {
+  move || {
     while let Ok(StoppableContext::WithDone((job, done))) =
       rx.maybe_timeout(timeout)
     {

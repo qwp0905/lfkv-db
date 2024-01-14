@@ -7,6 +7,7 @@ use std::{
 use crate::{
   disk::{Page, PageSeeker},
   error::{Error, Result},
+  logger,
   thread::{ContextReceiver, StoppableChannel, ThreadPool},
   transaction::LockManager,
   utils::{size, EmptySender, ShortenedMutex},
@@ -90,11 +91,14 @@ impl BufferPool {
           disk.write(index, page)?;
           cache.l().get_mut(&index).map(|pb| pb.remove_dirty());
           drop(lock);
+          logger::info(format!("{} page flushed to disk", index));
         }
         disk.fsync()?;
         done_c.map(|d| d.close());
       }
 
+      logger::info(format!("buffer pool background terminated"));
+      locks.close_background();
       return Ok(());
     })
   }
@@ -142,18 +146,5 @@ impl BufferPool {
     });
 
     Ok(())
-  }
-}
-
-impl Drop for BufferPool {
-  fn drop(&mut self) {
-    while let Some((i, pb)) = { self.cache.l().pop_old() } {
-      if !pb.dirty {
-        continue;
-      }
-      self.disk.write(i, pb.page).ok();
-    }
-    self.disk.fsync().ok();
-    self.flush_c.terminate()
   }
 }

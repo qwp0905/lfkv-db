@@ -70,6 +70,10 @@ impl WAL {
   pub fn replay(&self) -> Result<()> {
     self.core.l().replay()
   }
+
+  // pub fn close(&self) {
+  //   self.core.l().last_checkpoint()
+  // }
 }
 
 pub struct WALCore {
@@ -114,6 +118,8 @@ impl WALCore {
           Some(e) => e.get_index(),
           None => continue,
         };
+        logger::info(format!("checkpoint triggered"));
+
         let entries = entries
           .into_iter()
           .map(|entry| (entry.get_page_index(), entry.into()))
@@ -127,6 +133,8 @@ impl WALCore {
         seeker.fsync()?;
       }
 
+      logger::info(format!("wal background terminated"));
+      flush_c.terminate();
       return Ok(());
     })
   }
@@ -209,6 +217,7 @@ impl WALCore {
 }
 impl Drop for WALCore {
   fn drop(&mut self) {
+    self.checkpoint_c.send(());
     self.checkpoint_c.terminate()
   }
 }

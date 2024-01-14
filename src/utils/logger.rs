@@ -6,6 +6,7 @@ enum Level {
   Info,
   Error,
   Warn,
+  Debug,
 }
 
 #[allow(unused)]
@@ -23,12 +24,18 @@ pub fn error(message: String) {
   eprintln!("{}", fmt(Level::Error, message));
 }
 
+#[allow(unused)]
+pub fn debug(message: String) {
+  println!("{}", fmt(Level::Debug, message))
+}
+
 fn fmt(level: Level, message: String) -> String {
   json!({
     "level": match level {
       Level::Info => "info",
       Level::Error => "error",
       Level::Warn => "warn",
+      Level::Debug => "debug",
     },
     "message":message,
     "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()

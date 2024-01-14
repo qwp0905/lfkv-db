@@ -18,7 +18,8 @@ impl Serializable for CursorEntry {
     }
   }
   fn deserialize(value: &Page) -> Result<Self, Error> {
-    match value.as_ref()[0] {
+    let mut sc = value.scanner();
+    match sc.read()? {
       0 => Ok(Self::Leaf(value.deserialize()?)),
       1 => Ok(Self::Internal(value.deserialize()?)),
       _ => Err(Error::Invalid),
@@ -91,6 +92,7 @@ impl Serializable for InternalNode {
     }
     return Ok(p);
   }
+
   fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     sc.read()?;
@@ -98,7 +100,7 @@ impl Serializable for InternalNode {
     let mut keys = vec![];
     let mut children = vec![];
     for _ in 0..kl {
-      let n = sc.read().unwrap();
+      let n = sc.read()?;
       keys.push(String::from_utf8_lossy(sc.read_n(n as usize)?).to_string());
     }
     for _ in 0..(kl + 1) {

@@ -38,7 +38,7 @@ impl PageSeeker {
     inner
       .seek(SeekFrom::Start(get_offset(index)))
       .map_err(Error::IO)?;
-    let mut page = Page::new();
+    let mut page = Page::new_empty();
     inner
       .read_exact(page.as_mut())
       .map_err(|_| Error::NotFound)?;
