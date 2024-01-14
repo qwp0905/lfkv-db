@@ -1,6 +1,8 @@
 mod buffer;
-mod transaction;
 mod wal;
+
+mod transaction;
+pub use transaction::*;
 
 mod thread;
 pub use thread::*;

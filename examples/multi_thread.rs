@@ -19,16 +19,16 @@ fn main() -> no_db::Result<()> {
     None,
   );
 
-  for i in 0..10 {
+  for i in 0..100 {
     let engine = a.clone();
     t.schedule(move || {
-      let mut cursor = engine.new_transaction()?;
-      let tt = T { i };
-      cursor.insert(format!("{i}"), tt)?;
-      // drop(cursor);
       // let mut cursor = engine.new_transaction()?;
-      // let t: T = cursor.get(format!("{i}"))?;
-      // println!("{i} {:?}", t);
+      // let tt = T { i };
+      // cursor.insert(format!("{i}"), tt)?;
+      // drop(cursor);
+      let mut cursor = engine.new_transaction()?;
+      let t: T = cursor.get(format!("{i}"))?;
+      println!("{i} {:?}", t);
       Ok(())
     });
   }

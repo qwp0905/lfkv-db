@@ -59,15 +59,15 @@ impl Cursor {
         return self.writer.insert(index, page);
       }
       Err(Error::NotFound) => {
-        logger::info(format!("trigger to append {}", &key));
         self.locks.release_all();
         self.locks.fetch_write(HEADER_INDEX);
+        logger::info(format!("start to append {key}"));
         let mut header: TreeHeader =
           self.writer.get(HEADER_INDEX)?.deserialize()?;
         let root_index = header.get_root();
 
         if let Ok((s, i)) =
-          self.append_at(&mut header, root_index, key, page)?
+          self.append_at(&mut header, root_index, key.to_owned(), page)?
         {
           let nri = header.acquire_index();
           let new_root = CursorEntry::Internal(InternalNode {
@@ -79,6 +79,7 @@ impl Cursor {
         }
 
         self.writer.insert(HEADER_INDEX, header.serialize()?)?;
+        logger::info(format!("done to append {key}"));
         return Ok(());
       }
       Err(err) => return Err(err),

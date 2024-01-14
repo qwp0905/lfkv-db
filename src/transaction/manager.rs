@@ -5,7 +5,8 @@ use std::{
 
 use crate::{
   logger,
-  utils::{size, DroppableReceiver, EmptySender, ShortenedMutex},
+  utils::{size, EmptySender, ShortenedMutex},
+  DroppableReceiver,
 };
 
 use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
@@ -35,16 +36,13 @@ impl LockManager {
       while let Ok(index) = rx.recv_new() {
         let mut locks = cloned.l();
         if let Some(pl) = locks.get_mut(&index) {
-          logger::info(format!("{} page {} lock will be released", index, pl));
           if let Some(blocked) = pl.release() {
             for tx in blocked {
               tx.close();
             }
-            logger::info(format!("{} page lock released", index));
             continue;
           }
           locks.remove(&index);
-          logger::info(format!("{} page lock released", index));
         }
       }
       logger::info(format!("lock manager background terminated"));
