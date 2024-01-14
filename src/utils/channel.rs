@@ -19,6 +19,6 @@ impl<T> DroppableReceiver for Receiver<T> {
   }
 
   fn drop_one(&self) {
-    self.recv().unwrap();
+    self.recv().ok();
   }
 }

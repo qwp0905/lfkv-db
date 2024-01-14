@@ -158,6 +158,7 @@ impl<'a> PageWriter<'a> {
       return Err(Error::EOF);
     };
     self.inner[self.offset..end].copy_from_slice(&bytes);
+    self.offset = end;
     return Ok(());
   }
 }

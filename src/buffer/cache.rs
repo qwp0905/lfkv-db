@@ -123,18 +123,7 @@ where
           if self.raw.len() <= self.capacity {
             return None;
           };
-
-          if let Some(b) = self.entries.oldest() {
-            let dh = hash(&b.key, &self.hasher);
-            let deq = equivalent(&b.key);
-            return self.raw.remove_entry(dh, deq).map(|ptr| {
-              self.entries.remove(ptr);
-              let bucket = Box::from_raw(ptr.as_ptr()).element;
-              return (bucket.key, bucket.value);
-            });
-          };
-
-          return None;
+          return self.pop_old();
         }
       }
     }
@@ -156,6 +145,20 @@ where
 
   pub fn len(&self) -> usize {
     self.raw.len()
+  }
+
+  pub fn pop_old(&mut self) -> Option<(K, V)> {
+    if let Some(b) = self.entries.oldest() {
+      let dh = hash(&b.key, &self.hasher);
+      let deq = equivalent(&b.key);
+      return self.raw.remove_entry(dh, deq).map(|ptr| {
+        self.entries.remove(ptr);
+        let bucket = unsafe { Box::from_raw(ptr.as_ptr()) }.element;
+        return (bucket.key, bucket.value);
+      });
+    };
+
+    return None;
   }
 }
 unsafe impl<K, V> Send for Cache<K, V>

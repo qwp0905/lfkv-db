@@ -139,3 +139,25 @@ impl Clone for WALRecord {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use crate::{Page, Serializable};
+
+  use super::WALFileHeader;
+
+  #[test]
+  fn _1() {
+    let mut b = [0; 4096];
+    b[0] = 1;
+    b[1..9].copy_from_slice(&(1 as usize).to_be_bytes());
+    b[9..17].copy_from_slice(&(0 as usize).to_be_bytes());
+    b[17..25].copy_from_slice(&(100 as usize).to_be_bytes());
+    let r = WALFileHeader {
+      last_index: 1,
+      last_transaction: 100,
+      applied: 0,
+    };
+    assert_eq!(r.serialize().ok(), Some(Page::from(b)))
+  }
+}

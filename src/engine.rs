@@ -76,19 +76,16 @@ impl Engine {
       config.max_wal_buffer_size,
     )?);
 
-    match buffer_pool.get(0) {
-      Ok(_) => wal.replay()?,
-      Err(Error::NotFound) => {
-        Cursor::new(
-          wal.next_transaction()?,
-          buffer_pool.clone(),
-          wal.clone(),
-          lock_manager.clone(),
-        )
-        .initialize()?;
-      }
-      Err(err) => return Err(err),
-    };
+    wal.replay()?;
+    if let Err(Error::NotFound) = buffer_pool.get(0) {
+      Cursor::new(
+        wal.next_transaction()?,
+        buffer_pool.clone(),
+        wal.clone(),
+        lock_manager.clone(),
+      )
+      .initialize()?;
+    }
     Ok(Self::from_components(buffer_pool, wal, lock_manager))
   }
 }

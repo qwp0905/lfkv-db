@@ -5,6 +5,7 @@ use crate::{
 
 pub static MAX_NODE_LEN: usize = 12;
 
+#[derive(Debug)]
 pub enum CursorEntry {
   Internal(InternalNode),
   Leaf(LeafNode),
@@ -37,6 +38,7 @@ impl CursorEntry {
   }
 }
 
+#[derive(Debug)]
 pub struct InternalNode {
   pub keys: Vec<String>,
   pub children: Vec<usize>,
@@ -107,6 +109,7 @@ impl Serializable for InternalNode {
   }
 }
 
+#[derive(Debug)]
 pub struct LeafNode {
   pub keys: Vec<(String, usize)>,
   pub next: Option<usize>,
@@ -176,9 +179,9 @@ impl Serializable for LeafNode {
     let mut sc = value.scanner();
     sc.read()?;
     let mut keys = vec![];
-    let kl = sc.read().unwrap();
+    let kl = sc.read()?;
     for _ in 0..kl {
-      let n = sc.read().unwrap();
+      let n = sc.read()?;
       let k = String::from_utf8_lossy(sc.read_n(n as usize)?).to_string();
       let i = sc.read_usize()?;
       keys.push((k, i));

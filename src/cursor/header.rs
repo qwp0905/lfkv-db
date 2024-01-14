@@ -17,8 +17,8 @@ pub struct TreeHeader {
 impl TreeHeader {
   pub fn initial_state() -> Self {
     Self {
-      root: 1,
-      last_index: 1,
+      root: HEADER_INDEX + 1,
+      last_index: HEADER_INDEX + 1,
       fragments: Default::default(),
     }
   }

@@ -99,8 +99,8 @@ impl Cursor {
         Ok(i) => return Ok(i),
         Err(c) => match c {
           None => return Err(Error::NotFound),
-          Some(i) => {
-            index = i;
+          Some(ci) => {
+            index = ci;
           }
         },
       }

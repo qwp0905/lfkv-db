@@ -147,6 +147,13 @@ impl BufferPool {
 
 impl Drop for BufferPool {
   fn drop(&mut self) {
+    while let Some((i, pb)) = { self.cache.l().pop_old() } {
+      if !pb.dirty {
+        continue;
+      }
+      self.disk.write(i, pb.page).ok();
+    }
+    self.disk.fsync().ok();
     self.flush_c.terminate()
   }
 }

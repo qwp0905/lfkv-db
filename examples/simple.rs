@@ -14,6 +14,7 @@ fn main() -> no_db::Result<()> {
   let mut cursor = engine.new_transaction()?;
   let t: T = cursor.get(format!("sdfl"))?;
   println!("{:?}", t);
+  drop(cursor);
 
   Ok(())
 }
