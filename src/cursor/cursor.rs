@@ -165,6 +165,11 @@ impl Cursor {
         };
       }
       CursorEntry::Leaf(mut node) => {
+        if let Some(i) = node.find(&key) {
+          self.writer.insert(node.keys[i].1, page)?;
+          return Ok(Err(None));
+        };
+
         let pi = header.acquire_index();
         self.writer.insert(pi, page)?;
         let lk = node.add(key, pi);

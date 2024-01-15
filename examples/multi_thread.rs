@@ -10,15 +10,16 @@ fn main() -> no_db::Result<()> {
   })?;
 
   let a = Arc::new(engine);
-  println!("engine created");
+  // println!("engine created");
 
   // let t = no_db::ThreadPool::<no_db::Result<()>>::new(
-  //   10,
+  //   1000,
   //   1024 * 1024,
   //   "sdfsdf",
   //   None,
   // );
 
+  // let start = std::time::SystemTime::now();
   // for i in 0..100 {
   //   let engine = a.clone();
   //   t.schedule(move || {
@@ -32,9 +33,15 @@ fn main() -> no_db::Result<()> {
   //     Ok(())
   //   });
   // }
+  // drop(t);
+  // let end = std::time::SystemTime::now()
+  //   .duration_since(start)
+  //   .unwrap()
+  //   .as_millis();
+  // println!("{}", end);
 
   let mut cursor = a.new_transaction()?;
-  for t in cursor.scan::<T>(format!("1"))? {
+  for t in cursor.scan::<T>(format!(""))? {
     println!("{:?}", t);
   }
   // let t: T = cursor.get(format!("2"))?;

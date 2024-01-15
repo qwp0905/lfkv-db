@@ -30,11 +30,10 @@ impl CursorEntry {
   pub fn find_or_next(&self, key: &String) -> Result<usize, Option<usize>> {
     match self {
       Self::Internal(node) => Err(Some(node.next(key))),
-      Self::Leaf(node) => node
-        .keys
-        .binary_search_by(|(k, _)| k.cmp(key))
-        .map(|i| node.keys[i].1)
-        .map_err(|_| None),
+      Self::Leaf(node) => match node.find(key) {
+        Some(i) => Ok(i),
+        None => Err(None),
+      },
     }
   }
 }
@@ -159,6 +158,14 @@ impl LeafNode {
 
   pub fn len(&self) -> usize {
     self.keys.len()
+  }
+
+  pub fn find(&self, key: &String) -> Option<usize> {
+    self
+      .keys
+      .binary_search_by(|(k, _)| k.cmp(key))
+      .ok()
+      .map(|i| self.keys[i].1)
   }
 }
 impl Serializable for LeafNode {
