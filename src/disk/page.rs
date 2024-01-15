@@ -8,17 +8,18 @@ use super::Serializable;
 pub const PAGE_SIZE: usize = size::kb(4);
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Page {
-  bytes: [u8; PAGE_SIZE],
+pub struct Page<const T: usize = PAGE_SIZE> {
+  bytes: [u8; T],
 }
-impl Page {
+
+impl<const T: usize> Page<T> {
   pub fn new_empty() -> Self {
-    let bytes = [0; PAGE_SIZE];
+    let bytes = [0; T];
     Self { bytes }
   }
 
   pub fn new() -> Self {
-    let mut bytes = [0; PAGE_SIZE];
+    let mut bytes = [0; T];
     bytes[0] = 1;
     Self { bytes }
   }
@@ -39,11 +40,11 @@ impl Page {
     return p;
   }
 
-  pub fn scanner(&self) -> PageScanner<'_> {
+  pub fn scanner(&self) -> PageScanner<'_, T> {
     PageScanner::new(&self.bytes)
   }
 
-  pub fn writer(&mut self) -> PageWriter<'_> {
+  pub fn writer(&mut self) -> PageWriter<'_, T> {
     PageWriter::new(&mut self.bytes)
   }
 
@@ -66,56 +67,56 @@ impl Serializable for Page {
   }
 }
 
-impl AsRef<[u8]> for Page {
+impl<const T: usize> AsRef<[u8]> for Page<T> {
   fn as_ref(&self) -> &[u8] {
     &self.bytes
   }
 }
-impl AsMut<[u8]> for Page {
+impl<const T: usize> AsMut<[u8]> for Page<T> {
   fn as_mut(&mut self) -> &mut [u8] {
     &mut self.bytes
   }
 }
-impl From<[u8; PAGE_SIZE]> for Page {
-  fn from(bytes: [u8; PAGE_SIZE]) -> Self {
+impl<const T: usize> From<[u8; T]> for Page<T> {
+  fn from(bytes: [u8; T]) -> Self {
     Self { bytes }
   }
 }
 
-impl From<Vec<u8>> for Page {
+impl<const T: usize> From<Vec<u8>> for Page<T> {
   fn from(value: Vec<u8>) -> Self {
     let mut page = Self::new();
-    let len = value.len().min(PAGE_SIZE);
+    let len = value.len().min(T);
     page.range_mut(0, len).copy_from_slice(&value[0..len]);
     return page;
   }
 }
-impl From<Page> for Vec<u8> {
-  fn from(value: Page) -> Self {
+impl<const T: usize> From<Page<T>> for Vec<u8> {
+  fn from(value: Page<T>) -> Self {
     value.bytes.into()
   }
 }
-impl From<Page> for Bytes {
-  fn from(value: Page) -> Self {
+impl<const T: usize> From<Page<T>> for Bytes {
+  fn from(value: Page<T>) -> Self {
     let v: Vec<u8> = value.bytes.into();
     Bytes::from(v)
   }
 }
-impl From<Bytes> for Page {
+impl<const T: usize> From<Bytes> for Page<T> {
   fn from(value: Bytes) -> Self {
     let mut page = Self::new();
-    let end = value.len().min(PAGE_SIZE);
+    let end = value.len().min(T);
     page.range_mut(0, end).copy_from_slice(&value[..end]);
     return page;
   }
 }
 
-pub struct PageScanner<'a> {
-  inner: &'a [u8; PAGE_SIZE],
+pub struct PageScanner<'a, const T: usize> {
+  inner: &'a [u8; T],
   offset: usize,
 }
-impl<'a> PageScanner<'a> {
-  fn new(inner: &'a [u8; PAGE_SIZE]) -> Self {
+impl<'a, const T: usize> PageScanner<'a, T> {
+  fn new(inner: &'a [u8; T]) -> Self {
     Self { inner, offset: 1 }
   }
 
@@ -148,12 +149,12 @@ impl<'a> PageScanner<'a> {
   }
 }
 
-pub struct PageWriter<'a> {
-  inner: &'a mut [u8; PAGE_SIZE],
+pub struct PageWriter<'a, const T: usize> {
+  inner: &'a mut [u8; T],
   offset: usize,
 }
-impl<'a> PageWriter<'a> {
-  fn new(inner: &'a mut [u8; PAGE_SIZE]) -> Self {
+impl<'a, const T: usize> PageWriter<'a, T> {
+  fn new(inner: &'a mut [u8; T]) -> Self {
     Self { inner, offset: 1 }
   }
 
@@ -170,11 +171,11 @@ impl<'a> PageWriter<'a> {
 
 #[cfg(test)]
 mod tests {
-  use crate::Page;
+  use crate::{Page, PAGE_SIZE};
 
   #[test]
   fn _1() {
-    let mut page = Page::new();
+    let mut page = Page::<PAGE_SIZE>::new();
     let mut wt = page.writer();
     wt.write(&[1, 2, 3, 5, 6]).unwrap();
 

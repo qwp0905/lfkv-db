@@ -1,6 +1,8 @@
 mod record;
 pub use record::*;
 
+mod wal;
+mod writer;
 use crate::{
   logger,
   utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock},
@@ -111,13 +113,13 @@ impl WALCore {
     self.background.schedule(move || {
       while let Ok(_) = recv.recv_new_or_timeout(timeout) {
         logger::info(format!("checkpoint triggered"));
-        let entries: Vec<WALRecord> = { buffer.wl().drain(..).collect() };
-        let to_be_applied = match entries.last() {
+        let records: Vec<WALRecord> = { buffer.wl().drain(..).collect() };
+        let to_be_applied = match records.last() {
           Some(e) => e.get_index(),
           None => continue,
         };
 
-        let entries = entries
+        let entries = records
           .into_iter()
           .map(|entry| (entry.get_page_index(), entry.into()))
           .collect();
@@ -147,13 +149,13 @@ impl WALCore {
       self.seeker.read(HEADER_INDEX)?.deserialize()?;
 
     let current = header.last_index + 1;
-    let entry = WALRecord::new(current, transaction_id, page_index, data);
-    self.buffer.wl().push(entry.clone());
-    let (entry_header, entry_data) = entry.try_into()?;
+    let record = WALRecord::new(current, transaction_id, page_index, data);
+    self.buffer.wl().push(record.clone());
+    let (record_header, record_data) = record.try_into()?;
 
     let wi = ((current * 2) % self.max_file_size) + 1;
-    self.seeker.write(wi, entry_header)?;
-    self.seeker.write(wi + 1, entry_data)?;
+    self.seeker.write(wi, record_header)?;
+    self.seeker.write(wi + 1, record_data)?;
 
     header.last_index = current;
     self.seeker.write(HEADER_INDEX, header.serialize()?)?;
@@ -193,11 +195,11 @@ impl WALCore {
         let i = ((index * 2) % self.max_file_size) + 1;
         let h = self.seeker.read(i)?.deserialize()?;
         let p = self.seeker.read(i + 1)?;
-        let entry = WALRecord::try_from((h, p))?;
-        if entry.get_index() != index {
+        let record = WALRecord::try_from((h, p))?;
+        if record.get_index() != index {
           continue;
         }
-        entries.insert(entry.get_page_index(), entry.into());
+        entries.insert(record.get_page_index(), record.into());
       }
 
       let rx = self.flush_c.send_with_done(entries);

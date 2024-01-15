@@ -4,7 +4,7 @@ fn main() -> no_db::Result<()> {
   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
     max_log_size: no_db::size::mb(16),
     max_wal_buffer_size: no_db::size::mb(2),
-    checkpoint_interval: Duration::from_millis(2000),
+    checkpoint_interval: Duration::from_secs(10),
     max_cache_size: no_db::size::mb(512),
     base_dir: "./.local",
   })?;
@@ -29,7 +29,7 @@ fn main() -> no_db::Result<()> {
 
       let mut cursor = engine.new_transaction()?;
       let tt = T { i };
-      cursor.insert(format!("{i}"), tt)?;
+      cursor.insert(format!("{:0>8}", i), tt)?;
       *ttt.lock().unwrap() += std::time::SystemTime::now()
         .duration_since(start)
         .unwrap()
@@ -50,12 +50,6 @@ fn main() -> no_db::Result<()> {
   // for (i, t) in cursor.scan::<T>(format!(""))?.enumerate() {
   //   println!("{:?} {}", t, i);
   // }
-
-  // let end = std::time::SystemTime::now()
-  //   .duration_since(start)
-  //   .unwrap()
-  //   .as_millis();
-  // println!("{}", end);
 
   Ok(())
 }

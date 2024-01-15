@@ -140,6 +140,11 @@ impl Clone for WALRecord {
   }
 }
 
+pub struct RecordEntry {
+  records: Vec<WALRecord>,
+  written: usize,
+}
+
 #[cfg(test)]
 mod tests {
   use crate::{Page, Serializable};
