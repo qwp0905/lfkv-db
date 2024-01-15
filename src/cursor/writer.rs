@@ -35,3 +35,9 @@ impl CursorWriter {
     self.buffer.insert(index, page)
   }
 }
+
+impl Drop for CursorWriter {
+  fn drop(&mut self) {
+    // self.wal.commit();
+  }
+}

@@ -17,7 +17,7 @@ where
 {
   pub max_log_size: usize,
   pub max_wal_buffer_size: usize,
-  pub checkpoint_interval: usize,
+  pub checkpoint_interval: Duration,
   pub max_cache_size: usize,
   pub base_dir: T,
 }
@@ -25,9 +25,9 @@ where
 impl Default for EngineConfig<&str> {
   fn default() -> Self {
     Self {
-      max_log_size: 2048,
-      max_wal_buffer_size: 100,
-      checkpoint_interval: 2000,
+      max_log_size: size::mb(16),
+      max_wal_buffer_size: size::mb(2),
+      checkpoint_interval: Duration::from_millis(2000),
       max_cache_size: size::mb(512),
       base_dir: "/var/lib/nodb",
     }
@@ -71,7 +71,7 @@ impl Engine {
     let wal = Arc::new(WAL::new(
       wal_path,
       flush_c,
-      Duration::from_millis(config.checkpoint_interval as u64),
+      config.checkpoint_interval,
       config.max_log_size,
       config.max_wal_buffer_size,
     )?);

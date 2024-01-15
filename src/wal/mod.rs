@@ -4,6 +4,7 @@ pub use record::*;
 use crate::{
   logger,
   utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock},
+  PAGE_SIZE,
 };
 
 use std::{
@@ -36,7 +37,7 @@ impl WAL {
     let seeker = PageSeeker::open(path)?;
     if seeker.len()? == 0 {
       let header = WALFileHeader::new(0, 0, 0);
-      seeker.write(0, header.serialize()?)?;
+      seeker.write(HEADER_INDEX, header.serialize()?)?;
       logger::info(format!("wal initialized"));
     }
 
@@ -92,10 +93,10 @@ impl WALCore {
     let (checkpoint_c, recv) = StoppableChannel::new();
     let core = Self {
       seeker,
-      max_file_size,
+      max_file_size: max_file_size / (PAGE_SIZE * 2),
       buffer: Default::default(),
-      background: ThreadPool::new(1, size::mb(2), "wal", None),
-      max_buffer_size,
+      background: ThreadPool::new(2, size::mb(2), "wal", None),
+      max_buffer_size: max_buffer_size / (PAGE_SIZE * 2),
       checkpoint_c,
       flush_c,
     };
