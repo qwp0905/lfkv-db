@@ -35,6 +35,7 @@ impl PageBuffer {
   }
 }
 
+// eviction 발생하는 순간의 처리 필요...
 pub struct BufferPool {
   cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
   disk: Arc<PageSeeker>,
