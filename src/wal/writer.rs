@@ -14,7 +14,7 @@ pub struct RotateWriter {
 impl RotateWriter {
   pub fn open() {}
 
-  pub fn append(&mut self, record: Record) -> Result<()> {
+  pub fn append(&mut self, record: Record) -> Result<Option<Vec<RecordEntry>>> {
     let current = match self.entries.last_mut() {
       Some(entry) if entry.is_available(&record) => entry,
       _ => {
@@ -26,10 +26,14 @@ impl RotateWriter {
 
     current.append(record);
     self.disk.write(self.cursor, current.serialize()?)?;
-    self.disk.fsync()
+    self.disk.fsync()?;
+    if self.max_buffer_size > self.entries.len() {
+      return Ok(None);
+    }
+    return Ok(Some(std::mem::replace(&mut self.entries, vec![])));
   }
 
-  pub fn is_full(&self) -> bool {
-    self.max_buffer_size <= self.entries.len()
+  pub fn drain_buffer(&mut self) -> Vec<RecordEntry> {
+    std::mem::replace(&mut self.entries, vec![])
   }
 }
