@@ -1,7 +1,10 @@
 use crate::{
-  disk::{Page, Serializable},
+  disk::{Page, PageScanner, PageWriter, Serializable},
   error::Error,
+  PAGE_SIZE,
 };
+
+use super::WAL_PAGE_SIZE;
 
 pub static HEADER_INDEX: usize = 0;
 
@@ -140,9 +143,134 @@ impl Clone for WALRecord {
   }
 }
 
+pub struct InsertRecord {
+  index: usize,
+  before: Page,
+  after: Page,
+}
+impl InsertRecord {
+  pub fn new(index: usize, before: Page, after: Page) -> Self {
+    Self {
+      index,
+      before,
+      after,
+    }
+  }
+}
+
+pub enum Op {
+  Start,
+  Insert(InsertRecord),
+  Commit,
+  Checkpoint(usize),
+}
+impl Op {
+  fn read_from(sc: &mut PageScanner<WAL_PAGE_SIZE>) -> crate::Result<Self> {
+    let i = sc.read()?;
+    match i {
+      0 => Ok(Self::Start),
+      1 => {
+        let index = sc.read_usize()?;
+        let before = sc.read_n(PAGE_SIZE)?.into();
+        let after = sc.read_n(PAGE_SIZE)?.into();
+        Ok(Self::Insert(InsertRecord {
+          index,
+          before,
+          after,
+        }))
+      }
+      2 => Ok(Self::Commit),
+      3 => {
+        let index = sc.read_usize()?;
+        Ok(Self::Checkpoint(index))
+      }
+      _ => Err(Error::Invalid),
+    }
+  }
+
+  fn write_to(&self, wt: &mut PageWriter<WAL_PAGE_SIZE>) -> crate::Result<()> {
+    match self {
+      Self::Start => wt.write(&0usize.to_be_bytes())?,
+      Self::Insert(record) => {
+        wt.write(&1usize.to_be_bytes())?;
+        wt.write(&record.index.to_be_bytes())?;
+        wt.write(record.before.as_ref())?;
+        wt.write(record.after.as_ref())?;
+      }
+      Self::Commit => wt.write(&2usize.to_be_bytes())?,
+      Self::Checkpoint(i) => {
+        wt.write(&3usize.to_be_bytes())?;
+        wt.write(&i.to_be_bytes())?;
+      }
+    }
+    Ok(())
+  }
+}
+
+pub struct Record {
+  transaction_id: usize,
+  index: usize,
+  operation: Op,
+}
+impl Record {
+  pub fn new(transaction_id: usize, index: usize, operation: Op) -> Self {
+    Self {
+      transaction_id,
+      index,
+      operation,
+    }
+  }
+
+  fn size(&self) -> usize {
+    17 + match self.operation {
+      Op::Insert(_) => PAGE_SIZE * 2 + 8,
+      Op::Checkpoint(_) => 8,
+      _ => 0,
+    }
+  }
+}
+
 pub struct RecordEntry {
-  records: Vec<WALRecord>,
-  written: usize,
+  records: Vec<Record>,
+}
+impl RecordEntry {
+  pub fn new() -> Self {
+    Self { records: vec![] }
+  }
+
+  pub fn is_available(&self, record: &Record) -> bool {
+    return self.records.iter().fold(0, |a, r| a + r.size()) + record.size()
+      > WAL_PAGE_SIZE - 20;
+  }
+
+  pub fn append(&mut self, record: Record) {
+    self.records.push(record);
+  }
+}
+impl Serializable<Error, WAL_PAGE_SIZE> for RecordEntry {
+  fn deserialize(value: &Page<WAL_PAGE_SIZE>) -> Result<Self, Error> {
+    let mut sc = value.scanner();
+    let mut records = vec![];
+    let len = sc.read_usize()?;
+    for _ in 0..len {
+      let transaction_id = sc.read_usize()?;
+      let index = sc.read_usize()?;
+      let operation = Op::read_from(&mut sc)?;
+      records.push(Record::new(transaction_id, index, operation))
+    }
+    return Ok(Self { records });
+  }
+  fn serialize(&self) -> Result<Page<WAL_PAGE_SIZE>, Error> {
+    let mut p = Page::new();
+    let mut wt = p.writer();
+    wt.write(&self.records.len().to_be_bytes())?;
+    for record in &self.records {
+      wt.write(&record.transaction_id.to_be_bytes())?;
+      wt.write(&record.index.to_be_bytes())?;
+      record.operation.write_to(&mut wt)?;
+    }
+    return Ok(p);
+  }
 }
 
 #[cfg(test)]

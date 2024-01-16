@@ -110,8 +110,15 @@ impl<const T: usize> From<Bytes> for Page<T> {
     return page;
   }
 }
+impl<const T: usize> From<&[u8]> for Page<T> {
+  fn from(value: &[u8]) -> Self {
+    let mut page = Page::new_empty();
+    page.as_mut().copy_from_slice(value);
+    return page;
+  }
+}
 
-pub struct PageScanner<'a, const T: usize> {
+pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
   inner: &'a [u8; T],
   offset: usize,
 }
@@ -149,7 +156,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
   }
 }
 
-pub struct PageWriter<'a, const T: usize> {
+pub struct PageWriter<'a, const T: usize = PAGE_SIZE> {
   inner: &'a mut [u8; T],
   offset: usize,
 }

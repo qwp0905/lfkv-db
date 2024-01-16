@@ -11,10 +11,12 @@ use crate::{
   thread::{ContextReceiver, StoppableChannel, ThreadPool},
   transaction::LockManager,
   utils::{size, EmptySender, ShortenedMutex},
+  PAGE_SIZE,
 };
 
 mod cache;
 use cache::*;
+mod buffer_pool;
 mod list;
 
 struct PageBuffer {
@@ -55,7 +57,7 @@ impl BufferPool {
     T: AsRef<Path>,
   {
     let disk = Arc::new(PageSeeker::open(path)?);
-    let cache = Arc::new(Mutex::new(Cache::new(cache_size)));
+    let cache = Arc::new(Mutex::new(Cache::new(cache_size / PAGE_SIZE)));
     let background =
       ThreadPool::new(1, flush_size * size::kb(8), "buffer pool", None);
     let (flush_c, rx) = StoppableChannel::new();
@@ -88,10 +90,10 @@ impl BufferPool {
     self.background.schedule(move || {
       while let Ok((entries, done_c)) = rx.recv_all() {
         for (index, page) in entries.into_iter() {
-          let lock = locks.fetch_write_lock(index);
+          // let lock = locks.fetch_write_lock(index);
           disk.write(index, page)?;
           cache.l().get_mut(&index).map(|pb| pb.remove_dirty());
-          drop(lock);
+          // drop(lock);
           logger::info(format!("{} page flushed to disk", index));
         }
         disk.fsync()?;

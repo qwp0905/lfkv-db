@@ -8,6 +8,7 @@ use crate::{
   utils::{size, DroppableReceiver, ShortenedMutex, ShortenedRwLock},
   PAGE_SIZE,
 };
+use writer::*;
 
 use std::{
   collections::BTreeMap,

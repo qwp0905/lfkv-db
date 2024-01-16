@@ -12,12 +12,13 @@ use crate::error::{Error, Result};
 use super::{Page, PAGE_SIZE};
 
 #[derive(Debug)]
-pub struct PageSeeker {
+pub struct PageSeeker<const N: usize = PAGE_SIZE> {
   inner: RwLock<File>,
+  // size: N,
   // path: PathBuf,
 }
-impl PageSeeker {
-  pub fn open<T>(path: T) -> Result<PageSeeker>
+impl<const N: usize> PageSeeker<N> {
+  pub fn open<T>(path: T) -> Result<PageSeeker<N>>
   where
     T: AsRef<Path>,
   {
@@ -33,10 +34,10 @@ impl PageSeeker {
       .map_err(Error::IO);
   }
 
-  pub fn read(&self, index: usize) -> Result<Page> {
+  pub fn read(&self, index: usize) -> Result<Page<N>> {
     let mut inner = self.inner.wl();
     inner
-      .seek(SeekFrom::Start(get_offset(index)))
+      .seek(SeekFrom::Start(get_offset(index, N)))
       .map_err(Error::IO)?;
     let mut page = Page::new_empty();
     inner
@@ -45,10 +46,10 @@ impl PageSeeker {
     return Ok(page);
   }
 
-  pub fn write(&self, index: usize, page: Page) -> Result<()> {
+  pub fn write(&self, index: usize, page: Page<N>) -> Result<()> {
     let mut inner = self.inner.wl();
     inner
-      .seek(SeekFrom::Start(get_offset(index)))
+      .seek(SeekFrom::Start(get_offset(index, N)))
       .map_err(Error::IO)?;
     inner.write_all(page.as_ref()).map_err(Error::IO)?;
     return Ok(());
@@ -79,8 +80,8 @@ impl PageSeeker {
     Ok(metadata.len() as usize)
   }
 }
-unsafe impl Send for PageSeeker {}
+unsafe impl<const N: usize> Send for PageSeeker<N> {}
 
-fn get_offset(index: usize) -> u64 {
-  (index * PAGE_SIZE) as u64
+fn get_offset(index: usize, n: usize) -> u64 {
+  (index * n) as u64
 }

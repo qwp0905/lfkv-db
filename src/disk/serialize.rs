@@ -1,15 +1,15 @@
-use crate::error::Error;
+use crate::{error::Error, PAGE_SIZE};
 
 use super::Page;
 
-pub trait Serializable<T = Error>: Sized {
-  fn serialize(&self) -> Result<Page, T>;
-  fn deserialize(value: &Page) -> Result<Self, T>;
+pub trait Serializable<T = Error, const N: usize = PAGE_SIZE>: Sized {
+  fn serialize(&self) -> Result<Page<N>, T>;
+  fn deserialize(value: &Page<N>) -> Result<Self, T>;
 }
-impl Page {
+impl<const N: usize> Page<N> {
   pub fn deserialize<T, E>(&self) -> Result<T, E>
   where
-    T: Serializable<E>,
+    T: Serializable<E, N>,
   {
     T::deserialize(self)
   }
