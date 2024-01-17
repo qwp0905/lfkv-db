@@ -47,41 +47,59 @@ pub struct BufferPool {
 }
 
 impl BufferPool {
-  pub fn open<T>(
-    path: T,
+  pub fn new(
+    disk: Arc<PageSeeker>,
     cache_size: usize,
     locks: Arc<LockManager>,
-    flush_size: usize,
-  ) -> Result<(Self, StoppableChannel<BTreeMap<usize, Page>>)>
-  where
-    T: AsRef<Path>,
-  {
-    let disk = Arc::new(PageSeeker::open(path)?);
-    let cache = Arc::new(Mutex::new(Cache::new(cache_size / PAGE_SIZE)));
-    let background =
-      ThreadPool::new(1, flush_size * size::kb(8), "buffer pool", None);
-    let (flush_c, rx) = StoppableChannel::new();
-    let buffer_pool =
-      Self::new(cache, disk, background, locks, flush_c.clone());
-    buffer_pool.start_background(rx);
-    Ok((buffer_pool, flush_c))
-  }
-
-  fn new(
-    cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
-    disk: Arc<PageSeeker>,
-    background: ThreadPool<Result<()>>,
-    locks: Arc<LockManager>,
-    flush_c: StoppableChannel<BTreeMap<usize, Page>>,
   ) -> Self {
-    Self {
+    let cache = Arc::new(Mutex::new(Cache::new(cache_size / PAGE_SIZE)));
+    let background = ThreadPool::new(1, size::kb(8), "buffer pool", None);
+    let (flush_c, rx) = StoppableChannel::new();
+    let buffer_pool = Self {
       cache,
       disk,
       background,
       locks,
       flush_c,
-    }
+    };
+    buffer_pool.start_background(rx);
+    return buffer_pool;
   }
+  // pub fn open<T>(
+  //   path: T,
+  //   cache_size: usize,
+  //   locks: Arc<LockManager>,
+  //   flush_size: usize,
+  // ) -> Result<(Self, StoppableChannel<BTreeMap<usize, Page>>)>
+  // where
+  //   T: AsRef<Path>,
+  // {
+  //   let disk = Arc::new(PageSeeker::open(path)?);
+  //   let cache = Arc::new(Mutex::new(Cache::new(cache_size / PAGE_SIZE)));
+  //   let background =
+  //     ThreadPool::new(1, flush_size * size::kb(8), "buffer pool", None);
+  //   let (flush_c, rx) = StoppableChannel::new();
+  //   let buffer_pool =
+  //     Self::new(cache, disk, background, locks, flush_c.clone());
+  //   buffer_pool.start_background(rx);
+  //   Ok((buffer_pool, flush_c))
+  // }
+
+  // fn new(
+  //   cache: Arc<Mutex<Cache<usize, PageBuffer>>>,
+  //   disk: Arc<PageSeeker>,
+  //   background: ThreadPool<Result<()>>,
+  //   locks: Arc<LockManager>,
+  //   flush_c: StoppableChannel<BTreeMap<usize, Page>>,
+  // ) -> Self {
+  //   Self {
+  //     cache,
+  //     disk,
+  //     background,
+  //     locks,
+  //     flush_c,
+  //   }
+  // }
 
   fn start_background(&self, rx: ContextReceiver<BTreeMap<usize, Page>>) {
     let disk = self.disk.clone();

@@ -25,19 +25,30 @@ impl CursorWriter {
   }
 
   pub fn insert(&self, index: usize, page: Page) -> Result<()> {
-    self.wal.append(self.transaction_id, index, page.copy())?;
+    println!("{}", index);
+    let before = self.buffer.get(index).unwrap_or(Page::new_empty());
+    println!("{}", index);
+    self
+      .wal
+      .append(self.transaction_id, index, before, page.copy())?;
+    // self.wal.append(self.transaction_id, index, page.copy())?;
+    println!("{}", index);
     self.buffer.insert(index, page)
   }
 
-  pub fn remove(&self, index: usize) -> Result<()> {
-    let page = Page::new_empty();
-    self.wal.append(self.transaction_id, index, page.copy())?;
-    self.buffer.insert(index, page)
-  }
+  // pub fn remove(&self, index: usize) -> Result<()> {
+  //   let page = Page::new_empty();
+  //   self.wal.append(self.transaction_id, index, page.copy())?;
+  //   self.buffer.insert(index, page)
+  // }
 }
 
 impl Drop for CursorWriter {
   fn drop(&mut self) {
-    // self.wal.commit();
+    for _ in 0..1 {
+      if self.wal.commit(self.transaction_id).is_ok() {
+        return;
+      };
+    }
   }
 }

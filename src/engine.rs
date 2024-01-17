@@ -1,6 +1,7 @@
 use std::time::Duration;
 use std::{path::Path, sync::Arc};
 
+use crate::disk::PageSeeker;
 use crate::utils::size;
 use crate::Error;
 
@@ -59,21 +60,21 @@ impl Engine {
     let wal_path = Path::join(config.base_dir.as_ref(), WAL_FILE);
     let db_path = Path::join(config.base_dir.as_ref(), DB_FILE);
 
+    let db = Arc::new(PageSeeker::open(db_path)?);
+
     let lock_manager = Arc::new(LockManager::new());
-    let (buffer_pool, flush_c) = BufferPool::open(
-      db_path,
+    let buffer_pool = Arc::new(BufferPool::new(
+      db.clone(),
       config.max_cache_size,
       lock_manager.clone(),
-      config.max_wal_buffer_size,
-    )?;
-    let buffer_pool = Arc::new(buffer_pool);
+    ));
 
-    let wal = Arc::new(WAL::new(
+    let wal = Arc::new(WAL::open(
       wal_path,
-      flush_c,
-      config.checkpoint_interval,
       config.max_log_size,
       config.max_wal_buffer_size,
+      db,
+      config.checkpoint_interval,
     )?);
 
     wal.replay()?;

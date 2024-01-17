@@ -145,10 +145,11 @@ impl Clone for WALRecord {
   }
 }
 
+#[derive(Debug)]
 pub struct InsertRecord {
-  index: usize,
-  before: Page,
-  after: Page,
+  pub index: usize,
+  pub before: Page,
+  pub after: Page,
 }
 impl InsertRecord {
   pub fn new(index: usize, before: Page, after: Page) -> Self {
@@ -159,7 +160,17 @@ impl InsertRecord {
     }
   }
 }
+impl Clone for InsertRecord {
+  fn clone(&self) -> Self {
+    Self {
+      index: self.index,
+      before: self.before.copy(),
+      after: self.after.copy(),
+    }
+  }
+}
 
+#[derive(Debug, Clone)]
 pub enum Op {
   Start,
   Insert(InsertRecord),
@@ -209,6 +220,7 @@ impl Op {
   }
 }
 
+#[derive(Debug, Clone)]
 pub struct Record {
   pub transaction_id: usize,
   pub index: usize,
@@ -239,6 +251,7 @@ impl Record {
   }
 }
 
+#[derive(Debug, Clone)]
 pub struct RecordEntry {
   records: Vec<Record>,
 }
@@ -254,6 +267,10 @@ impl RecordEntry {
 
   pub fn append(&mut self, record: Record) {
     self.records.push(record);
+  }
+
+  pub fn first(&self) -> Option<&Record> {
+    self.records.first()
   }
 
   pub fn iter(&self) -> RecordEntryIter<'_> {
