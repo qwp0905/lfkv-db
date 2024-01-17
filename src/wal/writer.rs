@@ -5,7 +5,6 @@ use super::{Record, RecordEntry};
 pub const WAL_PAGE_SIZE: usize = size::kb(32);
 
 pub struct RotateWriter {
-  max_buffer_size: usize,
   entries: Vec<RecordEntry>,
   cursor: usize,
   disk: PageSeeker<WAL_PAGE_SIZE>,
@@ -14,7 +13,7 @@ pub struct RotateWriter {
 impl RotateWriter {
   pub fn open() {}
 
-  pub fn append(&mut self, record: Record) -> Result<Option<Vec<RecordEntry>>> {
+  pub fn append(&mut self, record: Record) -> Result<()> {
     let current = match self.entries.last_mut() {
       Some(entry) if entry.is_available(&record) => entry,
       _ => {
@@ -26,11 +25,7 @@ impl RotateWriter {
 
     current.append(record);
     self.disk.write(self.cursor, current.serialize()?)?;
-    self.disk.fsync()?;
-    if self.max_buffer_size > self.entries.len() {
-      return Ok(None);
-    }
-    return Ok(Some(std::mem::replace(&mut self.entries, vec![])));
+    self.disk.fsync()
   }
 
   pub fn drain_buffer(&mut self) -> Vec<RecordEntry> {

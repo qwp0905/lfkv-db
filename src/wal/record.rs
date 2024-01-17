@@ -1,3 +1,5 @@
+use std::slice::Iter;
+
 use crate::{
   disk::{Page, PageScanner, PageWriter, Serializable},
   error::Error,
@@ -208,9 +210,9 @@ impl Op {
 }
 
 pub struct Record {
-  transaction_id: usize,
-  index: usize,
-  operation: Op,
+  pub transaction_id: usize,
+  pub index: usize,
+  pub operation: Op,
 }
 impl Record {
   pub fn new(transaction_id: usize, index: usize, operation: Op) -> Self {
@@ -227,6 +229,13 @@ impl Record {
       Op::Checkpoint(_) => 8,
       _ => 0,
     }
+  }
+
+  pub fn is_insert(&self) -> Option<(usize, Page)> {
+    if let Op::Insert(ir) = &self.operation {
+      return Some((ir.index, ir.after.copy()));
+    }
+    return None;
   }
 }
 
@@ -245,6 +254,12 @@ impl RecordEntry {
 
   pub fn append(&mut self, record: Record) {
     self.records.push(record);
+  }
+
+  pub fn iter(&self) -> RecordEntryIter<'_> {
+    RecordEntryIter {
+      inner: self.records.iter(),
+    }
   }
 }
 impl Serializable<Error, WAL_PAGE_SIZE> for RecordEntry {
@@ -270,6 +285,16 @@ impl Serializable<Error, WAL_PAGE_SIZE> for RecordEntry {
       record.operation.write_to(&mut wt)?;
     }
     return Ok(p);
+  }
+}
+
+pub struct RecordEntryIter<'a> {
+  inner: Iter<'a, Record>,
+}
+impl<'a> Iterator for RecordEntryIter<'a> {
+  type Item = &'a Record;
+  fn next(&mut self) -> Option<Self::Item> {
+    self.inner.next()
   }
 }
 

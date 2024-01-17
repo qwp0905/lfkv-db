@@ -8,7 +8,7 @@ use crate::{
   StoppableChannel, ThreadPool,
 };
 
-use super::{InsertRecord, Op, Record, RotateWriter};
+use super::{InsertRecord, Op, Record, RotateWriter, WAL_PAGE_SIZE};
 
 pub struct WAL {
   core: Mutex<Core>,
@@ -34,11 +34,28 @@ struct Core {
   wal_disk: Arc<Mutex<RotateWriter>>,
   last_index: usize,
   last_transaction: usize,
-  checkpoint_per: usize,
+  max_buffer_size: usize,
   checkpoint_c: StoppableChannel<()>,
   background: ThreadPool<Result<()>>,
 }
 impl Core {
+  fn new(
+    wal_disk: Arc<Mutex<RotateWriter>>,
+    last_index: usize,
+    last_transaction: usize,
+    max_buffer_size: usize,
+    checkpoint_c: StoppableChannel<()>,
+  ) -> Self {
+    Self {
+      wal_disk,
+      last_index,
+      last_transaction,
+      max_buffer_size: max_buffer_size / WAL_PAGE_SIZE,
+      checkpoint_c,
+      background: ThreadPool::new(2, max_buffer_size * 6 / 5, "wal", None),
+    }
+  }
+
   fn start_background(
     &self,
     disk: Arc<PageSeeker>,
@@ -47,7 +64,26 @@ impl Core {
   ) {
     let wal_disk = self.wal_disk.clone();
     self.background.schedule(move || {
-      while let Ok(_) = rx.recv_new_or_timeout(timeout) {}
+      while let Ok(_) = rx.recv_new_or_timeout(timeout) {
+        let flushed = { wal_disk.l().drain_buffer() };
+        if flushed.len() == 0 {
+          continue;
+        }
+
+        let mut applied = 0;
+        for entry in flushed {
+          for record in entry.iter() {
+            if let Some((index, page)) = record.is_insert() {
+              disk.write(index, page)?;
+            }
+            applied = record.index;
+          }
+        }
+
+        wal_disk
+          .l()
+          .append(Record::new(0, 0, Op::Checkpoint(applied)))?;
+      }
       Ok(())
     });
   }
