@@ -1,6 +1,5 @@
 use std::{
   collections::BTreeMap,
-  path::Path,
   sync::{Arc, Mutex},
 };
 
