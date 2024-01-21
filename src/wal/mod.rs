@@ -6,3 +6,6 @@ pub use record::*;
 
 mod writer;
 use writer::*;
+
+mod buffer;
+use buffer::*;

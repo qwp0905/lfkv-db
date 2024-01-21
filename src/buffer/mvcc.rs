@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::Page;
+use crate::{second_of_two, Page};
 
 pub trait Measurable {
   fn len(&self) -> usize;
@@ -17,7 +17,7 @@ impl MVCC {
   }
 
   pub fn view(&self, tx_id: usize) -> Option<&Page> {
-    self.versions.range(0..tx_id).last().map(|(_, p)| p)
+    self.versions.range(..tx_id).last().map(second_of_two)
   }
 
   pub fn append(&mut self, tx_id: usize, page: Page) {

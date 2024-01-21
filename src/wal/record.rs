@@ -50,33 +50,36 @@ pub struct LogRecord {
   pub operation: Operation,
 }
 impl LogRecord {
-  pub fn new_start(index: usize, transaction_id: usize) -> Self {
-    Self::new(index, transaction_id, Operation::Start)
+  pub fn new_start(transaction_id: usize) -> Self {
+    Self::new(0, transaction_id, Operation::Start)
   }
 
-  pub fn new_commit(index: usize, transaction_id: usize) -> Self {
-    Self::new(index, transaction_id, Operation::Commit)
+  pub fn new_commit(transaction_id: usize) -> Self {
+    Self::new(0, transaction_id, Operation::Commit)
   }
 
-  pub fn new_abort(index: usize, transaction_id: usize) -> Self {
-    Self::new(index, transaction_id, Operation::Commit)
+  pub fn new_abort(transaction_id: usize) -> Self {
+    Self::new(0, transaction_id, Operation::Commit)
   }
 
   pub fn new_insert(
-    index: usize,
     transaction_id: usize,
     page_index: usize,
     data: Page,
   ) -> Self {
     Self::new(
-      index,
+      0,
       transaction_id,
       Operation::Insert(InsertLog::new(page_index, data)),
     )
   }
 
-  pub fn new_checkpoint(index: usize, applied: usize) -> Self {
-    Self::new(index, 0, Operation::Checkpoint(applied))
+  pub fn new_checkpoint(applied: usize) -> Self {
+    Self::new(0, 0, Operation::Checkpoint(applied))
+  }
+
+  pub fn assign_id(&mut self, index: usize) {
+    self.index = index
   }
 
   fn new(index: usize, transaction_id: usize, operation: Operation) -> Self {
