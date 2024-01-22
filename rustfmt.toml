@@ -1,4 +1,4 @@
-max_width = 80
+max_width = 90
 tab_spaces = 2
 trailing_comma = "Always"
 trailing_semicolon = true

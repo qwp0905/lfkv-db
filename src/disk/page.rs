@@ -1,5 +1,4 @@
 use crate::utils::size;
-use bytes::Bytes;
 
 use crate::error::{Error, Result};
 
@@ -94,20 +93,6 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
 impl<const T: usize> From<Page<T>> for Vec<u8> {
   fn from(value: Page<T>) -> Self {
     value.bytes.into()
-  }
-}
-impl<const T: usize> From<Page<T>> for Bytes {
-  fn from(value: Page<T>) -> Self {
-    let v: Vec<u8> = value.bytes.into();
-    Bytes::from(v)
-  }
-}
-impl<const T: usize> From<Bytes> for Page<T> {
-  fn from(value: Bytes) -> Self {
-    let mut page = Self::new();
-    let end = value.len().min(T);
-    page.range_mut(0, end).copy_from_slice(&value[..end]);
-    return page;
   }
 }
 impl<const T: usize> From<&[u8]> for Page<T> {

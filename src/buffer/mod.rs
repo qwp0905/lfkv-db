@@ -1,3 +1,6 @@
+mod lru;
+use lru::*;
+
 mod cache;
 use cache::*;
 

@@ -1,19 +1,14 @@
-use std::{
-  collections::HashMap,
-  sync::{Arc, Mutex, RwLock},
-};
+use std::sync::Arc;
 
 use crate::{
-  disk::PageSeeker, ContextReceiver, EmptySender, Error, Page, Result,
-  ShortenedMutex, ShortenedRwLock, StoppableChannel, ThreadPool,
+  disk::PageSeeker, ContextReceiver, EmptySender, Error, Page, Result, ShortenedMutex,
+  StoppableChannel, ThreadPool,
 };
 
-use super::{Cache, MVCC};
+use super::PageCache;
 
 pub struct BufferPool {
-  cache: Arc<Mutex<Cache<usize, MVCC>>>,
-  evicted: Arc<RwLock<HashMap<usize, MVCC>>>,
-  max_cache_size: usize,
+  cache: Arc<PageCache>,
   disk: Arc<PageSeeker>,
   background: ThreadPool<Result<()>>,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
@@ -23,24 +18,11 @@ impl BufferPool {
   fn start_flush(&self, rx: ContextReceiver<Vec<(usize, usize, Page)>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
-    let evicted = self.evicted.clone();
     self.background.schedule(move || {
       while let Ok((v, done)) = rx.recv_all() {
         for (tx_id, i, p) in v {
           disk.write(i, p)?;
-
-          let mut c = cache.l();
-          if let Some(mvcc) = c.get_mut(&i) {
-            mvcc.split_off(tx_id); // include current tx
-          }
-
-          let mut ev = evicted.wl();
-          if let Some(mvcc) = ev.get_mut(&i) {
-            mvcc.split_off(tx_id + 1); // exclude current tx
-            if mvcc.is_empty() {
-              ev.remove(&i);
-            }
-          }
+          cache.flush(tx_id, i);
         }
 
         disk.fsync()?;
@@ -50,51 +32,31 @@ impl BufferPool {
     })
   }
 
-  pub fn get(&self, tx_id: usize, index: usize) -> Result<Page> {
-    let mut cache = self.cache.l();
-    if let Some(v) = cache.get(&index) {
-      if let Some(page) = v.view(tx_id) {
-        return Ok(page.copy());
+  fn start_commit(&self, rx: ContextReceiver<usize>) {
+    let cache = self.cache.clone();
+    self.background.schedule(move || {
+      while let Ok(tx_id) = rx.recv_new() {
+        cache.commit(tx_id);
       }
-    }
+      Ok(())
+    });
+  }
 
-    if let Some(v) = self.evicted.rl().get(&index) {
-      if let Some(page) = v.view(tx_id) {
-        return Ok(page.copy());
-      }
+  pub fn get(&self, tx_id: usize, index: usize) -> Result<Page> {
+    if let Some(page) = self.cache.get(tx_id, index) {
+      return Ok(page);
     }
 
     let page = self.disk.read(index)?;
     if page.is_empty() {
       return Err(Error::NotFound);
     }
-
-    cache
-      .entry(index)
-      .and_modify(|mvcc| mvcc.append(tx_id, page.copy()))
-      .or_insert(MVCC::from_committed(vec![(tx_id, page.copy())]));
-    if cache.len() >= self.max_cache_size {
-      if let Some((i, mvcc)) = cache.pop_old() {
-        self.evicted.wl().insert(i, mvcc);
-      };
-    }
-
+    self.cache.insert_from_disk(tx_id, index, page.copy());
     return Ok(page);
   }
 
   pub fn insert(&self, tx_id: usize, index: usize, page: Page) -> Result<()> {
-    let mut cache = self.cache.l();
-    cache
-      .entry(index)
-      .and_modify(|mvcc| mvcc.append(tx_id, page.copy()))
-      .or_insert(MVCC::from_committed(vec![(tx_id, page)]));
-
-    if cache.len() >= self.max_cache_size {
-      if let Some((i, mvcc)) = cache.pop_old() {
-        self.evicted.wl().insert(i, mvcc);
-      };
-    }
-
+    self.cache.insert_dirty(tx_id, index, page);
     Ok(())
   }
 }

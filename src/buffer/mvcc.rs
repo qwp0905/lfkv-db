@@ -29,8 +29,12 @@ impl MVCC {
     self.committed.range(..tx_id).last().map(second_of_two)
   }
 
-  pub fn append(&mut self, tx_id: usize, page: Page) {
+  pub fn append_committed(&mut self, tx_id: usize, page: Page) {
     self.committed.insert(tx_id, page);
+  }
+
+  pub fn append_uncommitted(&mut self, tx_id: usize, page: Page) {
+    self.uncommitted.insert(tx_id, page);
   }
 
   pub fn split_off(&mut self, tx_id: usize) {

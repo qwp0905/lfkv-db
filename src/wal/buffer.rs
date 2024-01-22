@@ -24,7 +24,7 @@ impl LogBuffer {
   pub fn append(&self, tx_id: usize, page_index: usize, data: Page) {
     let mut core = self.0.l();
     let record = LogRecord::new_insert(tx_id, page_index, data);
-    core.map.entry(tx_id).or_insert(vec![]).push(record);
+    core.map.entry(tx_id).or_default().push(record);
     core.size += 1;
   }
 
