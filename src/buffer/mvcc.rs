@@ -7,42 +7,59 @@ pub trait Measurable {
 }
 
 pub struct MVCC {
-  versions: BTreeMap<usize, Page>,
+  committed: BTreeMap<usize, Page>,
+  uncommitted: BTreeMap<usize, Page>,
 }
 impl MVCC {
-  pub fn new(versions: Vec<(usize, Page)>) -> Self {
+  pub fn from_committed(committed: Vec<(usize, Page)>) -> Self {
     Self {
-      versions: versions.into_iter().collect(),
+      committed: committed.into_iter().collect(),
+      uncommitted: BTreeMap::new(),
+    }
+  }
+
+  pub fn from_uncommitted(uncommitted: Vec<(usize, Page)>) -> Self {
+    Self {
+      committed: BTreeMap::new(),
+      uncommitted: uncommitted.into_iter().collect(),
     }
   }
 
   pub fn view(&self, tx_id: usize) -> Option<&Page> {
-    self.versions.range(..tx_id).last().map(second_of_two)
+    self.committed.range(..tx_id).last().map(second_of_two)
   }
 
   pub fn append(&mut self, tx_id: usize, page: Page) {
-    self.versions.insert(tx_id, page);
+    self.committed.insert(tx_id, page);
   }
 
   pub fn split_off(&mut self, tx_id: usize) {
-    self.versions = self.versions.split_off(&tx_id);
+    self.committed = self.committed.split_off(&tx_id);
   }
 
   pub fn is_empty(&self) -> bool {
-    self.versions.len() == 0
+    self.committed.len() == 0
+  }
+
+  pub fn commit(&mut self, tx_id: usize) {
+    self
+      .uncommitted
+      .remove(&tx_id)
+      .map(|p| self.committed.insert(tx_id, p));
   }
 }
 
 impl Measurable for MVCC {
   fn len(&self) -> usize {
-    self.versions.len()
+    self.committed.len()
   }
 }
 
 impl Default for MVCC {
   fn default() -> Self {
     Self {
-      versions: Default::default(),
+      committed: Default::default(),
+      uncommitted: Default::default(),
     }
   }
 }

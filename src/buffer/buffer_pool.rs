@@ -72,7 +72,7 @@ impl BufferPool {
     cache
       .entry(index)
       .and_modify(|mvcc| mvcc.append(tx_id, page.copy()))
-      .or_insert(MVCC::new(vec![(tx_id, page.copy())]));
+      .or_insert(MVCC::from_committed(vec![(tx_id, page.copy())]));
     if cache.len() >= self.max_cache_size {
       if let Some((i, mvcc)) = cache.pop_old() {
         self.evicted.wl().insert(i, mvcc);
@@ -87,7 +87,7 @@ impl BufferPool {
     cache
       .entry(index)
       .and_modify(|mvcc| mvcc.append(tx_id, page.copy()))
-      .or_insert(MVCC::new(vec![(tx_id, page)]));
+      .or_insert(MVCC::from_committed(vec![(tx_id, page)]));
 
     if cache.len() >= self.max_cache_size {
       if let Some((i, mvcc)) = cache.pop_old() {
