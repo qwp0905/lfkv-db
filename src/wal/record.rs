@@ -1,5 +1,5 @@
 use crate::{
-  disk::{Page, PageWriter},
+  disk::{Page, PageScanner, PageWriter},
   size, Error, Serializable, PAGE_SIZE,
 };
 
@@ -119,6 +119,27 @@ impl LogRecord {
     }
     Ok(())
   }
+
+  fn read_from(sc: &mut PageScanner<WAL_PAGE_SIZE>) -> crate::Result<Self> {
+    let index = sc.read_usize()?;
+    let transaction_id = sc.read_usize()?;
+    let operation = match sc.read()? {
+      0 => Operation::Start,
+      1 => Operation::Commit,
+      2 => Operation::Abort,
+      3 => {
+        let i = sc.read_usize()?;
+        Operation::Checkpoint(i)
+      }
+      4 => {
+        let page_index = sc.read_usize()?;
+        let data = sc.read_n(PAGE_SIZE)?.into();
+        Operation::Insert(InsertLog::new(page_index, data))
+      }
+      _ => return Err(Error::Invalid),
+    };
+    return Ok(Self::new(index, transaction_id, operation));
+  }
 }
 
 pub struct LogEntry {
@@ -153,11 +174,11 @@ impl Serializable<Error, WAL_PAGE_SIZE> for LogEntry {
     Ok(page)
   }
   fn deserialize(value: &Page<WAL_PAGE_SIZE>) -> Result<Self, Error> {
-    let records = vec![];
     let mut sc = value.scanner();
     let l = sc.read_usize()?;
+    let mut records = vec![];
     for _ in 0..l {
-      todo!();
+      records.push(LogRecord::read_from(&mut sc)?);
     }
 
     Ok(Self { records })
