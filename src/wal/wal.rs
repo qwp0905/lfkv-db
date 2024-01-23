@@ -5,9 +5,12 @@ use std::{
 
 use crossbeam::channel::Receiver;
 
-use crate::{DroppableReceiver, Page, ShortenedMutex, StoppableChannel};
+use crate::{
+  disk::PageSeeker, ContextReceiver, DroppableReceiver, Page, Result, ShortenedMutex,
+  StoppableChannel, ThreadPool,
+};
 
-use super::{LogBuffer, LogRecord, LogWriter, Operation};
+use super::{LogBuffer, LogRecord, LogWriter, WAL_PAGE_SIZE};
 
 pub struct LogStorage {
   core: Mutex<LogStorageCore>,
@@ -28,9 +31,19 @@ struct LogStorageCore {
   checkpoint_interval: Duration,
   writer: LogWriter,
   flush_c: StoppableChannel<Vec<LogRecord>>,
-  commit_c: StoppableChannel<Vec<(usize, usize)>>,
+  commit_c: StoppableChannel<usize>,
+  background: ThreadPool<Result<()>>,
+  disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
 }
 impl LogStorageCore {
+  fn start_flush(&self, rx: ContextReceiver<Vec<LogRecord>>) {
+    let disk = self.disk.clone();
+    self.background.schedule(move || {
+      while let Ok(_) = rx.recv_done() {}
+      Ok(())
+    })
+  }
+
   fn append(&mut self, tx_id: usize, page_index: usize, data: Page) {
     self.buffer.append(tx_id, page_index, data);
     if self.buffer.len() >= self.max_buffer_size {
@@ -48,13 +61,7 @@ impl LogStorageCore {
 
   fn commit(&mut self, tx_id: usize) -> Receiver<()> {
     let records = self.buffer.commit(tx_id);
-    let mut committed = vec![];
-    for record in &records {
-      if let Operation::Insert(log) = &record.operation {
-        committed.push((tx_id, log.page_index))
-      }
-    }
-    self.commit_c.send(committed);
+    self.commit_c.send(tx_id);
     self.flush_c.send_with_done(records)
   }
 }

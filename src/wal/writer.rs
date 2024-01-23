@@ -61,4 +61,6 @@ impl LogWriter {
 
     Ok(())
   }
+
+  pub fn batch_write() {}
 }

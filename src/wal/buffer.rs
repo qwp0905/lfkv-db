@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, mem::replace, sync::Mutex};
 
 use crate::{Page, ShortenedMutex};
 
@@ -30,7 +30,7 @@ impl LogBuffer {
 
   pub fn commit(&self, tx_id: usize) -> Vec<LogRecord> {
     let mut core = self.0.l();
-    let mut records = core.map.remove(&tx_id).unwrap_or(vec![]);
+    let mut records = core.map.remove(&tx_id).unwrap_or_default();
     core.size -= records.len();
     records.push(LogRecord::new_commit(tx_id));
     return records;
@@ -41,11 +41,9 @@ impl LogBuffer {
   }
 
   pub fn flush(&self) -> Vec<LogRecord> {
-    self
-      .0
-      .l()
-      .map
-      .split_off(&0)
+    let mut core = self.0.l();
+    core.size = 0;
+    replace(&mut core.map, Default::default())
       .into_values()
       .flatten()
       .collect()
