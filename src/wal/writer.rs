@@ -1,66 +1,69 @@
-use std::{
-  mem::replace,
-  sync::Arc,
-  time::{Duration, Instant},
-};
+use std::mem::replace;
 
-use crate::{
-  disk::PageSeeker, ContextReceiver, EmptySender, Page, Result, Serializable,
-  StoppableChannel, ThreadPool,
-};
+use crossbeam::channel::Receiver;
+
+use crate::{Page, Result, Serializable, StoppableChannel};
 
 use super::{LogEntry, LogRecord, WAL_PAGE_SIZE};
 
 pub struct LogWriter {
-  disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   current: LogEntry,
   max_file_size: usize,
+  last_index: usize,
   cursor: usize,
-  background: ThreadPool<Result<()>>,
-  max_group_commit_delay: Duration,
-  max_group_commit_count: usize,
-  write_c: StoppableChannel<(usize, Page<WAL_PAGE_SIZE>)>,
+  write_c: StoppableChannel<Vec<(usize, Page<WAL_PAGE_SIZE>)>>,
+  checkpoint_c: StoppableChannel<()>,
 }
 
 impl LogWriter {
-  fn start_write_c(&self, rx: ContextReceiver<(usize, Page<WAL_PAGE_SIZE>)>) {
-    let delay = self.max_group_commit_delay;
-    let count = self.max_group_commit_count;
-    let disk = self.disk.clone();
-    self.background.schedule(move || {
-      let mut v = vec![];
-      let mut start = Instant::now();
-      let mut point = delay;
-      while let Ok(o) = rx.recv_done_or_timeout(point) {
-        if let Some(((index, page), done)) = o {
-          disk.write(index, page)?;
-          v.push(done);
-          if v.len() < count {
-            point -= Instant::now().duration_since(start).min(point);
-            start = Instant::now();
-            continue;
-          }
-        }
-        disk.fsync()?;
-        v.drain(..).for_each(|done| done.close());
-        point = delay;
-        start = Instant::now();
-      }
-      Ok(())
-    });
-  }
-
-  pub fn append(&mut self, record: LogRecord) -> Result<()> {
-    if self.current.is_available(&record) {
-      self.current.records.push(record);
-    } else {
-      let replaced = replace(&mut self.current, LogEntry::new(vec![record]));
-      self.disk.write(self.cursor, replaced.serialize()?)?;
-      self.cursor += 1;
+  pub fn new(
+    max_file_size: usize,
+    write_c: StoppableChannel<Vec<(usize, Page<WAL_PAGE_SIZE>)>>,
+    checkpoint_c: StoppableChannel<()>,
+  ) -> Self {
+    Self {
+      current: Default::default(),
+      max_file_size,
+      last_index: 0,
+      cursor: 0,
+      write_c,
+      checkpoint_c,
     }
-
-    Ok(())
   }
 
-  pub fn batch_write() {}
+  pub fn initialize(
+    &mut self,
+    records: Vec<LogRecord>,
+    last_index: usize,
+    cursor: usize,
+  ) {
+    records
+      .into_iter()
+      .for_each(|record| self.current.append(record));
+    self.last_index = last_index;
+    self.cursor = cursor
+  }
+
+  pub fn batch_write(&mut self, records: Vec<LogRecord>) -> Result<Receiver<()>> {
+    let mut pages = vec![];
+    for mut record in records {
+      record.index = self.last_index + 1;
+      self.last_index += 1;
+
+      if !self.current.is_available(&record) {
+        let entry = replace(&mut self.current, Default::default());
+        pages.push((self.cursor, entry.serialize()?));
+        self.cursor += 1;
+        if self.cursor >= self.max_file_size {
+          self.checkpoint_c.send(());
+          self.cursor %= self.max_file_size
+        }
+      }
+
+      self.current.append(record);
+    }
+    pages.push((self.cursor, self.current.serialize()?));
+
+    return Ok(self.write_c.send_with_done(pages));
+  }
 }

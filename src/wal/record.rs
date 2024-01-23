@@ -62,11 +62,7 @@ impl LogRecord {
     Self::new(0, transaction_id, Operation::Commit)
   }
 
-  pub fn new_insert(
-    transaction_id: usize,
-    page_index: usize,
-    data: Page,
-  ) -> Self {
+  pub fn new_insert(transaction_id: usize, page_index: usize, data: Page) -> Self {
     Self::new(
       0,
       transaction_id,
@@ -151,8 +147,11 @@ impl LogEntry {
   }
 
   pub fn is_available(&self, record: &LogRecord) -> bool {
-    self.records.iter().fold(0, |a, r| a + r.size()) + record.size()
-      <= WAL_PAGE_SIZE - 30
+    self.records.iter().fold(0, |a, r| a + r.size()) + record.size() <= WAL_PAGE_SIZE - 30
+  }
+
+  pub fn append(&mut self, record: LogRecord) {
+    self.records.push(record)
   }
 }
 impl Default for LogEntry {

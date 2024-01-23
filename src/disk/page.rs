@@ -23,12 +23,7 @@ impl<const T: usize> Page<T> {
     Self { bytes }
   }
 
-  pub fn range(&self, start: usize, end: usize) -> &[u8] {
-    let end = end.min(self.bytes.len());
-    &self.bytes[start..end]
-  }
-
-  pub fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
+  fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.bytes.len());
     &mut self.bytes[start..end]
   }
