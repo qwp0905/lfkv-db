@@ -10,7 +10,7 @@ use crate::{
   Page, Result, Serializable, ShortenedMutex, StoppableChannel, ThreadPool,
 };
 
-use super::{LogBuffer, LogEntry, LogRecord, LogWriter, WAL_PAGE_SIZE};
+use super::{LogBuffer, LogEntry, LogRecord, WAL_PAGE_SIZE};
 
 pub struct LogStorage {
   core: Mutex<LogStorageCore>,
@@ -34,43 +34,14 @@ struct LogStorageCore {
   buffer: Arc<LogBuffer>,
   max_buffer_size: usize,
   checkpoint_interval: Duration,
-  writer: LogWriter,
   commit_c: StoppableChannel<usize>,
   background: ThreadPool<Result<()>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   max_group_commit_delay: Duration,
   max_group_commit_count: usize,
+  io_c: StoppableChannel<Vec<LogRecord>>,
 }
 impl LogStorageCore {
-  fn start_write(&self, rx: ContextReceiver<Vec<(usize, Page<WAL_PAGE_SIZE>)>>) {
-    let delay = self.max_group_commit_delay;
-    let count = self.max_group_commit_count;
-    let disk = self.disk.clone();
-    self.background.schedule(move || {
-      let mut v = vec![];
-      let mut start = Instant::now();
-      let mut point = delay;
-      while let Ok(o) = rx.recv_done_or_timeout(point) {
-        if let Some((pages, done)) = o {
-          v.push(done);
-          for (index, page) in pages {
-            disk.write(index, page)?;
-          }
-          if v.len() < count {
-            point -= Instant::now().duration_since(start).min(point);
-            start = Instant::now();
-            continue;
-          }
-        }
-        disk.fsync()?;
-        v.drain(..).for_each(|done| done.close());
-        point = delay;
-        start = Instant::now();
-      }
-      Ok(())
-    });
-  }
-
   fn start_io(
     &self,
     rx: ContextReceiver<Vec<LogRecord>>,
@@ -82,7 +53,7 @@ impl LogStorageCore {
     let count = self.max_group_commit_count;
     let disk = self.disk.clone();
     self.background.schedule(move || {
-      let mut entry = LogEntry::new(records);
+      let mut current = LogEntry::new(records);
       let mut start = Instant::now();
       let mut point = delay;
       let mut v = vec![];
@@ -90,30 +61,30 @@ impl LogStorageCore {
         if let Some((records, done)) = o {
           v.push(done);
           for mut record in records {
+            record.index = last_index + 1;
             last_index += 1;
-            record.index = last_index;
 
-            if entry.is_available(&record) {
-              let e = replace_default(&mut entry);
-              disk.write(cursor, e.serialize()?)?;
+            if current.is_available(&record) {
+              let entry = replace_default(&mut current);
+              disk.write(cursor, entry.serialize()?)?;
               cursor += 1;
             }
+            current.append(record);
           }
-          // for (index, page) in pages {
-          //   disk.write(index, page)?;
-          // }
-          // if v.len() < count {
-          //   point -= Instant::now().duration_since(start).min(point);
-          //   start = Instant::now();
-          //   continue;
-          // }
+
+          disk.write(cursor, current.serialize()?)?;
+
+          if v.len() < count {
+            point -= Instant::now().duration_since(start).min(point);
+            start = Instant::now();
+            continue;
+          }
         }
         disk.fsync()?;
         v.drain(..).for_each(|done| done.close());
         point = delay;
         start = Instant::now();
       }
-      //
       return Ok(());
     });
   }
@@ -129,7 +100,7 @@ impl LogStorageCore {
   fn append(&mut self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
     self.buffer.append(tx_id, page_index, data);
     if self.buffer.len() >= self.max_buffer_size {
-      self.writer.batch_write(self.buffer.flush())?;
+      self.io_c.send_with_done(self.buffer.flush());
     }
     Ok(())
   }
@@ -137,7 +108,7 @@ impl LogStorageCore {
   fn new_transaction(&mut self) -> Result<usize> {
     let tx_id = self.buffer.new_transaction();
     if self.buffer.len() >= self.max_buffer_size {
-      self.writer.batch_write(self.buffer.flush())?;
+      self.io_c.send_with_done(self.buffer.flush());
     }
     return Ok(tx_id);
   }
@@ -145,6 +116,6 @@ impl LogStorageCore {
   fn commit(&mut self, tx_id: usize) -> Result<Receiver<()>> {
     let records = self.buffer.commit(tx_id);
     self.commit_c.send(tx_id);
-    self.writer.batch_write(records)
+    Ok(self.io_c.send_with_done(records))
   }
 }
