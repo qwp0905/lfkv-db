@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, mem::replace, sync::Mutex};
+use std::{collections::BTreeMap, sync::Mutex};
 
-use crate::{Page, ShortenedMutex};
+use crate::{replace_default, Page, ShortenedMutex};
 
 use super::LogRecord;
 
@@ -43,7 +43,7 @@ impl LogBuffer {
   pub fn flush(&self) -> Vec<LogRecord> {
     let mut core = self.0.l();
     core.size = 0;
-    replace(&mut core.map, Default::default())
+    replace_default(&mut core.map)
       .into_values()
       .flatten()
       .collect()

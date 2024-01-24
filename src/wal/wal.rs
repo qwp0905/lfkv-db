@@ -6,11 +6,11 @@ use std::{
 use crossbeam::channel::Receiver;
 
 use crate::{
-  disk::PageSeeker, ContextReceiver, DroppableReceiver, EmptySender, Page, Result,
-  ShortenedMutex, StoppableChannel, ThreadPool,
+  disk::PageSeeker, replace_default, ContextReceiver, DroppableReceiver, EmptySender,
+  Page, Result, Serializable, ShortenedMutex, StoppableChannel, ThreadPool,
 };
 
-use super::{LogBuffer, LogWriter, WAL_PAGE_SIZE};
+use super::{LogBuffer, LogEntry, LogRecord, LogWriter, WAL_PAGE_SIZE};
 
 pub struct LogStorage {
   core: Mutex<LogStorageCore>,
@@ -33,7 +33,6 @@ impl LogStorage {
 struct LogStorageCore {
   buffer: Arc<LogBuffer>,
   max_buffer_size: usize,
-  last_transaction: usize,
   checkpoint_interval: Duration,
   writer: LogWriter,
   commit_c: StoppableChannel<usize>,
@@ -69,6 +68,53 @@ impl LogStorageCore {
         start = Instant::now();
       }
       Ok(())
+    });
+  }
+
+  fn start_io(
+    &self,
+    rx: ContextReceiver<Vec<LogRecord>>,
+    records: Vec<LogRecord>,
+    mut last_index: usize,
+    mut cursor: usize,
+  ) {
+    let delay = self.max_group_commit_delay;
+    let count = self.max_group_commit_count;
+    let disk = self.disk.clone();
+    self.background.schedule(move || {
+      let mut entry = LogEntry::new(records);
+      let mut start = Instant::now();
+      let mut point = delay;
+      let mut v = vec![];
+      while let Ok(o) = rx.recv_done_or_timeout(point) {
+        if let Some((records, done)) = o {
+          v.push(done);
+          for mut record in records {
+            last_index += 1;
+            record.index = last_index;
+
+            if entry.is_available(&record) {
+              let e = replace_default(&mut entry);
+              disk.write(cursor, e.serialize()?)?;
+              cursor += 1;
+            }
+          }
+          // for (index, page) in pages {
+          //   disk.write(index, page)?;
+          // }
+          // if v.len() < count {
+          //   point -= Instant::now().duration_since(start).min(point);
+          //   start = Instant::now();
+          //   continue;
+          // }
+        }
+        disk.fsync()?;
+        v.drain(..).for_each(|done| done.close());
+        point = delay;
+        start = Instant::now();
+      }
+      //
+      return Ok(());
     });
   }
 
