@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-  disk::PageSeeker, ContextReceiver, EmptySender, Error, Page, Result, ShortenedMutex,
-  StoppableChannel, ThreadPool,
+  disk::PageSeeker, ContextReceiver, EmptySender, Error, Page, Result, StoppableChannel,
+  ThreadPool,
 };
 
 use super::PageCache;
