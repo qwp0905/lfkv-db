@@ -34,13 +34,13 @@ impl LogStorage {
     config: LogStorageConfig,
     commit_c: StoppableChannel<usize>,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
+    background: Arc<ThreadPool<Result<()>>>,
   ) -> Result<Self> {
     let disk = Arc::new(PageSeeker::open(&config.path)?);
     let buffer = Arc::new(LogBuffer::new());
 
     let (io_c, io_rx) = StoppableChannel::new();
     let (checkpoint_c, checkpoint_rx) = StoppableChannel::new();
-    let background = ThreadPool::new(2, size::mb(32), "wal", None);
 
     let core = LogStorageCore::new(
       buffer,
@@ -81,7 +81,7 @@ impl LogStorage {
 struct LogStorageCore {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<usize>,
-  background: ThreadPool<Result<()>>,
+  background: Arc<ThreadPool<Result<()>>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>>,
   checkpoint_c: StoppableChannel<()>,
@@ -93,7 +93,7 @@ impl LogStorageCore {
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<usize>,
-    background: ThreadPool<Result<()>>,
+    background: Arc<ThreadPool<Result<()>>>,
     disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>>,
     checkpoint_c: StoppableChannel<()>,
