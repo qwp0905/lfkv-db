@@ -40,7 +40,7 @@ impl LogStorage {
 
     let (io_c, io_rx) = StoppableChannel::new();
     let (checkpoint_c, checkpoint_rx) = StoppableChannel::new();
-    let background = ThreadPool::new(2, size::mb(2), "wal", None);
+    let background = ThreadPool::new(2, size::mb(32), "wal", None);
 
     let core = LogStorageCore::new(
       buffer,
