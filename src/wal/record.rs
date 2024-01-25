@@ -142,8 +142,8 @@ pub struct LogEntry {
   pub records: Vec<LogRecord>,
 }
 impl LogEntry {
-  pub fn new(records: Vec<LogRecord>) -> Self {
-    Self { records }
+  pub fn new() -> Self {
+    Self { records: vec![] }
   }
 
   pub fn is_available(&self, record: &LogRecord) -> bool {

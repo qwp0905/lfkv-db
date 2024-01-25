@@ -12,6 +12,18 @@ struct LogBufferCore {
 pub struct LogBuffer(Mutex<LogBufferCore>);
 
 impl LogBuffer {
+  pub fn new() -> Self {
+    Self(Mutex::new(LogBufferCore {
+      last_transaction: 0,
+      map: Default::default(),
+      size: 0,
+    }))
+  }
+
+  pub fn initial_state(&self, last_transaction: usize) {
+    self.0.l().last_transaction = last_transaction
+  }
+
   pub fn new_transaction(&self) -> usize {
     let mut core = self.0.l();
     let tx_id = core.last_transaction + 1;
