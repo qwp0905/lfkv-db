@@ -25,6 +25,7 @@ impl<T, E, R> Background<T, E, R> {
       Ok(())
     });
   }
+
   pub fn recv_done<F>(&mut self, f: F)
   where
     T: Send + 'static,
