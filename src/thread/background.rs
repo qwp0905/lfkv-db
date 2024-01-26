@@ -1,48 +1,24 @@
-use std::panic::UnwindSafe;
+use std::{panic::UnwindSafe, thread::JoinHandle};
 
 use crate::{ContextReceiver, StoppableChannel};
 
-use super::ThreadWorker;
-
-pub struct Background<T, E, R = ()> {
-  worker: ThreadWorker<Result<(), E>>,
+pub struct Background<T, R = ()> {
   chan: StoppableChannel<T, R>,
   rx: ContextReceiver<T, R>,
+  thread: Option<JoinHandle<()>>,
+  name: String,
+  stack_size: usize,
 }
-impl<T, E, R> Background<T, E, R> {
-  pub fn recv_new<F>(&mut self, f: F)
-  where
-    T: Send + 'static,
-    R: Send + 'static,
-    E: 'static,
-    F: FnOnce(T) -> Result<R, E> + Clone + Send + UnwindSafe + 'static,
-  {
-    let rx = self.rx.clone();
-    self.worker.execute(move || {
-      while let Ok(v) = rx.recv_new() {
-        f.clone()(v)?;
-      }
-      Ok(())
-    });
-  }
-
-  pub fn recv_done<F>(&mut self, f: F)
-  where
-    T: Send + 'static,
-    R: Send + 'static,
-    E: 'static,
-    F: FnOnce(T) -> Result<R, E> + Clone + Send + UnwindSafe + 'static,
-  {
-    let rx = self.rx.clone();
-    self.worker.execute(move || {
-      while let Ok((v, done)) = rx.recv_done() {
-        done.send(f.clone()(v)?).unwrap();
-      }
-      Ok(())
-    });
+impl<T, R> Background<T, R> {
+  pub fn recv_new(&self) {
+    let thread = std::thread::Builder::new()
+      .name(self.name.to_owned())
+      .stack_size(self.stack_size)
+      .spawn(move || {})
+      .unwrap();
   }
 }
-impl<T, R, E> Drop for Background<T, R, E> {
+impl<T, R> Drop for Background<T, R> {
   fn drop(&mut self) {
     self.chan.terminate()
   }
