@@ -1,6 +1,9 @@
 mod channel;
 pub use channel::*;
 
+mod background;
+pub use background::*;
+
 mod counter;
 use counter::*;
 mod worker;

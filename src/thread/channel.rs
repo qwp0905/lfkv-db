@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use crossbeam::channel::{
-  unbounded, Receiver, RecvError, RecvTimeoutError, Sender,
-};
+use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -68,10 +66,7 @@ impl<T, R> ContextReceiver<T, R> {
     return Err(RecvError);
   }
 
-  pub fn recv_new_or_timeout(
-    &self,
-    timeout: Duration,
-  ) -> Result<Option<T>, RecvError> {
+  pub fn recv_new_or_timeout(&self, timeout: Duration) -> Result<Option<T>, RecvError> {
     match self.0.recv_timeout(timeout) {
       Ok(c) => {
         if let StoppableContext::New(v) = c {
@@ -126,5 +121,10 @@ impl<T, R> ContextReceiver<T, R> {
     timeout
       .map(|to| self.0.recv_timeout(to))
       .unwrap_or(self.0.recv().map_err(|_| RecvTimeoutError::Disconnected))
+  }
+}
+impl<T, R> Clone for ContextReceiver<T, R> {
+  fn clone(&self) -> Self {
+    Self(self.0.clone())
   }
 }
