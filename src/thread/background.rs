@@ -4,12 +4,12 @@ use crate::{ContextReceiver, StoppableChannel};
 
 use super::ThreadWorker;
 
-pub struct Background<T, R, E> {
+pub struct Background<T, E, R = ()> {
   worker: ThreadWorker<Result<(), E>>,
   chan: StoppableChannel<T, R>,
   rx: ContextReceiver<T, R>,
 }
-impl<T, R, E> Background<T, R, E> {
+impl<T, E, R> Background<T, E, R> {
   pub fn recv_new<F>(&mut self, f: F)
   where
     T: Send + 'static,
