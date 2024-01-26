@@ -8,3 +8,6 @@ use worker::*;
 
 mod executor;
 pub use executor::*;
+
+mod pool;
+pub use pool::*;
