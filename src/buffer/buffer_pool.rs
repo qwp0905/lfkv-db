@@ -10,7 +10,7 @@ use super::PageCache;
 pub struct BufferPool {
   cache: Arc<PageCache>,
   disk: Arc<PageSeeker>,
-  background: ThreadPool<Result<()>>,
+  background: Arc<ThreadPool<Result<()>>>,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
 }
 

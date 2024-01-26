@@ -48,6 +48,14 @@ impl LogBuffer {
     return records;
   }
 
+  pub fn rollback(&self, tx_id: usize) {
+    let mut core = self.0.l();
+    core
+      .map
+      .remove(&tx_id)
+      .map(|records| core.size -= records.len());
+  }
+
   pub fn len(&self) -> usize {
     self.0.l().size
   }

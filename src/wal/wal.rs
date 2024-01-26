@@ -1,16 +1,13 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   path::PathBuf,
-  sync::{Arc, Mutex, RwLock},
+  sync::{Arc, RwLock},
   time::{Duration, Instant},
 };
 
-use crossbeam::channel::Receiver;
-
 use crate::{
-  disk::PageSeeker, replace_default, size, ContextReceiver, DroppableReceiver,
-  EmptySender, Page, Result, Serializable, ShortenedMutex, ShortenedRwLock,
-  StoppableChannel, ThreadPool,
+  disk::PageSeeker, replace_default, ContextReceiver, DroppableReceiver, EmptySender,
+  Page, Result, Serializable, ShortenedRwLock, StoppableChannel, ThreadPool,
 };
 
 use super::{LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -26,8 +23,16 @@ pub struct LogStorageConfig {
   max_file_size: usize,
 }
 
-pub struct LogStorage {
-  core: Mutex<LogStorageCore>,
+struct LogStorage {
+  buffer: Arc<LogBuffer>,
+  commit_c: StoppableChannel<usize>,
+  background: Arc<ThreadPool<Result<()>>>,
+  disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
+  io_c: StoppableChannel<Vec<LogRecord>>,
+  checkpoint_c: StoppableChannel<()>,
+  config: LogStorageConfig,
+  flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
+  cursor: Arc<RwLock<usize>>,
 }
 impl LogStorage {
   pub fn open(
@@ -42,7 +47,7 @@ impl LogStorage {
     let (io_c, io_rx) = StoppableChannel::new();
     let (checkpoint_c, checkpoint_rx) = StoppableChannel::new();
 
-    let core = LogStorageCore::new(
+    let core = Self::new(
       buffer,
       commit_c,
       background,
@@ -59,37 +64,9 @@ impl LogStorage {
     core.start_checkpoint(checkpoint_rx, last_applied);
     core.start_io(io_rx, last_index);
 
-    Ok(Self {
-      core: Mutex::new(core),
-    })
+    Ok(core)
   }
 
-  pub fn new_transaction(&self) -> Result<usize> {
-    self.core.l().new_transaction()
-  }
-
-  pub fn append(&self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
-    self.core.l().append(tx_id, page_index, data)
-  }
-
-  pub fn commit(&self, tx_id: usize) -> Result<()> {
-    let rx = self.core.l().commit(tx_id)?;
-    Ok(rx.drop_one())
-  }
-}
-
-struct LogStorageCore {
-  buffer: Arc<LogBuffer>,
-  commit_c: StoppableChannel<usize>,
-  background: Arc<ThreadPool<Result<()>>>,
-  disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
-  io_c: StoppableChannel<Vec<LogRecord>>,
-  checkpoint_c: StoppableChannel<()>,
-  config: LogStorageConfig,
-  flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
-  cursor: Arc<RwLock<usize>>,
-}
-impl LogStorageCore {
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<usize>,
@@ -204,7 +181,7 @@ impl LogStorageCore {
     });
   }
 
-  fn append(&mut self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
+  pub fn append(&self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
     self.buffer.append(tx_id, page_index, data);
     if self.buffer.len() >= self.config.max_buffer_size {
       self.io_c.send_with_done(self.buffer.flush());
@@ -212,7 +189,7 @@ impl LogStorageCore {
     Ok(())
   }
 
-  fn new_transaction(&mut self) -> Result<usize> {
+  pub fn new_transaction(&self) -> Result<usize> {
     let tx_id = self.buffer.new_transaction();
     if self.buffer.len() >= self.config.max_buffer_size {
       self.io_c.send_with_done(self.buffer.flush());
@@ -220,10 +197,10 @@ impl LogStorageCore {
     return Ok(tx_id);
   }
 
-  fn commit(&mut self, tx_id: usize) -> Result<Receiver<()>> {
+  pub fn commit(&self, tx_id: usize) -> Result<()> {
     let records = self.buffer.commit(tx_id);
     self.commit_c.send(tx_id);
-    Ok(self.io_c.send_with_done(records))
+    Ok(self.io_c.send_with_done(records).drop_one())
   }
 
   fn replay(&self) -> Result<(usize, usize, usize)> {
