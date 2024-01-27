@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
   disk::PageSeeker, replace_default, ContextReceiver, DroppableReceiver, EmptySender,
-  Page, Result, Serializable, ShortenedRwLock, StoppableChannel, ThreadExecutor,
+  Page, Result, Serializable, ShortenedRwLock, StoppableChannel, ThreadPool,
 };
 
 use super::{LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -26,7 +26,7 @@ pub struct LogStorageConfig {
 struct LogStorage {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<usize>,
-  background: Arc<ThreadExecutor<Result<()>>>,
+  background: Arc<ThreadPool<Result<()>>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>>,
   checkpoint_c: StoppableChannel<()>,
@@ -39,7 +39,7 @@ impl LogStorage {
     config: LogStorageConfig,
     commit_c: StoppableChannel<usize>,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
-    background: Arc<ThreadExecutor<Result<()>>>,
+    background: Arc<ThreadPool<Result<()>>>,
   ) -> Result<Self> {
     let disk = Arc::new(PageSeeker::open(&config.path)?);
     let buffer = Arc::new(LogBuffer::new());
@@ -70,7 +70,7 @@ impl LogStorage {
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<usize>,
-    background: Arc<ThreadExecutor<Result<()>>>,
+    background: Arc<ThreadPool<Result<()>>>,
     disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>>,
     checkpoint_c: StoppableChannel<()>,

@@ -31,7 +31,7 @@ impl BaseConfig {
 }
 
 #[allow(unused)]
-pub struct ThreadExecutor<T = ()> {
+pub struct ThreadPool<T = ()> {
   ready: Box<Receiver<ThreadWorker<T>>>,
   done: Box<StoppableChannel<ThreadWorker<T>>>,
   main: Option<ThreadWorker<std::io::Result<()>>>,
@@ -42,7 +42,7 @@ pub struct ThreadExecutor<T = ()> {
 static PANIC_HOOK: Once = Once::new();
 
 #[allow(unused)]
-impl<T: 'static> ThreadExecutor<T> {
+impl<T: 'static> ThreadPool<T> {
   pub fn new(
     max_len: usize,
     worker_stack_size: usize,
@@ -127,7 +127,7 @@ impl<T: 'static> ThreadExecutor<T> {
     self.count.fetch_max(size);
   }
 }
-impl<T> Drop for ThreadExecutor<T> {
+impl<T> Drop for ThreadPool<T> {
   fn drop(&mut self) {
     self.done.terminate();
     if let Some(mut main) = self.main.take() {
@@ -137,10 +137,10 @@ impl<T> Drop for ThreadExecutor<T> {
     self.ready.drop_all();
   }
 }
-impl<T: 'static> Default for ThreadExecutor<T> {
+impl<T: 'static> Default for ThreadPool<T> {
   fn default() -> Self {
     Self::new(1024, size::mb(2), "default", Some(Duration::from_secs(300)))
   }
 }
-impl<T: 'static> UnwindSafe for ThreadExecutor<T> {}
-impl<T: 'static> RefUnwindSafe for ThreadExecutor<T> {}
+impl<T: 'static> UnwindSafe for ThreadPool<T> {}
+impl<T: 'static> RefUnwindSafe for ThreadPool<T> {}

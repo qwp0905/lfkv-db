@@ -9,13 +9,13 @@ use crate::{
   DroppableReceiver,
 };
 
-use crate::thread::{ContextReceiver, StoppableChannel, ThreadExecutor};
+use crate::thread::{ContextReceiver, StoppableChannel, ThreadPool};
 
 use super::{PageLock, PageLocker};
 
 pub struct LockManager {
   tree_locks: Arc<Mutex<HashMap<usize, PageLocker>>>,
-  background: ThreadExecutor,
+  background: ThreadPool,
   release: StoppableChannel<usize>,
 }
 impl LockManager {
@@ -23,7 +23,7 @@ impl LockManager {
     let (release, recv) = StoppableChannel::new();
     let tm = Self {
       tree_locks: Default::default(),
-      background: ThreadExecutor::new(1, size::kb(2), "transaction manager", None),
+      background: ThreadPool::new(1, size::kb(2), "transaction manager", None),
       release,
     };
     tm.start_release(recv);

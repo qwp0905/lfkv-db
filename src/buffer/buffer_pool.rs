@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
   disk::PageSeeker, ContextReceiver, EmptySender, Error, Page, Result, StoppableChannel,
-  ThreadExecutor,
+  ThreadPool,
 };
 
 use super::PageCache;
@@ -10,7 +10,7 @@ use super::PageCache;
 pub struct BufferPool {
   cache: Arc<PageCache>,
   disk: Arc<PageSeeker>,
-  background: Arc<ThreadExecutor<Result<()>>>,
+  background: Arc<ThreadPool<Result<()>>>,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
 }
 
