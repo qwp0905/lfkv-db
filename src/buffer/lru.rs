@@ -292,15 +292,15 @@ impl<K, V> Entries<K, V> {
 
 enum EntryStatus<K, V> {
   Vacant(InsertSlot, K, u64),
-  Occupied(
-    hashbrown::raw::Bucket<NonNull<DoubleLinkedListElement<Bucket<K, V>>>>,
-  ),
+  Occupied(hashbrown::raw::Bucket<NonNull<DoubleLinkedListElement<Bucket<K, V>>>>),
 }
 
+#[allow(unused)]
 pub struct CacheEntry<'a, K, V, S> {
   inner: &'a mut LRUCache<K, V, S>,
   status: EntryStatus<K, V>,
 }
+#[allow(unused)]
 impl<'a, K, V, S> CacheEntry<'a, K, V, S>
 where
   K: Eq + Hash,
@@ -337,13 +337,13 @@ where
       status: Status::Old,
     });
 
-    let b =
-      unsafe { self.inner.raw.insert_in_slot(h, slot, pointer.to_owned()) };
+    let b = unsafe { self.inner.raw.insert_in_slot(h, slot, pointer.to_owned()) };
     self.inner.entries.add(pointer);
     return unsafe { b.as_mut().as_mut() }.as_mut().as_mut();
   }
 }
 
+#[allow(unused)]
 impl<'a, K, V, S> CacheEntry<'a, K, V, S>
 where
   K: Eq + Hash,

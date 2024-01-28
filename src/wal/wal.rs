@@ -10,7 +10,7 @@ use crate::{
   Page, Result, Serializable, ShortenedRwLock, StoppableChannel, ThreadPool,
 };
 
-use super::{LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
+use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
 
 #[derive(Debug, Clone)]
 pub struct LogStorageConfig {
@@ -25,7 +25,7 @@ pub struct LogStorageConfig {
 
 struct LogStorage {
   buffer: Arc<LogBuffer>,
-  commit_c: StoppableChannel<usize>,
+  commit_c: StoppableChannel<CommitInfo>,
   background: Arc<ThreadPool<Result<()>>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>>,
@@ -33,11 +33,12 @@ struct LogStorage {
   config: LogStorageConfig,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
   cursor: Arc<RwLock<usize>>,
+  last_index: Arc<RwLock<usize>>,
 }
 impl LogStorage {
   pub fn open(
     config: LogStorageConfig,
-    commit_c: StoppableChannel<usize>,
+    commit_c: StoppableChannel<CommitInfo>,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
     background: Arc<ThreadPool<Result<()>>>,
   ) -> Result<Self> {
@@ -57,19 +58,21 @@ impl LogStorage {
       config,
       flush_c,
       Default::default(),
+      Default::default(),
     );
-    let (last_index, last_transaction, last_applied) = core.replay()?;
+
+    let (last_transaction, last_applied) = core.replay()?;
 
     core.buffer.initial_state(last_transaction);
     core.start_checkpoint(checkpoint_rx, last_applied);
-    core.start_io(io_rx, last_index);
+    core.start_io(io_rx);
 
     Ok(core)
   }
 
   fn new(
     buffer: Arc<LogBuffer>,
-    commit_c: StoppableChannel<usize>,
+    commit_c: StoppableChannel<CommitInfo>,
     background: Arc<ThreadPool<Result<()>>>,
     disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>>,
@@ -77,6 +80,7 @@ impl LogStorage {
     config: LogStorageConfig,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
     cursor: Arc<RwLock<usize>>,
+    last_index: Arc<RwLock<usize>>,
   ) -> Self {
     Self {
       buffer,
@@ -88,10 +92,11 @@ impl LogStorage {
       config,
       flush_c,
       cursor,
+      last_index,
     }
   }
 
-  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>>, mut last_index: usize) {
+  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>>) {
     let group_commit_delay = self.config.group_commit_delay;
     let group_commit_count = self.config.group_commit_count;
     let max_file_size = self.config.max_file_size;
@@ -99,6 +104,8 @@ impl LogStorage {
     let disk = self.disk.clone();
     let cursor = self.cursor.clone();
     let checkpoint_c = self.checkpoint_c.clone();
+    let last_index = self.last_index.clone();
+    let commit_c = self.commit_c.clone();
 
     self.background.schedule(move || {
       let mut current = LogEntry::new();
@@ -111,8 +118,11 @@ impl LogStorage {
           v.push(done);
           for mut record in records {
             counter += 1;
-            record.index = last_index + 1;
-            last_index += 1;
+            *last_index.wl() += 1;
+            record.index = *last_index.rl();
+            if let Operation::Commit = record.operation {
+              commit_c.send(CommitInfo::new(record.transaction_id, record.index))
+            }
 
             if !current.is_available(&record) {
               let mut c = cursor.wl();
@@ -161,6 +171,7 @@ impl LogStorage {
         let end = (to_be_apply < last_applied)
           .then(|| to_be_apply + max_file_size)
           .unwrap_or(to_be_apply);
+
         for i in last_applied..end {
           let entry: LogEntry = disk.read(i % max_file_size)?.deserialize()?;
           for record in entry.records {
@@ -189,21 +200,20 @@ impl LogStorage {
     Ok(())
   }
 
-  pub fn new_transaction(&self) -> Result<usize> {
+  pub fn new_transaction(&self) -> Result<(usize, usize)> {
     let tx_id = self.buffer.new_transaction();
     if self.buffer.len() >= self.config.max_buffer_size {
       self.io_c.send_with_done(self.buffer.flush());
     }
-    return Ok(tx_id);
+    return Ok((tx_id, *self.last_index.rl()));
   }
 
   pub fn commit(&self, tx_id: usize) -> Result<()> {
     let records = self.buffer.commit(tx_id);
-    self.commit_c.send(tx_id);
     Ok(self.io_c.send_with_done(records).drop_one())
   }
 
-  fn replay(&self) -> Result<(usize, usize, usize)> {
+  fn replay(&self) -> Result<(usize, usize)> {
     let mut cursor = 0;
     let mut records: BTreeMap<usize, LogRecord> = BTreeMap::new();
 
@@ -276,7 +286,8 @@ impl LogStorage {
 
     self.flush_c.send_with_done(to_be_flush).drop_one();
     *self.cursor.wl() = cursor;
+    *self.last_index.wl() = last_index;
 
-    Ok((last_index, last_transaction, last_applied))
+    Ok((last_transaction, last_applied))
   }
 }
