@@ -28,6 +28,14 @@ impl MVCC {
       self.committed.insert(commit.log_index, page);
     });
   }
+
+  pub fn vacuum(&mut self, log_index: usize) {
+    self.committed = self.committed.split_off(&log_index)
+  }
+
+  pub fn append_uncommitted(&mut self, tx_id: usize, page: Page) {
+    self.uncommitted.insert(tx_id, page);
+  }
 }
 
 // impl Serializable for MVCC {

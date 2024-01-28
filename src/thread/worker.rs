@@ -106,10 +106,7 @@ impl<T> Drop for ThreadWorker<T> {
         self.channel.terminate();
       }
       if let Err(err) = t.join() {
-        logger::error(format!(
-          "error on thread {}\n{:?}",
-          self.config.name, err
-        ));
+        logger::error(format!("error on thread {}\n{:?}", self.config.name, err));
       }
     }
   }
@@ -125,9 +122,7 @@ fn spawn<T: 'static>(
     .stack_size(stack_size)
     .name(name)
     .spawn(move || {
-      while let Ok(StoppableContext::WithDone((job, done))) =
-        rx.maybe_timeout(timeout)
-      {
+      while let Ok(StoppableContext::WithDone((job, done))) = rx.maybe_timeout(timeout) {
         catch_unwind(job).ok();
         done.close();
       }
