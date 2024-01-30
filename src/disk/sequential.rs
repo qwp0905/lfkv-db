@@ -1,7 +1,8 @@
 use std::{
   collections::HashMap,
-  fs::File,
+  fs::{File, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
+  path::Path,
   sync::{Arc, Mutex, RwLock},
   time::{Duration, Instant},
 };
@@ -20,7 +21,7 @@ pub struct Sequential<const N: usize> {
   io_c: StoppableChannel<Page<N>, usize>,
 }
 impl<const N: usize> Sequential<N> {
-  pub fn start_io(&self, rx: ContextReceiver<Page<N>, usize>) {
+  fn start_io(&self, rx: ContextReceiver<Page<N>, usize>) {
     let count = self.count;
     let delay = self.delay;
     let file = self.file.clone();
@@ -43,7 +44,12 @@ impl<const N: usize> Sequential<N> {
             continue;
           }
         }
-        m.drain().for_each(|(i, done)| done.send(i).unwrap());
+
+        if m.len() != 0 {
+          file.l().sync_all().map_err(Error::IO)?;
+          m.drain().for_each(|(i, done)| done.send(i).unwrap());
+        }
+
         point = delay;
         start = Instant::now();
       }
@@ -62,5 +68,9 @@ impl<const N: usize> Sequential<N> {
       .seek(SeekFrom::Start((*self.cursor.rl() * N) as u64))
       .map_err(Error::IO)?;
     Ok(page)
+  }
+
+  pub fn write(&self, page: Page<N>) -> usize {
+    self.io_c.send_with_done(page).recv().unwrap()
   }
 }
