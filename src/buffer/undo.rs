@@ -43,10 +43,20 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
 
 pub struct Rollback {
   disk: PageSeeker<UNDO_PAGE_SIZE>,
+  cursor: usize,
 }
 impl Rollback {
   pub fn get(&self, log_index: usize) -> Result<Page> {
     let undo: UndoLog = self.disk.read(log_index * UNDO_PAGE_SIZE)?.deserialize()?;
     Ok(undo.data)
+  }
+
+  pub fn append(&mut self, log: UndoLog) -> Result<usize> {
+    let cursor = self.cursor;
+    self.cursor += 1;
+    self.cursor %= UNDO_PAGE_SIZE;
+    self.disk.write(cursor * UNDO_PAGE_SIZE, log.serialize()?)?;
+    self.disk.fsync()?;
+    Ok(cursor)
   }
 }
