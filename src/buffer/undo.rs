@@ -1,4 +1,15 @@
-use crate::{disk::PageSeeker, Error, Page, Result, Serializable, PAGE_SIZE};
+use std::{
+  collections::HashMap,
+  sync::{Arc, Mutex, RwLock},
+  time::{Duration, Instant},
+};
+
+use crate::{
+  disk::PageSeeker, ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex,
+  ShortenedRwLock, StoppableChannel, ThreadPool, PAGE_SIZE,
+};
+
+use super::LRUCache;
 
 const UNDO_PAGE_SIZE: usize = PAGE_SIZE + 24;
 
@@ -17,6 +28,16 @@ impl UndoLog {
       data,
       undo_index,
     }
+  }
+}
+impl Clone for UndoLog {
+  fn clone(&self) -> Self {
+    Self::new(
+      self.log_index,
+      self.tx_id,
+      self.data.copy(),
+      self.undo_index,
+    )
   }
 }
 impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
@@ -41,22 +62,71 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
   }
 }
 
-pub struct Rollback {
-  disk: PageSeeker<UNDO_PAGE_SIZE>,
-  cursor: usize,
+pub struct RollbackStorage {
+  cache: Arc<Mutex<LRUCache<usize, UndoLog>>>,
+  disk: Arc<PageSeeker<UNDO_PAGE_SIZE>>,
+  cursor: Arc<RwLock<usize>>,
+  background: ThreadPool<Result<()>>,
+  delay: Duration,
+  count: usize,
+  io_c: StoppableChannel<Page<UNDO_PAGE_SIZE>, usize>,
 }
-impl Rollback {
-  pub fn get(&self, log_index: usize) -> Result<Page> {
-    let undo: UndoLog = self.disk.read(log_index * UNDO_PAGE_SIZE)?.deserialize()?;
-    Ok(undo.data)
+impl RollbackStorage {
+  fn start_io(&self, rx: ContextReceiver<Page<UNDO_PAGE_SIZE>, usize>) {
+    let count = self.count;
+    let delay = self.delay;
+    let disk = self.disk.clone();
+    let cursor = self.cursor.clone();
+
+    self.background.schedule(move || {
+      let mut start = Instant::now();
+      let mut point = delay;
+      let mut m = HashMap::new();
+      while let Ok(o) = rx.recv_done_or_timeout(delay) {
+        if let Some((p, done)) = o {
+          let mut c = cursor.wl();
+          m.insert(*c, done);
+          disk.write(*c, p)?;
+          *c += 1;
+
+          if m.len() < count {
+            point -= Instant::now().duration_since(start).min(point);
+            start = Instant::now();
+            continue;
+          }
+        }
+
+        if m.len() != 0 {
+          disk.fsync()?;
+          m.drain().for_each(|(i, done)| done.send(i).unwrap())
+        }
+
+        point = delay;
+        start = Instant::now();
+      }
+      Ok(())
+    });
+  }
+
+  pub fn get(&self, log_index: usize, undo_index: usize) -> Result<Page> {
+    if let Some(log) = self.cache.l().get(&undo_index) {
+      if log_index <= log.log_index {
+        return Ok(log.data.copy());
+      }
+
+      return self.get(log_index, log.undo_index);
+    }
+
+    let log: UndoLog = self.disk.read(log_index)?.deserialize()?;
+    self.cache.l().insert(log_index, log.clone());
+    if log_index <= log.log_index {
+      return Ok(log.data);
+    }
+
+    return self.get(log_index, log.undo_index);
   }
 
   pub fn append(&mut self, log: UndoLog) -> Result<usize> {
-    let cursor = self.cursor;
-    self.cursor += 1;
-    self.cursor %= UNDO_PAGE_SIZE;
-    self.disk.write(cursor * UNDO_PAGE_SIZE, log.serialize()?)?;
-    self.disk.fsync()?;
-    Ok(cursor)
+    Ok(self.io_c.send_with_done(log.serialize()?).recv().unwrap())
   }
 }
