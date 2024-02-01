@@ -1,15 +1,21 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::{
   disk::PageSeeker, wal::CommitInfo, ContextReceiver, EmptySender, Page, Result,
   StoppableChannel, ThreadPool,
 };
 
+use super::LRUCache;
+
 pub struct DataBlock {
   pub log_index: usize,
   pub tx_id: usize,
   pub undo_index: usize,
   pub data: Page,
+}
+
+pub struct BufferPool {
+  cache: Arc<Mutex<LRUCache<usize, DataBlock>>>,
 }
 
 // use super::PageCache;

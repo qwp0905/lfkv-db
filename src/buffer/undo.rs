@@ -1,5 +1,6 @@
 use std::{
   collections::HashMap,
+  ops::Add,
   path::PathBuf,
   sync::{Arc, Mutex},
   time::{Duration, Instant},
@@ -91,23 +92,58 @@ pub struct RollbackStorageConfig {
   fsync_count: usize,
   max_cache_size: usize,
   max_file_size: usize,
-  io_thread_size: usize,
   path: PathBuf,
 }
 
 pub struct RollbackStorage {
   cache: Arc<Mutex<LRUCache<usize, UndoLog>>>,
   disk: Arc<PageSeeker<UNDO_PAGE_SIZE>>,
-  background: ThreadPool<Result<()>>,
+  background: Arc<ThreadPool<Result<()>>>,
   io_c: StoppableChannel<DataBlock, usize>,
   config: RollbackStorageConfig,
 }
 impl RollbackStorage {
-  pub fn open(config: RollbackStorageConfig) -> Result<()> {
-    // let disk = PageSeeker::open(config.path)?;
-    // let cache = LRUCache::new();
+  pub fn open(
+    config: RollbackStorageConfig,
+    background: Arc<ThreadPool<Result<()>>>,
+  ) -> Result<Self> {
+    let disk = Arc::new(PageSeeker::open(config.path.as_path())?);
+    let cache = Default::default();
+    let (io_c, rx) = StoppableChannel::new();
 
-    Ok(())
+    let storage = Self {
+      cache,
+      disk,
+      background,
+      io_c,
+      config,
+    };
+    let cursor = storage.replay()?;
+    storage.start_io(rx, cursor);
+    Ok(storage)
+  }
+
+  fn replay(&self) -> Result<usize> {
+    let mut cursor = 0;
+    for index in 0..self.config.max_file_size {
+      let log: UndoLog = match self.disk.read(index) {
+        Ok(page) => match page.deserialize() {
+          Ok(log) => log,
+          Err(_) => continue,
+        },
+        Err(_) => break,
+      };
+      let before = cursor;
+      cursor = log.index.add(1).rem_euclid(usize::MAX);
+      if index == 0 {
+        continue;
+      }
+      if before != log.index {
+        break;
+      }
+    }
+
+    Ok(cursor)
   }
 
   fn start_io(&self, rx: ContextReceiver<DataBlock, usize>, mut cursor: usize) {
@@ -125,8 +161,8 @@ impl RollbackStorage {
           m.insert(cursor, done);
           let mut log: UndoLog = data.into();
           log.index = cursor;
-          disk.write(cursor % max, log.serialize()?)?;
-          cursor = (cursor + 1) % usize::MAX;
+          disk.write(cursor.rem_euclid(max), log.serialize()?)?;
+          cursor = cursor.add(1).rem_euclid(usize::MAX);
 
           if m.len() < count {
             point -= Instant::now().duration_since(start).min(point);
@@ -148,28 +184,35 @@ impl RollbackStorage {
   }
 
   pub fn get(&self, log_index: usize, undo_index: usize) -> Result<Page> {
-    if let Some(log) = self.cache.l().get(&undo_index) {
-      if log_index <= log.log_index {
-        return Ok(log.data.copy());
+    let mut current = undo_index;
+    loop {
+      let mut cache = self.cache.l();
+      if let Some(log) = cache.get(&current) {
+        if log_index <= log.log_index {
+          return Ok(log.data.copy());
+        }
+        current = log.undo_index;
+        continue;
       }
 
-      return self.get(log_index, log.undo_index);
-    }
+      let log: UndoLog = self
+        .disk
+        .read(undo_index.rem_euclid(self.config.max_file_size))?
+        .deserialize()?;
+      if log.index != undo_index {
+        return Err(Error::NotFound);
+      }
 
-    let log: UndoLog = self
-      .disk
-      .read(undo_index % self.config.max_file_size)?
-      .deserialize()?;
-    if log.index != undo_index {
-      return Err(Error::NotFound);
-    }
+      cache.insert(undo_index, log.clone());
+      if cache.len() >= self.config.max_cache_size {
+        cache.pop_old();
+      }
+      if log_index <= log.log_index {
+        return Ok(log.data);
+      }
 
-    self.cache.l().insert(undo_index, log.clone());
-    if log_index <= log.log_index {
-      return Ok(log.data);
+      current = log.log_index
     }
-
-    return self.get(log_index, log.undo_index);
   }
 
   pub fn append(&mut self, data: DataBlock) -> Result<usize> {

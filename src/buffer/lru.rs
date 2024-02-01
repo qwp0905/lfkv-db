@@ -46,7 +46,7 @@ pub struct LRUCache<K, V, S = RandomState> {
 }
 #[allow(unused)]
 impl<K, V, S> LRUCache<K, V, S> {
-  pub fn with_hasher(hasher: S, capacity: usize) -> Self {
+  pub fn with_hasher(hasher: S) -> Self {
     Self {
       raw: Default::default(),
       entries: Default::default(),
@@ -62,10 +62,6 @@ impl<K, V> LRUCache<K, V, RandomState> {
       entries: Default::default(),
       hasher: Default::default(),
     }
-  }
-
-  pub fn with_capacity(capacity: usize) -> Self {
-    todo!()
   }
 }
 impl<K, V> Default for LRUCache<K, V, RandomState> {
