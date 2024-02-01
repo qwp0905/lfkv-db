@@ -5,6 +5,13 @@ use crate::{
   StoppableChannel, ThreadPool,
 };
 
+pub struct DataBlock {
+  pub log_index: usize,
+  pub tx_id: usize,
+  pub undo_index: usize,
+  pub data: Page,
+}
+
 // use super::PageCache;
 
 // pub struct BufferPool {

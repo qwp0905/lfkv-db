@@ -63,6 +63,10 @@ impl<K, V> LRUCache<K, V, RandomState> {
       hasher: Default::default(),
     }
   }
+
+  pub fn with_capacity(capacity: usize) -> Self {
+    todo!()
+  }
 }
 impl<K, V> Default for LRUCache<K, V, RandomState> {
   fn default() -> Self {
