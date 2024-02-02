@@ -1,11 +1,32 @@
 use std::{
-  collections::{HashMap, HashSet},
+  collections::{BTreeMap, HashMap, HashSet},
   sync::Mutex,
 };
 
 use crate::{Page, ShortenedMutex};
 
-use super::LRUCache;
+use super::{DataBlock, LRUCache};
+
+pub struct CacheStorage(Mutex<CacheStorageCore>);
+struct CacheStorageCore {
+  cache: LRUCache<usize, DataBlock>,
+  evicted: BTreeMap<usize, DataBlock>,
+  max_cache_size: usize,
+}
+impl CacheStorage {
+  pub fn get(&self, index: usize) -> Option<DataBlock> {
+    let mut core = self.0.l();
+    core.cache.get(&index).map(|block| block.copy())
+  }
+
+  pub fn insert(&self, index: usize, block: DataBlock) {
+    let mut core = self.0.l();
+    core.cache.insert(index, block);
+    if core.cache.len() >= core.max_cache_size {
+      core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
+    }
+  }
+}
 
 // pub struct PageCache(Mutex<PageCacheCore>);
 // struct PageCacheCore {

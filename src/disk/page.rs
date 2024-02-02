@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 
 use super::Serializable;
 
-pub const PAGE_SIZE: usize = size::kb(4);
+pub const PAGE_SIZE: usize = size::kb(4) - 24;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Page<const T: usize = PAGE_SIZE> {

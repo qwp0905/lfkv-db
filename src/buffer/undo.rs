@@ -17,7 +17,7 @@ const UNDO_PAGE_SIZE: usize = PAGE_SIZE + 32;
 
 pub struct UndoLog {
   index: usize,
-  log_index: usize,
+  commit_index: usize,
   tx_id: usize,
   data: Page,
   undo_index: usize,
@@ -26,14 +26,14 @@ pub struct UndoLog {
 impl UndoLog {
   fn new(
     index: usize,
-    log_index: usize,
+    commit_index: usize,
     tx_id: usize,
     data: Page,
     undo_index: usize,
   ) -> Self {
     Self {
       index,
-      log_index,
+      commit_index,
       tx_id,
       data,
       undo_index,
@@ -44,7 +44,7 @@ impl Clone for UndoLog {
   fn clone(&self) -> Self {
     Self::new(
       self.index,
-      self.log_index,
+      self.commit_index,
       self.tx_id,
       self.data.copy(),
       self.undo_index,
@@ -55,7 +55,7 @@ impl From<DataBlock> for UndoLog {
   fn from(value: DataBlock) -> Self {
     Self::new(
       0,
-      value.log_index,
+      value.commit_index,
       value.tx_id,
       value.data,
       value.undo_index,
@@ -68,7 +68,7 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
     let mut page = Page::new();
     let mut wt = page.writer();
     wt.write(&self.index.to_be_bytes())?;
-    wt.write(&self.log_index.to_be_bytes())?;
+    wt.write(&self.commit_index.to_be_bytes())?;
     wt.write(&self.tx_id.to_be_bytes())?;
     wt.write(&self.undo_index.to_be_bytes())?;
     wt.write(self.data.as_ref())?;
@@ -78,12 +78,12 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
   fn deserialize(value: &Page<UNDO_PAGE_SIZE>) -> core::result::Result<Self, Error> {
     let mut sc = value.scanner();
     let index = sc.read_usize()?;
-    let log_index = sc.read_usize()?;
+    let commit_index = sc.read_usize()?;
     let tx_id = sc.read_usize()?;
     let undo_index = sc.read_usize()?;
     let data = sc.read_n(PAGE_SIZE)?.into();
 
-    Ok(UndoLog::new(index, log_index, tx_id, data, undo_index))
+    Ok(UndoLog::new(index, commit_index, tx_id, data, undo_index))
   }
 }
 
@@ -183,12 +183,12 @@ impl RollbackStorage {
     });
   }
 
-  pub fn get(&self, log_index: usize, undo_index: usize) -> Result<Page> {
+  pub fn get(&self, commit_index: usize, undo_index: usize) -> Result<Page> {
     let mut current = undo_index;
     loop {
       let mut cache = self.cache.l();
       if let Some(log) = cache.get(&current) {
-        if log_index <= log.log_index {
+        if commit_index <= log.commit_index {
           return Ok(log.data.copy());
         }
         current = log.undo_index;
@@ -207,11 +207,11 @@ impl RollbackStorage {
       if cache.len() >= self.config.max_cache_size {
         cache.pop_old();
       }
-      if log_index <= log.log_index {
+      if commit_index <= log.commit_index {
         return Ok(log.data);
       }
 
-      current = log.log_index
+      current = log.commit_index
     }
   }
 
