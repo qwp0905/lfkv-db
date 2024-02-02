@@ -8,7 +8,7 @@ use crate::{
   Result, Serializable, ShortenedMutex, StoppableChannel, ThreadPool, PAGE_SIZE,
 };
 
-use super::{CacheStorage, LRUCache, RollbackStorage};
+use super::{CacheStorage, RollbackStorage};
 
 pub const BLOCK_SIZE: usize = size::kb(4);
 
