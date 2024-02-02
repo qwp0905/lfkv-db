@@ -1,11 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::{
+  collections::BTreeMap,
+  sync::{Arc, Mutex, RwLock},
+};
 
 use crate::{
   disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, EmptySender, Error, Page,
   Result, Serializable, ShortenedMutex, StoppableChannel, ThreadPool, PAGE_SIZE,
 };
 
-use super::{LRUCache, RollbackStorage};
+use super::{CacheStorage, LRUCache, RollbackStorage};
 
 pub const BLOCK_SIZE: usize = size::kb(4);
 
@@ -56,7 +59,7 @@ impl Serializable<Error, BLOCK_SIZE> for DataBlock {
 }
 
 pub struct BufferPool {
-  cache: Arc<Mutex<LRUCache<usize, DataBlock>>>,
+  cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
   disk: Arc<PageSeeker<BLOCK_SIZE>>,
   max_cache_size: usize,
@@ -64,15 +67,11 @@ pub struct BufferPool {
 impl BufferPool {
   pub fn get(&self, commit_index: usize, index: usize) -> Result<Page> {
     let block = {
-      let mut cache = self.cache.l();
-      match cache.get(&index) {
+      match self.cache.get(&index) {
         Some(block) => block.copy(),
         None => {
           let block: DataBlock = self.disk.read(index)?.deserialize()?;
-          cache.insert(index, block.copy());
-          if cache.len() >= self.max_cache_size {
-            cache.pop_old();
-          }
+          self.cache.insert(index, block.copy());
           block
         }
       }
@@ -82,6 +81,8 @@ impl BufferPool {
     }
     return self.rollback.get(commit_index, block.undo_index);
   }
+
+  pub fn insert(&self) {}
 }
 
 // use super::PageCache;

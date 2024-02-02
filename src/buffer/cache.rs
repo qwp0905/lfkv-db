@@ -14,9 +14,9 @@ struct CacheStorageCore {
   max_cache_size: usize,
 }
 impl CacheStorage {
-  pub fn get(&self, index: usize) -> Option<DataBlock> {
+  pub fn get(&self, index: &usize) -> Option<DataBlock> {
     let mut core = self.0.l();
-    core.cache.get(&index).map(|block| block.copy())
+    core.cache.get(index).map(|block| block.copy())
   }
 
   pub fn insert(&self, index: usize, block: DataBlock) {
