@@ -215,7 +215,11 @@ impl RollbackStorage {
     }
   }
 
-  pub fn append(&mut self, data: DataBlock) -> Result<usize> {
+  pub fn append(&self, data: DataBlock) -> Result<usize> {
     Ok(self.io_c.send_with_done(data).recv().unwrap())
+  }
+
+  pub fn commit(&self) {
+    let mut cache = self.cache.l();
   }
 }

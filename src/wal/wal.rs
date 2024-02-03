@@ -13,7 +13,7 @@ use crate::{
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
 
 #[derive(Debug, Clone)]
-pub struct LogStorageConfig {
+pub struct WriteAheadLogConfig {
   path: PathBuf,
   max_buffer_size: usize,
   checkpoint_interval: Duration,
@@ -23,21 +23,21 @@ pub struct LogStorageConfig {
   max_file_size: usize,
 }
 
-struct LogStorage {
+struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo>,
   background: Arc<ThreadPool<Result<()>>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>>,
   checkpoint_c: StoppableChannel<()>,
-  config: LogStorageConfig,
+  config: WriteAheadLogConfig,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
   cursor: Arc<RwLock<usize>>,
   last_index: Arc<RwLock<usize>>,
 }
-impl LogStorage {
+impl WriteAheadLog {
   pub fn open(
-    config: LogStorageConfig,
+    config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo>,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
     background: Arc<ThreadPool<Result<()>>>,
@@ -77,7 +77,7 @@ impl LogStorage {
     disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>>,
     checkpoint_c: StoppableChannel<()>,
-    config: LogStorageConfig,
+    config: WriteAheadLogConfig,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
     cursor: Arc<RwLock<usize>>,
     last_index: Arc<RwLock<usize>>,

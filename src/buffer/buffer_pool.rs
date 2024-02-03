@@ -1,6 +1,6 @@
 use std::{
   collections::BTreeMap,
-  sync::{Arc, Mutex, RwLock},
+  sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -20,6 +20,10 @@ pub struct DataBlock {
 }
 
 impl DataBlock {
+  pub fn uncommitted(tx_id: usize, undo_index: usize, data: Page) -> Self {
+    Self::new(0, tx_id, undo_index, data)
+  }
+
   pub fn new(commit_index: usize, tx_id: usize, undo_index: usize, data: Page) -> Self {
     Self {
       commit_index,
@@ -61,10 +65,33 @@ impl Serializable<Error, BLOCK_SIZE> for DataBlock {
 pub struct BufferPool {
   cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
+  uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
   disk: Arc<PageSeeker<BLOCK_SIZE>>,
   max_cache_size: usize,
+  background: ThreadPool<Result>,
 }
 impl BufferPool {
+  fn start_commit(&self, rx: ContextReceiver<CommitInfo>) {
+    let uncommitted = self.uncommitted.clone();
+    let cache = self.cache.clone();
+    let disk = self.disk.clone();
+
+    self.background.schedule(move || {
+      while let Ok(commit) = rx.recv_new() {
+        let mut u = uncommitted.l();
+        if let Some(v) = u.remove(&commit.tx_id) {
+          for index in v {
+            // if cache.commit(index, commit.tx_id, commit.commit_index) {
+            //   continue;
+            // }
+          }
+        };
+      }
+      //
+      Ok(())
+    });
+  }
+
   pub fn get(&self, commit_index: usize, index: usize) -> Result<Page> {
     let block = {
       match self.cache.get(&index) {
@@ -76,13 +103,33 @@ impl BufferPool {
         }
       }
     };
+
     if block.commit_index >= commit_index {
       return Ok(block.data.copy());
     }
+
     return self.rollback.get(commit_index, block.undo_index);
   }
 
-  pub fn insert(&self) {}
+  pub fn insert(&self, tx_id: usize, index: usize, data: Page) -> Result<()> {
+    let block = {
+      match self.cache.get(&index) {
+        Some(block) => block.copy(),
+        None => match self.disk.read(index) {
+          Ok(page) => page,
+          Err(Error::NotFound) => Page::new_empty(),
+          Err(err) => return Err(err),
+        }
+        .deserialize()?,
+      }
+    };
+    let undo_index = self.rollback.append(block.into())?;
+    let new_block = DataBlock::uncommitted(tx_id, undo_index, data);
+    self.cache.insert(index, new_block);
+    let mut un_c = self.uncommitted.l();
+    un_c.entry(tx_id).or_default().push(index);
+    Ok(())
+  }
 }
 
 // use super::PageCache;

@@ -18,14 +18,14 @@ impl MVCC {
 
     self
       .committed
-      .range(..commit.log_index)
+      .range(..commit.commit_index)
       .last()
       .map(second_of_two)
   }
 
   pub fn commit(&mut self, commit: CommitInfo) {
     self.uncommitted.remove(&commit.tx_id).map(|page| {
-      self.committed.insert(commit.log_index, page);
+      self.committed.insert(commit.commit_index, page);
     });
   }
 
