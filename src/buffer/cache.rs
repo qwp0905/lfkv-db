@@ -1,9 +1,9 @@
 use std::{
-  collections::{BTreeMap, HashMap, HashSet},
+  collections::{BTreeMap, BTreeSet, HashMap, HashSet},
   sync::Mutex,
 };
 
-use crate::{Page, ShortenedMutex};
+use crate::{deref, wal::CommitInfo, Page, ShortenedMutex};
 
 use super::{DataBlock, LRUCache};
 
@@ -11,20 +11,61 @@ pub struct CacheStorage(Mutex<CacheStorageCore>);
 struct CacheStorageCore {
   cache: LRUCache<usize, DataBlock>,
   evicted: BTreeMap<usize, DataBlock>,
+  dirty: BTreeSet<usize>,
   max_cache_size: usize,
 }
 impl CacheStorage {
   pub fn get(&self, index: &usize) -> Option<DataBlock> {
     let mut core = self.0.l();
-    core.cache.get(index).map(|block| block.copy())
+    if let Some(block) = core.cache.get(index) {
+      return Some(block.copy());
+    }
+
+    if let Some(block) = core.evicted.remove(index) {
+      core.cache.insert(*index, block.copy());
+      if core.cache.len() >= core.max_cache_size {
+        core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
+      }
+      return Some(block);
+    }
+
+    return None;
   }
 
   pub fn insert(&self, index: usize, block: DataBlock) {
     let mut core = self.0.l();
+    core.evicted.remove(&index);
     core.cache.insert(index, block);
     if core.cache.len() >= core.max_cache_size {
       core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
     }
+  }
+
+  pub fn commit(
+    &self,
+    index: usize,
+    commit: &CommitInfo,
+  ) -> core::result::Result<bool, usize> {
+    let mut core = self.0.l();
+    if let Some(block) = core.cache.get_mut(&index) {
+      if block.tx_id == commit.tx_id {
+        block.commit_index = commit.commit_index;
+        return Ok(true);
+      }
+
+      return Err(block.undo_index);
+    };
+
+    if let Some(block) = core.evicted.get_mut(&index) {
+      if block.tx_id == commit.tx_id {
+        block.commit_index = commit.commit_index;
+        return Ok(true);
+      }
+
+      return Err(block.undo_index);
+    }
+
+    return Ok(false);
   }
 }
 

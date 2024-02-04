@@ -29,7 +29,7 @@ struct WriteAheadLog {
   background: Arc<ThreadPool<Result<()>>>,
   disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>>,
-  checkpoint_c: StoppableChannel<()>,
+  checkpoint_c: StoppableChannel<usize>,
   config: WriteAheadLogConfig,
   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
   cursor: Arc<RwLock<usize>>,
@@ -76,7 +76,7 @@ impl WriteAheadLog {
     background: Arc<ThreadPool<Result<()>>>,
     disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>>,
-    checkpoint_c: StoppableChannel<()>,
+    checkpoint_c: StoppableChannel<usize>,
     config: WriteAheadLogConfig,
     flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
     cursor: Arc<RwLock<usize>>,
@@ -121,7 +121,7 @@ impl WriteAheadLog {
             *last_index.wl() += 1;
             record.index = *last_index.rl();
             if let Operation::Commit = record.operation {
-              commit_c.send(CommitInfo::new(record.transaction_id, record.index))
+              commit_c.send(CommitInfo::new(record.transaction_id, record.index));
             }
 
             if !current.is_available(&record) {
@@ -142,10 +142,12 @@ impl WriteAheadLog {
         }
         disk.fsync()?;
         v.drain(..).for_each(|done| done.close());
+
         if checkpoint_count <= counter {
-          checkpoint_c.send(());
+          checkpoint_c.send(*last_index.rl());
           counter = 0;
         }
+
         point = group_commit_delay;
         start = Instant::now();
       }
@@ -153,7 +155,7 @@ impl WriteAheadLog {
     });
   }
 
-  fn start_checkpoint(&self, rx: ContextReceiver<()>, mut last_applied: usize) {
+  fn start_checkpoint(&self, rx: ContextReceiver<usize>, mut last_applied: usize) {
     let timeout = self.config.checkpoint_interval;
     let flush_c = self.flush_c.clone();
     let disk = self.disk.clone();
@@ -161,7 +163,7 @@ impl WriteAheadLog {
     let cursor = self.cursor.clone();
     let max_file_size = self.config.max_file_size;
     self.background.schedule(move || {
-      while let Ok(_) = rx.recv_new_or_timeout(timeout) {
+      while let Ok(last_index) = rx.recv_new_or_timeout(timeout) {
         let to_be_apply = *cursor.rl();
         if to_be_apply == last_applied {
           continue;

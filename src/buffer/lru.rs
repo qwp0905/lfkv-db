@@ -16,16 +16,14 @@ use super::list::{DoubleLinkedList, DoubleLinkedListElement};
 type Pointer<T> = NonNull<DoubleLinkedListElement<T>>;
 
 #[derive(Debug)]
-enum Status {
-  Old,
-  New,
-}
-
-#[derive(Debug)]
 struct Bucket<K, V> {
   key: K,
   value: V,
-  status: Status,
+}
+impl<K, V> Bucket<K, V> {
+  fn new(key: K, value: V) -> Self {
+    Self { key, value }
+  }
 }
 impl<K, V> AsRef<V> for Bucket<K, V> {
   fn as_ref(&self) -> &V {
@@ -115,11 +113,7 @@ where
           return Some(replace(&mut bucket.value, v));
         }
         Err(slot) => {
-          let pointer = DoubleLinkedListElement::new_ptr(Bucket {
-            key: k,
-            value: v,
-            status: Status::Old,
-          });
+          let pointer = DoubleLinkedListElement::new_ptr(Bucket::new(k, v));
           self.raw.insert_in_slot(h, slot, pointer.to_owned());
           self.entries.add(pointer);
           return None;
@@ -227,14 +221,12 @@ where
 
 #[derive(Debug)]
 struct Entries<K, V> {
-  old: DoubleLinkedList<Bucket<K, V>>,
-  new: DoubleLinkedList<Bucket<K, V>>,
+  inner: DoubleLinkedList<Bucket<K, V>>,
 }
 impl<K, V> Default for Entries<K, V> {
   fn default() -> Self {
     Self {
-      old: DoubleLinkedList::new(),
-      new: DoubleLinkedList::new(),
+      inner: DoubleLinkedList::new(),
     }
   }
 }
@@ -243,50 +235,28 @@ impl<K, V> Entries<K, V> {
   fn move_back(&mut self, e: &mut Pointer<Bucket<K, V>>) {
     let bucket = unsafe { e.as_mut() }.as_mut();
     unsafe {
-      match bucket.status {
-        Status::New => self.new.remove(*e),
-        Status::Old => self.old.remove(*e),
-      }
-      self.new.push_back(*e);
-    }
-    bucket.status = Status::New;
-    self.relocate();
-  }
-
-  fn relocate(&mut self) {
-    while self.old.len() * 5 < self.new.len() * 3 {
-      match self.new.pop_front() {
-        None => break,
-        Some(mut e) => {
-          let bucket = e.as_mut().as_mut();
-          bucket.status = Status::Old;
-          unsafe { self.old.push_back(NonNull::from(Box::leak(e))) };
-        }
-      }
+      self.inner.remove(*e);
+      self.inner.push_back(*e)
     }
   }
 
   fn add(&mut self, e: Pointer<Bucket<K, V>>) {
-    unsafe { self.old.push_back(e) }
+    unsafe { self.inner.push_back(e) }
   }
 
   fn remove(&mut self, e: Pointer<Bucket<K, V>>) {
     unsafe {
       let bucket = e.as_ref().element();
-      match bucket.status {
-        Status::New => self.new.remove(e),
-        Status::Old => self.old.remove(e),
-      }
+      self.inner.remove(e);
     }
-    self.relocate();
   }
 
   fn pop_old(&mut self) -> Option<Bucket<K, V>> {
-    self.old.pop_front().map(|ptr| ptr.element)
+    self.inner.pop_front().map(|ptr| ptr.element)
   }
 
   fn oldest(&self) -> Option<&Bucket<K, V>> {
-    self.old.front()
+    self.inner.front()
   }
 }
 
@@ -331,12 +301,7 @@ where
       EntryStatus::Vacant(slot, k, h) => (slot, k, h),
     };
 
-    let pointer = DoubleLinkedListElement::new_ptr(Bucket {
-      key: k,
-      value: v,
-      status: Status::Old,
-    });
-
+    let pointer = DoubleLinkedListElement::new_ptr(Bucket::new(k, v));
     let b = unsafe { self.inner.raw.insert_in_slot(h, slot, pointer.to_owned()) };
     self.inner.entries.add(pointer);
     return unsafe { b.as_mut().as_mut() }.as_mut().as_mut();

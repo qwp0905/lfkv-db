@@ -1,11 +1,11 @@
 use std::{
-  collections::BTreeMap,
+  collections::{BTreeMap, BTreeSet},
   sync::{Arc, Mutex},
 };
 
 use crate::{
   disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, EmptySender, Error, Page,
-  Result, Serializable, ShortenedMutex, StoppableChannel, ThreadPool, PAGE_SIZE,
+  Result, Serializable, ShortenedMutex, ThreadPool, PAGE_SIZE,
 };
 
 use super::{CacheStorage, RollbackStorage};
@@ -66,28 +66,59 @@ pub struct BufferPool {
   cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
+  dirty: Arc<Mutex<BTreeSet<usize>>>,
   disk: Arc<PageSeeker<BLOCK_SIZE>>,
-  max_cache_size: usize,
   background: ThreadPool<Result>,
 }
 impl BufferPool {
+  fn start_flush(&self, rx: ContextReceiver<usize>) {
+    let cache = self.cache.clone();
+    let disk = self.disk.clone();
+    let dirty = self.dirty.clone();
+
+    self.background.schedule(move || {
+      while let Ok((last_commit_index, done)) = rx.recv_all() {
+        done.map(|tx| tx.close());
+      }
+      //
+      Ok(())
+    });
+  }
+
   fn start_commit(&self, rx: ContextReceiver<CommitInfo>) {
     let uncommitted = self.uncommitted.clone();
     let cache = self.cache.clone();
     let disk = self.disk.clone();
+    let rollback = self.rollback.clone();
 
     self.background.schedule(move || {
       while let Ok(commit) = rx.recv_new() {
         let mut u = uncommitted.l();
         if let Some(v) = u.remove(&commit.tx_id) {
           for index in v {
-            // if cache.commit(index, commit.tx_id, commit.commit_index) {
-            //   continue;
-            // }
+            match cache.commit(index, commit.as_ref()) {
+              Ok(effected) => {
+                if effected {
+                  continue;
+                }
+
+                let mut block: DataBlock = disk.read(index)?.deserialize()?;
+                if block.tx_id == commit.tx_id {
+                  block.commit_index = commit.commit_index;
+                  cache.insert(index, block);
+                  continue;
+                }
+
+                let undo_index = block.undo_index;
+                cache.insert(index, block);
+                rollback.commit(undo_index, commit.as_ref())?;
+              }
+              Err(undo_index) => rollback.commit(undo_index, commit.as_ref())?,
+            }
           }
         };
       }
-      //
+
       Ok(())
     });
   }
@@ -126,51 +157,9 @@ impl BufferPool {
     let undo_index = self.rollback.append(block.into())?;
     let new_block = DataBlock::uncommitted(tx_id, undo_index, data);
     self.cache.insert(index, new_block);
+    self.dirty.l().insert(index);
     let mut un_c = self.uncommitted.l();
     un_c.entry(tx_id).or_default().push(index);
     Ok(())
   }
 }
-
-// use super::PageCache;
-
-// pub struct BufferPool {
-//   cache: Arc<PageCache>,
-//   disk: Arc<PageSeeker>,
-//   background: Arc<ThreadPool<Result<()>>>,
-//   flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
-// }
-
-// impl BufferPool {
-//   fn start_flush(&self, rx: ContextReceiver<Vec<(usize, usize, Page)>>) {
-//     let cache = self.cache.clone();
-//     let disk = self.disk.clone();
-//     self.background.schedule(move || {
-//       while let Ok((v, done)) = rx.recv_all() {
-//         for (tx_id, i, p) in v {
-//           disk.write(i, p)?;
-//           cache.flush(tx_id, i);
-//         }
-
-//         disk.fsync()?;
-//         done.map(|tx| tx.close());
-//       }
-//       Ok(())
-//     })
-//   }
-
-//   fn start_commit(&self, rx: ContextReceiver<CommitInfo>) {
-//     let cache = self.cache.clone();
-//     self.background.schedule(move || {
-//       while let Ok(commit) = rx.recv_new() {
-//         let indexes = match cache.uncommitted(commit.tx_id) {
-//           None => continue,
-//           Some(indexes) => indexes,
-//         };
-//         for index in indexes {}
-//         // cache.commit(tx_id);
-//       }
-//       Ok(())
-//     });
-//   }
-// }

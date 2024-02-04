@@ -57,10 +57,7 @@ impl<T> DoubleLinkedList<T> {
   /// `node` must point to a valid node that was boxed and leaked using the list's allocator.
   /// This method takes ownership of the node, so the pointer should not be used again.
   #[inline]
-  pub unsafe fn push_front(
-    &mut self,
-    node: NonNull<DoubleLinkedListElement<T>>,
-  ) {
+  pub unsafe fn push_front(&mut self, node: NonNull<DoubleLinkedListElement<T>>) {
     // This method takes care not to create mutable references to whole nodes,
     // to maintain validity of aliasing pointers into `element`.
     unsafe {
@@ -105,10 +102,7 @@ impl<T> DoubleLinkedList<T> {
   /// `node` must point to a valid node that was boxed and leaked using the list's allocator.
   /// This method takes ownership of the node, so the pointer should not be used again.
   #[inline]
-  pub unsafe fn push_back(
-    &mut self,
-    node: NonNull<DoubleLinkedListElement<T>>,
-  ) {
+  pub unsafe fn push_back(&mut self, node: NonNull<DoubleLinkedListElement<T>>) {
     // This method takes care not to create mutable references to whole nodes,
     // to maintain validity of aliasing pointers into `element`.
     unsafe {
@@ -154,10 +148,7 @@ impl<T> DoubleLinkedList<T> {
   /// This method takes care not to create mutable references to `element`, to
   /// maintain validity of aliasing pointers.
   #[inline]
-  pub unsafe fn remove(
-    &mut self,
-    mut node: NonNull<DoubleLinkedListElement<T>>,
-  ) {
+  pub unsafe fn remove(&mut self, mut node: NonNull<DoubleLinkedListElement<T>>) {
     let node = unsafe { node.as_mut() }; // this one is ours now, we can create an &mut.
 
     // Not creating new mutable (unique!) references overlapping `element`.
@@ -251,5 +242,11 @@ where
     }
     f.write_str("}")?;
     Ok(())
+  }
+}
+
+impl<T> Default for DoubleLinkedList<T> {
+  fn default() -> Self {
+    Self::new()
   }
 }

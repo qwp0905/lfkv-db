@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::{
-  disk::PageSeeker, ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex,
-  StoppableChannel, ThreadPool, PAGE_SIZE,
+  disk::PageSeeker, wal::CommitInfo, ContextReceiver, Error, Page, Result, Serializable,
+  ShortenedMutex, StoppableChannel, ThreadPool, PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};
@@ -211,7 +211,7 @@ impl RollbackStorage {
         return Ok(log.data);
       }
 
-      current = log.commit_index
+      current = log.undo_index
     }
   }
 
@@ -219,7 +219,39 @@ impl RollbackStorage {
     Ok(self.io_c.send_with_done(data).recv().unwrap())
   }
 
-  pub fn commit(&self) {
-    let mut cache = self.cache.l();
+  pub fn commit(&self, undo_index: usize, commit: &CommitInfo) -> Result<()> {
+    let mut current = undo_index;
+    loop {
+      let mut cache = self.cache.l();
+      if let Some(log) = cache.get_mut(&current) {
+        if commit.tx_id == log.tx_id {
+          log.commit_index = commit.commit_index;
+          return Ok(());
+        }
+        current = log.undo_index;
+        continue;
+      }
+
+      let mut log: UndoLog = self
+        .disk
+        .read(undo_index.rem_euclid(self.config.max_file_size))?
+        .deserialize()?;
+      if log.index != undo_index {
+        return Err(Error::NotFound);
+      }
+
+      if commit.tx_id == log.tx_id {
+        log.commit_index = commit.commit_index;
+
+        cache.insert(undo_index, log);
+        if cache.len() >= self.config.max_cache_size {
+          cache.pop_old();
+        }
+
+        return Ok(());
+      }
+
+      current = log.undo_index
+    }
   }
 }
