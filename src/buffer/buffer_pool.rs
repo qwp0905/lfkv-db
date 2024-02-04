@@ -96,7 +96,7 @@ impl BufferPool {
         let mut u = uncommitted.l();
         if let Some(v) = u.remove(&commit.tx_id) {
           for index in v {
-            match cache.commit(index, commit.as_ref()) {
+            let undo_index = match cache.commit(index, commit.as_ref()) {
               Ok(effected) => {
                 if effected {
                   continue;
@@ -111,10 +111,11 @@ impl BufferPool {
 
                 let undo_index = block.undo_index;
                 cache.insert(index, block);
-                rollback.commit(undo_index, commit.as_ref())?;
+                undo_index
               }
-              Err(undo_index) => rollback.commit(undo_index, commit.as_ref())?,
-            }
+              Err(undo_index) => undo_index,
+            };
+            rollback.commit(undo_index, commit.as_ref())?;
           }
         };
       }
