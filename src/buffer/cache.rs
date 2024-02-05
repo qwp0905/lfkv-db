@@ -67,6 +67,11 @@ impl CacheStorage {
 
     return Ok(false);
   }
+
+  pub fn flush(&self, index: usize) {
+    let mut core = self.0.l();
+    core.evicted.remove(&index);
+  }
 }
 
 // pub struct PageCache(Mutex<PageCacheCore>);

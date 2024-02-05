@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-  disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, EmptySender, Error, Page,
-  Result, Serializable, ShortenedMutex, ThreadPool, PAGE_SIZE,
+  disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, Drain, EmptySender, Error,
+  Page, Result, Serializable, ShortenedMutex, ThreadPool, PAGE_SIZE,
 };
 
 use super::{CacheStorage, RollbackStorage};
@@ -78,9 +78,20 @@ impl BufferPool {
 
     self.background.schedule(move || {
       while let Ok((last_commit_index, done)) = rx.recv_all() {
+        let indexes = dirty.l().drain();
+        for i in indexes {
+          if let Some(block) = cache.get(&i) {
+            if block.commit_index <= last_commit_index {
+              disk.write(i, block.serialize()?)?;
+              cache.flush(i);
+              continue;
+            }
+          }
+        }
+
         done.map(|tx| tx.close());
       }
-      //
+
       Ok(())
     });
   }
