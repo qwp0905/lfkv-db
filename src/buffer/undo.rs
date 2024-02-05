@@ -191,6 +191,7 @@ impl RollbackStorage {
         if commit_index <= log.commit_index {
           return Ok(log.data.copy());
         }
+
         current = log.undo_index;
         continue;
       }
