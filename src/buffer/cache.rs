@@ -1,9 +1,9 @@
 use std::{
-  collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+  collections::{BTreeMap, BTreeSet},
   sync::Mutex,
 };
 
-use crate::{deref, wal::CommitInfo, Page, ShortenedMutex};
+use crate::{wal::CommitInfo, ShortenedMutex};
 
 use super::{DataBlock, LRUCache};
 
