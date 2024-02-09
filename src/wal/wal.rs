@@ -1,5 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
+  ops::Add,
   path::PathBuf,
   sync::{Arc, RwLock},
   time::{Duration, Instant},
@@ -128,7 +129,7 @@ impl WriteAheadLog {
               let mut c = cursor.wl();
               let entry = replace_default(&mut current);
               disk.write(*c, entry.serialize()?)?;
-              *c = (*c + 1) & max_file_size;
+              *c = c.add(1).rem_euclid(max_file_size);
             }
             current.append(record);
           }
