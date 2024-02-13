@@ -81,7 +81,7 @@ impl BufferPool {
         let indexes = dirty.l().drain();
         for i in indexes {
           if let Some(block) = cache.get(&i) {
-            if block.commit_index <= last_commit_index {
+            if block.commit_index == 0 || block.commit_index <= last_commit_index {
               disk.write(i, block.serialize()?)?;
               cache.flush(i);
               continue;
