@@ -32,7 +32,7 @@ struct WriteAheadLog {
   io_c: StoppableChannel<Vec<LogRecord>>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
-  flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
+  flush_c: StoppableChannel<(), usize>,
   cursor: Arc<RwLock<usize>>,
   last_index: Arc<RwLock<usize>>,
 }
@@ -40,7 +40,7 @@ impl WriteAheadLog {
   pub fn open(
     config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo>,
-    flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
+    flush_c: StoppableChannel<(), usize>,
     background: Arc<ThreadPool<Result<()>>>,
   ) -> Result<Self> {
     let disk = Arc::new(PageSeeker::open(&config.path)?);
@@ -79,7 +79,7 @@ impl WriteAheadLog {
     io_c: StoppableChannel<Vec<LogRecord>>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
-    flush_c: StoppableChannel<Vec<(usize, usize, Page)>>,
+    flush_c: StoppableChannel<(), usize>,
     cursor: Arc<RwLock<usize>>,
     last_index: Arc<RwLock<usize>>,
   ) -> Self {
@@ -185,11 +185,11 @@ impl WriteAheadLog {
           }
         }
 
-        let rx = flush_c.send_with_done(v);
-        rx.drop_one();
-        io_c
-          .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
-          .drop_one();
+        // let rx = flush_c.send_with_done(v);
+        // rx.drop_one();
+        // io_c
+        //   .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
+        //   .drop_one();
         last_applied = to_be_apply;
       }
       return Ok(());
@@ -288,7 +288,7 @@ impl WriteAheadLog {
       }
     }
 
-    self.flush_c.send_with_done(to_be_flush).drop_one();
+    // self.flush_c.send_with_done(to_be_flush).drop_one();
     *self.cursor.wl() = cursor;
     *self.last_index.wl() = last_index;
 

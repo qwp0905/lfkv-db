@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
   disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, Drain, EmptySender, Error,
-  Page, Result, Serializable, ShortenedMutex, ThreadPool, PAGE_SIZE,
+  Page, Result, Serializable, ShortenedMutex, ThreadPool, UnwrappedSender, PAGE_SIZE,
 };
 
 use super::{CacheStorage, RollbackStorage};
@@ -71,7 +71,7 @@ pub struct BufferPool {
   background: ThreadPool<Result>,
 }
 impl BufferPool {
-  fn start_flush(&self, rx: ContextReceiver<()>) {
+  fn start_flush(&self, rx: ContextReceiver<(), usize>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
     let dirty = self.dirty.clone();
@@ -90,7 +90,7 @@ impl BufferPool {
         }
 
         disk.fsync()?;
-        done.map(|tx| tx.close());
+        done.map(|tx| tx.must_send(max_index));
       }
 
       Ok(())
