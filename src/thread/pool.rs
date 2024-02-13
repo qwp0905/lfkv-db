@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
   utils::{logger, size, DroppableReceiver},
-  StoppableChannel,
+  StoppableChannel, UnwrappedReceiver, UnwrappedSender,
 };
 use crossbeam::channel::{unbounded, Receiver};
 
@@ -83,7 +83,7 @@ impl<T: 'static> ThreadPool<T> {
           .spawn(move || {
             worker.clear();
             if !count.is_overflow() {
-              return ready_s.send(worker).unwrap();
+              return ready_s.must_send(worker);
             }
             count.fetch_sub();
           })?;
@@ -114,7 +114,7 @@ impl<T: 'static> ThreadPool<T> {
       self
         .count
         .is_overflow()
-        .then(|| self.ready.recv().unwrap())
+        .then(|| self.ready.must_recv())
         .unwrap_or_else(|| {
           ThreadWorker::new(self.config.generate(self.count.fetch_add()))
         })

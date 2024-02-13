@@ -1,11 +1,29 @@
 use crossbeam::channel::{Receiver, Sender};
 
+pub trait UnwrappedSender<T> {
+  fn must_send(&self, t: T);
+}
+impl<T> UnwrappedSender<T> for Sender<T> {
+  fn must_send(&self, t: T) {
+    self.send(t).unwrap();
+  }
+}
+
 pub trait EmptySender {
   fn close(&self);
 }
 impl EmptySender for Sender<()> {
   fn close(&self) {
-    self.send(()).unwrap();
+    self.must_send(());
+  }
+}
+
+pub trait UnwrappedReceiver<T> {
+  fn must_recv(&self) -> T;
+}
+impl<T> UnwrappedReceiver<T> for Receiver<T> {
+  fn must_recv(&self) -> T {
+    self.recv().unwrap()
   }
 }
 

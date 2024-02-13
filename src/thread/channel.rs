@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
+use crate::UnwrappedSender;
+
 #[allow(unused)]
 #[derive(Debug)]
 pub enum StoppableContext<T, R = ()> {
@@ -32,17 +34,17 @@ impl<T, R> StoppableChannel<T, R> {
   }
 
   pub fn terminate(&self) {
-    self.0.send(StoppableContext::Term).unwrap();
+    self.0.must_send(StoppableContext::Term);
   }
 
   pub fn send_with_done(&self, v: T) -> Receiver<R> {
     let (ctx, rx) = StoppableContext::with_done(v);
-    self.0.send(ctx).unwrap();
+    self.0.must_send(ctx);
     return rx;
   }
 
   pub fn send(&self, v: T) {
-    self.0.send(StoppableContext::new(v)).unwrap();
+    self.0.must_send(StoppableContext::new(v));
   }
 }
 impl<T, R> Clone for StoppableChannel<T, R> {

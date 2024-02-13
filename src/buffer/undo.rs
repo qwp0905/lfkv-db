@@ -8,7 +8,8 @@ use std::{
 
 use crate::{
   disk::PageSeeker, wal::CommitInfo, ContextReceiver, Error, Page, Result, Serializable,
-  ShortenedMutex, StoppableChannel, ThreadPool, PAGE_SIZE,
+  ShortenedMutex, StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
+  PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};
@@ -173,7 +174,7 @@ impl RollbackStorage {
 
         if m.len() != 0 {
           disk.fsync()?;
-          m.drain().for_each(|(i, done)| done.send(i).unwrap())
+          m.drain().for_each(|(i, done)| done.must_send(i))
         }
 
         point = delay;
@@ -217,7 +218,7 @@ impl RollbackStorage {
   }
 
   pub fn append(&self, data: DataBlock) -> Result<usize> {
-    Ok(self.io_c.send_with_done(data).recv().unwrap())
+    Ok(self.io_c.send_with_done(data).must_recv())
   }
 
   pub fn commit(&self, undo_index: usize, commit: &CommitInfo) -> Result<()> {

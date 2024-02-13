@@ -71,24 +71,25 @@ pub struct BufferPool {
   background: ThreadPool<Result>,
 }
 impl BufferPool {
-  fn start_flush(&self, rx: ContextReceiver<usize>) {
+  fn start_flush(&self, rx: ContextReceiver<()>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
     let dirty = self.dirty.clone();
 
     self.background.schedule(move || {
-      while let Ok((last_commit_index, done)) = rx.recv_all() {
+      while let Ok((_, done)) = rx.recv_all() {
         let indexes = dirty.l().drain();
+        let mut max_index = 0;
         for i in indexes {
           if let Some(block) = cache.get(&i) {
-            if block.commit_index == 0 || block.commit_index <= last_commit_index {
-              disk.write(i, block.serialize()?)?;
-              cache.flush(i);
-              continue;
-            }
+            disk.write(i, block.serialize()?)?;
+            cache.flush(i);
+            max_index = block.commit_index.max(max_index);
+            continue;
           }
         }
 
+        disk.fsync()?;
         done.map(|tx| tx.close());
       }
 
