@@ -90,6 +90,7 @@ impl BufferPool {
         }
 
         disk.fsync()?;
+        cache.clear(max_index);
         done.map(|tx| tx.must_send(max_index));
       }
 
