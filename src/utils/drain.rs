@@ -1,6 +1,4 @@
-use std::collections::BTreeSet;
-
-use crate::replace_default;
+use std::{collections::BTreeSet, mem::take};
 
 pub trait Drain<T> {
   fn drain(&mut self) -> Self;
@@ -8,6 +6,6 @@ pub trait Drain<T> {
 
 impl<T> Drain<T> for BTreeSet<T> {
   fn drain(&mut self) -> Self {
-    replace_default(self)
+    take(self)
   }
 }

@@ -1,7 +1,4 @@
-use std::{
-  collections::{BTreeMap, BTreeSet},
-  sync::Mutex,
-};
+use std::{collections::BTreeMap, sync::Mutex};
 
 use crate::{wal::CommitInfo, ShortenedMutex};
 
@@ -11,7 +8,6 @@ pub struct CacheStorage(Mutex<CacheStorageCore>);
 struct CacheStorageCore {
   cache: LRUCache<usize, DataBlock>,
   evicted: BTreeMap<usize, DataBlock>,
-  dirty: BTreeSet<usize>,
   max_cache_size: usize,
 }
 impl CacheStorage {
@@ -71,6 +67,11 @@ impl CacheStorage {
   pub fn flush(&self, index: usize) {
     let mut core = self.0.l();
     core.evicted.remove(&index);
+  }
+
+  pub fn clear(&self, commit_index: usize) {
+    let mut core = self.0.l();
+    core.evicted.retain(|_, v| v.commit_index >= commit_index)
   }
 }
 

@@ -1,5 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
+  mem::take,
   ops::Add,
   path::PathBuf,
   sync::{Arc, RwLock},
@@ -7,8 +8,8 @@ use std::{
 };
 
 use crate::{
-  disk::PageSeeker, replace_default, ContextReceiver, DroppableReceiver, EmptySender,
-  Page, Result, Serializable, ShortenedRwLock, StoppableChannel, ThreadPool,
+  disk::PageSeeker, ContextReceiver, DroppableReceiver, EmptySender, Page, Result,
+  Serializable, ShortenedRwLock, StoppableChannel, ThreadPool, UnwrappedReceiver,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -33,7 +34,6 @@ struct WriteAheadLog {
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
   flush_c: StoppableChannel<(), usize>,
-  cursor: Arc<RwLock<usize>>,
   last_index: Arc<RwLock<usize>>,
 }
 impl WriteAheadLog {
@@ -59,14 +59,13 @@ impl WriteAheadLog {
       config,
       flush_c,
       Default::default(),
-      Default::default(),
     );
 
-    let (last_transaction, last_applied) = core.replay()?;
+    let (last_transaction, cursor) = core.replay()?;
 
     core.buffer.initial_state(last_transaction);
-    core.start_checkpoint(checkpoint_rx, last_applied);
-    core.start_io(io_rx);
+    core.start_checkpoint(checkpoint_rx);
+    core.start_io(io_rx, cursor);
 
     Ok(core)
   }
@@ -80,7 +79,6 @@ impl WriteAheadLog {
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
     flush_c: StoppableChannel<(), usize>,
-    cursor: Arc<RwLock<usize>>,
     last_index: Arc<RwLock<usize>>,
   ) -> Self {
     Self {
@@ -92,18 +90,16 @@ impl WriteAheadLog {
       checkpoint_c,
       config,
       flush_c,
-      cursor,
       last_index,
     }
   }
 
-  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>>) {
+  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>>, mut cursor: usize) {
     let group_commit_delay = self.config.group_commit_delay;
     let group_commit_count = self.config.group_commit_count;
     let max_file_size = self.config.max_file_size;
     let checkpoint_count = self.config.checkpoint_count;
     let disk = self.disk.clone();
-    let cursor = self.cursor.clone();
     let checkpoint_c = self.checkpoint_c.clone();
     let last_index = self.last_index.clone();
     let commit_c = self.commit_c.clone();
@@ -126,15 +122,14 @@ impl WriteAheadLog {
             }
 
             if !current.is_available(&record) {
-              let mut c = cursor.wl();
-              let entry = replace_default(&mut current);
-              disk.write(*c, entry.serialize()?)?;
-              *c = c.add(1).rem_euclid(max_file_size);
+              let entry = take(&mut current);
+              disk.write(cursor, entry.serialize()?)?;
+              cursor = cursor.add(1).rem_euclid(max_file_size);
             }
             current.append(record);
           }
 
-          disk.write(*cursor.rl(), current.serialize()?)?;
+          disk.write(cursor, current.serialize()?)?;
           if v.len() < group_commit_count {
             point -= Instant::now().duration_since(start).min(point);
             start = Instant::now();
@@ -145,7 +140,6 @@ impl WriteAheadLog {
         v.drain(..).for_each(|done| done.close());
 
         if checkpoint_count <= counter {
-          // checkpoint_c.send(*last_index.rl());
           checkpoint_c.send(());
           counter = 0;
         }
@@ -157,40 +151,17 @@ impl WriteAheadLog {
     });
   }
 
-  fn start_checkpoint(&self, rx: ContextReceiver<()>, mut last_applied: usize) {
+  fn start_checkpoint(&self, rx: ContextReceiver<()>) {
     let timeout = self.config.checkpoint_interval;
     let flush_c = self.flush_c.clone();
-    let disk = self.disk.clone();
     let io_c = self.io_c.clone();
-    let cursor = self.cursor.clone();
-    let max_file_size = self.config.max_file_size;
     self.background.schedule(move || {
       while let Ok(_) = rx.recv_new_or_timeout(timeout) {
-        let to_be_apply = *cursor.rl();
-        if to_be_apply == last_applied {
-          continue;
-        }
-
-        let mut v = vec![];
-        let end = (to_be_apply < last_applied)
-          .then(|| to_be_apply + max_file_size)
-          .unwrap_or(to_be_apply);
-
-        for i in last_applied..end {
-          let entry: LogEntry = disk.read(i % max_file_size)?.deserialize()?;
-          for record in entry.records {
-            if let Operation::Insert(log) = record.operation {
-              v.push((record.transaction_id, log.page_index, log.data))
-            }
-          }
-        }
-
-        // let rx = flush_c.send_with_done(v);
-        // rx.drop_one();
-        // io_c
-        //   .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
-        //   .drop_one();
-        last_applied = to_be_apply;
+        let rx = flush_c.send_with_done(());
+        let to_be_apply = rx.must_recv();
+        io_c
+          .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
+          .drop_one();
       }
       return Ok(());
     });
@@ -242,7 +213,6 @@ impl WriteAheadLog {
 
     let mut last_index = 0;
     let mut last_transaction = 0;
-    let mut last_applied = 0;
     let mut committed = BTreeSet::new();
     let mut aborted = BTreeSet::new();
     let mut started = BTreeSet::new();
@@ -265,7 +235,6 @@ impl WriteAheadLog {
           });
         }
         Operation::Checkpoint(i) => {
-          last_applied = i.max(last_applied);
           inserts = inserts.split_off(&i);
           started.clear();
           committed.clear();
@@ -289,9 +258,8 @@ impl WriteAheadLog {
     }
 
     // self.flush_c.send_with_done(to_be_flush).drop_one();
-    *self.cursor.wl() = cursor;
     *self.last_index.wl() = last_index;
 
-    Ok((last_transaction, last_applied))
+    Ok((last_transaction, cursor))
   }
 }
