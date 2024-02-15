@@ -71,6 +71,10 @@ pub struct BufferPool {
   background: ThreadPool<Result>,
 }
 impl BufferPool {
+  fn start_write() {
+    todo!("io thread 만들자")
+  }
+
   fn start_flush(&self, rx: ContextReceiver<(), usize>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
@@ -80,17 +84,18 @@ impl BufferPool {
       while let Ok((_, done)) = rx.recv_all() {
         let indexes = dirty.l().drain();
         let mut max_index = 0;
+        let mut max_transaction = 0;
         for i in indexes {
           if let Some(block) = cache.get(&i) {
             disk.write(i, block.serialize()?)?;
             cache.flush(i);
             max_index = block.commit_index.max(max_index);
-            continue;
+            max_transaction = block.tx_id.max(max_transaction);
           }
         }
 
         disk.fsync()?;
-        cache.clear(max_index);
+        cache.clear(max_transaction, max_index);
         done.map(|tx| tx.must_send(max_index));
       }
 
@@ -110,8 +115,8 @@ impl BufferPool {
         if let Some(v) = u.remove(&commit.tx_id) {
           for index in v {
             let undo_index = match cache.commit(index, commit.as_ref()) {
-              Ok(effected) => {
-                if effected {
+              Ok(applied) => {
+                if applied {
                   continue;
                 }
 
@@ -170,8 +175,7 @@ impl BufferPool {
     };
     let undo_index = self.rollback.append(block.into())?;
     let new_block = DataBlock::uncommitted(tx_id, undo_index, data);
-    self.cache.insert(index, new_block);
-    self.dirty.l().insert(index);
+    self.cache.insert_new(index, new_block);
     let mut un_c = self.uncommitted.l();
     un_c.entry(tx_id).or_default().push(index);
     Ok(())

@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{
+  collections::{BTreeMap, BTreeSet},
+  sync::Mutex,
+};
 
 use crate::{wal::CommitInfo, ShortenedMutex};
 
@@ -9,6 +12,7 @@ struct CacheStorageCore {
   cache: LRUCache<usize, DataBlock>,
   evicted: BTreeMap<usize, DataBlock>,
   max_cache_size: usize,
+  dirty: BTreeSet<usize>,
 }
 impl CacheStorage {
   pub fn get(&self, index: &usize) -> Option<DataBlock> {
@@ -30,6 +34,16 @@ impl CacheStorage {
 
   pub fn insert(&self, index: usize, block: DataBlock) {
     let mut core = self.0.l();
+    core.evicted.remove(&index);
+    core.cache.insert(index, block);
+    if core.cache.len() >= core.max_cache_size {
+      core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
+    }
+  }
+
+  pub fn insert_new(&self, index: usize, block: DataBlock) {
+    let mut core = self.0.l();
+    core.dirty.insert(index);
     core.evicted.remove(&index);
     core.cache.insert(index, block);
     if core.cache.len() >= core.max_cache_size {
@@ -69,9 +83,15 @@ impl CacheStorage {
     core.evicted.remove(&index);
   }
 
-  pub fn clear(&self, commit_index: usize) {
+  pub fn clear(&self, tx_id: usize, commit_index: usize) {
     let mut core = self.0.l();
-    core.evicted.retain(|_, v| v.commit_index >= commit_index)
+    core.evicted.retain(|_, v| {
+      (v.commit_index == 0 && v.tx_id > tx_id) || v.commit_index >= commit_index
+    })
+  }
+
+  pub fn flush_all(&self) {
+    let mut core = self.0.l();
   }
 }
 
