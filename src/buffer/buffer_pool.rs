@@ -71,8 +71,15 @@ pub struct BufferPool {
   background: ThreadPool<Result>,
 }
 impl BufferPool {
-  fn start_write() {
-    todo!("io thread 만들자")
+  fn start_write(&self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) {
+    let disk = self.disk.clone();
+    self.background.schedule(move || {
+      while let Ok(((index, page), done)) = rx.recv_done() {
+        let r = disk.write(index, page);
+        done.must_send(r);
+      }
+      Ok(())
+    })
   }
 
   fn start_flush(&self, rx: ContextReceiver<(), usize>) {
@@ -82,21 +89,21 @@ impl BufferPool {
 
     self.background.schedule(move || {
       while let Ok((_, done)) = rx.recv_all() {
-        let indexes = dirty.l().drain();
-        let mut max_index = 0;
-        let mut max_transaction = 0;
-        for i in indexes {
-          if let Some(block) = cache.get(&i) {
-            disk.write(i, block.serialize()?)?;
-            cache.flush(i);
-            max_index = block.commit_index.max(max_index);
-            max_transaction = block.tx_id.max(max_transaction);
-          }
-        }
+        // let indexes = dirty.l().drain();
+        // let mut max_index = 0;
+        // let mut max_transaction = 0;
+        // for i in indexes {
+        //   if let Some(block) = cache.get(&i) {
+        //     disk.write(i, block.serialize()?)?;
+        //     cache.flush(i);
+        //     max_index = block.commit_index.max(max_index);
+        //     max_transaction = block.tx_id.max(max_transaction);
+        //   }
+        // }
 
         disk.fsync()?;
-        cache.clear(max_transaction, max_index);
-        done.map(|tx| tx.must_send(max_index));
+        // cache.clear(max_transaction, max_index);
+        // done.map(|tx| tx.must_send(max_index));
       }
 
       Ok(())
