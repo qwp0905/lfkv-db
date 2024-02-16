@@ -1,10 +1,10 @@
 use std::{
-  collections::{BTreeMap, BTreeSet},
+  collections::BTreeMap,
   sync::{Arc, Mutex},
 };
 
 use crate::{
-  disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, Drain, Error, Page, Result,
+  disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, Error, Page, Result,
   Serializable, ShortenedMutex, ThreadPool, UnwrappedSender, PAGE_SIZE,
 };
 
@@ -66,7 +66,6 @@ pub struct BufferPool {
   cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
-  dirty: Arc<Mutex<BTreeSet<usize>>>,
   disk: Arc<PageSeeker<BLOCK_SIZE>>,
   background: ThreadPool<Result>,
 }
@@ -82,28 +81,15 @@ impl BufferPool {
     })
   }
 
-  fn start_flush(&self, rx: ContextReceiver<(), usize>) {
+  fn start_flush(&self, rx: ContextReceiver<(), Option<usize>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
-    let dirty = self.dirty.clone();
 
     self.background.schedule(move || {
       while let Ok((_, done)) = rx.recv_all() {
-        // let indexes = dirty.l().drain();
-        // let mut max_index = 0;
-        // let mut max_transaction = 0;
-        // for i in indexes {
-        //   if let Some(block) = cache.get(&i) {
-        //     disk.write(i, block.serialize()?)?;
-        //     cache.flush(i);
-        //     max_index = block.commit_index.max(max_index);
-        //     max_transaction = block.tx_id.max(max_transaction);
-        //   }
-        // }
-
+        let max_index = cache.flush_all()?;
         disk.fsync()?;
-        // cache.clear(max_transaction, max_index);
-        // done.map(|tx| tx.must_send(max_index));
+        done.map(|tx| tx.must_send(max_index));
       }
 
       Ok(())

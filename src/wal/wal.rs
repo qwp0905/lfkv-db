@@ -33,14 +33,14 @@ struct WriteAheadLog {
   io_c: StoppableChannel<Vec<LogRecord>>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
-  flush_c: StoppableChannel<(), usize>,
+  flush_c: StoppableChannel<(), Option<usize>>,
   last_index: Arc<RwLock<usize>>,
 }
 impl WriteAheadLog {
   pub fn open(
     config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo>,
-    flush_c: StoppableChannel<(), usize>,
+    flush_c: StoppableChannel<(), Option<usize>>,
     background: Arc<ThreadPool<Result<()>>>,
   ) -> Result<Self> {
     let disk = Arc::new(PageSeeker::open(&config.path)?);
@@ -78,7 +78,7 @@ impl WriteAheadLog {
     io_c: StoppableChannel<Vec<LogRecord>>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
-    flush_c: StoppableChannel<(), usize>,
+    flush_c: StoppableChannel<(), Option<usize>>,
     last_index: Arc<RwLock<usize>>,
   ) -> Self {
     Self {
@@ -158,10 +158,14 @@ impl WriteAheadLog {
     self.background.schedule(move || {
       while let Ok(_) = rx.recv_new_or_timeout(timeout) {
         let rx = flush_c.send_with_done(());
-        let to_be_apply = rx.must_recv();
-        io_c
-          .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
-          .drop_one();
+        match rx.must_recv() {
+          None => continue,
+          Some(to_be_apply) => {
+            io_c
+              .send_with_done(vec![LogRecord::new_checkpoint(to_be_apply)])
+              .drop_one();
+          }
+        }
       }
       return Ok(());
     });
