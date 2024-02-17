@@ -8,8 +8,8 @@ use std::{
 
 use crate::{
   disk::PageSeeker, wal::CommitInfo, ContextReceiver, Error, Page, Result, Serializable,
-  ShortenedMutex, StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
-  PAGE_SIZE,
+  ShortenedMutex, StoppableChannel, ThreadPool, Timer, UnwrappedReceiver,
+  UnwrappedSender, PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};
@@ -154,10 +154,9 @@ impl RollbackStorage {
     let disk = self.disk.clone();
 
     self.background.schedule(move || {
-      let mut start = Instant::now();
-      let mut point = delay;
+      let mut timer = Timer::new(delay);
       let mut m = HashMap::new();
-      while let Ok(o) = rx.recv_done_or_timeout(delay) {
+      while let Ok(o) = rx.recv_done_or_timeout(timer.get_remain()) {
         if let Some((data, done)) = o {
           m.insert(cursor, done);
           let mut log: UndoLog = data.into();
@@ -166,8 +165,7 @@ impl RollbackStorage {
           cursor = cursor.add(1).rem_euclid(usize::MAX);
 
           if m.len() < count {
-            point -= Instant::now().duration_since(start).min(point);
-            start = Instant::now();
+            timer.check();
             continue;
           }
         }
@@ -177,8 +175,7 @@ impl RollbackStorage {
           m.drain().for_each(|(i, done)| done.must_send(i))
         }
 
-        point = delay;
-        start = Instant::now();
+        timer.reset()
       }
       Ok(())
     });

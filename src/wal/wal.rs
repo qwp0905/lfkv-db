@@ -1,15 +1,16 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   mem::take,
-  ops::Add,
+  ops::{Add, ControlFlow},
   path::PathBuf,
   sync::{Arc, RwLock},
-  time::{Duration, Instant},
+  time::Duration,
 };
 
 use crate::{
-  disk::PageSeeker, ContextReceiver, DroppableReceiver, EmptySender, Page, Result,
-  Serializable, ShortenedRwLock, StoppableChannel, ThreadPool, UnwrappedReceiver,
+  disk::{Disk, DiskConfig},
+  ContextReceiver, DroppableReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
+  ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -28,9 +29,9 @@ pub struct WriteAheadLogConfig {
 struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo>,
-  background: Arc<ThreadPool<Result<()>>>,
-  disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
-  io_c: StoppableChannel<Vec<LogRecord>>,
+  background: Arc<ThreadPool>,
+  disk: Arc<Disk<WAL_PAGE_SIZE>>,
+  io_c: StoppableChannel<Vec<LogRecord>, Result>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
   flush_c: StoppableChannel<(), Option<usize>>,
@@ -41,9 +42,14 @@ impl WriteAheadLog {
     config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo>,
     flush_c: StoppableChannel<(), Option<usize>>,
-    background: Arc<ThreadPool<Result<()>>>,
+    background: Arc<ThreadPool>,
   ) -> Result<Self> {
-    let disk = Arc::new(PageSeeker::open(&config.path)?);
+    let disk_config = DiskConfig {
+      path: config.path.clone(),
+      batch_delay: config.group_commit_delay,
+      batch_size: config.group_commit_count,
+    };
+    let disk = Arc::new(Disk::open(disk_config, background.clone())?);
     let buffer = Arc::new(LogBuffer::new());
 
     let (io_c, io_rx) = StoppableChannel::new();
@@ -73,9 +79,9 @@ impl WriteAheadLog {
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<CommitInfo>,
-    background: Arc<ThreadPool<Result<()>>>,
-    disk: Arc<PageSeeker<WAL_PAGE_SIZE>>,
-    io_c: StoppableChannel<Vec<LogRecord>>,
+    background: Arc<ThreadPool>,
+    disk: Arc<Disk<WAL_PAGE_SIZE>>,
+    io_c: StoppableChannel<Vec<LogRecord>, Result>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
     flush_c: StoppableChannel<(), Option<usize>>,
@@ -94,9 +100,7 @@ impl WriteAheadLog {
     }
   }
 
-  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>>, mut cursor: usize) {
-    let group_commit_delay = self.config.group_commit_delay;
-    let group_commit_count = self.config.group_commit_count;
+  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>, Result>, mut cursor: usize) {
     let max_file_size = self.config.max_file_size;
     let checkpoint_count = self.config.checkpoint_count;
     let disk = self.disk.clone();
@@ -106,48 +110,46 @@ impl WriteAheadLog {
 
     self.background.schedule(move || {
       let mut current = LogEntry::new();
-      let mut start = Instant::now();
-      let mut point = group_commit_delay;
-      let mut v = vec![];
       let mut counter = 0;
-      while let Ok(o) = rx.recv_done_or_timeout(point) {
-        if let Some((records, done)) = o {
-          v.push(done);
-          for mut record in records {
-            counter += 1;
-            *last_index.wl() += 1;
-            record.index = *last_index.rl();
-            if let Operation::Commit = record.operation {
-              commit_c.send(CommitInfo::new(record.transaction_id, record.index));
-            }
 
-            if !current.is_available(&record) {
-              let entry = take(&mut current);
-              disk.write(cursor, entry.serialize()?)?;
-              cursor = cursor.add(1).rem_euclid(max_file_size);
-            }
-            current.append(record);
+      while let Ok((records, done)) = rx.recv_done() {
+        counter += records.len();
+        let r = records.into_iter().try_for_each(|mut record| {
+          let mut l = last_index.wl();
+          record.index = *l + 1;
+          if let Operation::Commit = record.operation {
+            commit_c.send(CommitInfo::new(record.transaction_id, record.index));
           }
 
-          disk.write(cursor, current.serialize()?)?;
-          if v.len() < group_commit_count {
-            point -= Instant::now().duration_since(start).min(point);
-            start = Instant::now();
-            continue;
+          if !current.is_available(&record) {
+            let entry = take(&mut current);
+            if let Err(err) = disk.batch_write(cursor, &entry) {
+              return ControlFlow::Break(err);
+            };
+            cursor = cursor.add(1).rem_euclid(max_file_size);
           }
+          current.append(record);
+          *l += 1;
+          ControlFlow::Continue(())
+        });
+
+        if let ControlFlow::Break(err) = r {
+          done.must_send(Err(err));
+          continue;
         }
-        disk.fsync()?;
-        v.drain(..).for_each(|done| done.close());
+
+        if let Err(err) = disk.batch_write(cursor, &current) {
+          done.must_send(Err(err));
+          continue;
+        };
 
         if checkpoint_count <= counter {
           checkpoint_c.send(());
           counter = 0;
         }
 
-        point = group_commit_delay;
-        start = Instant::now();
+        done.must_send(Ok(()))
       }
-      return Ok(());
     });
   }
 
@@ -167,14 +169,13 @@ impl WriteAheadLog {
           }
         }
       }
-      return Ok(());
     });
   }
 
   pub fn append(&self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
     self.buffer.append(tx_id, page_index, data);
     if self.buffer.len() >= self.config.max_buffer_size {
-      self.io_c.send_with_done(self.buffer.flush());
+      self.io_c.send_with_done(self.buffer.flush()).must_recv()?;
     }
     Ok(())
   }
@@ -182,14 +183,14 @@ impl WriteAheadLog {
   pub fn new_transaction(&self) -> Result<(usize, usize)> {
     let tx_id = self.buffer.new_transaction();
     if self.buffer.len() >= self.config.max_buffer_size {
-      self.io_c.send_with_done(self.buffer.flush());
+      self.io_c.send_with_done(self.buffer.flush()).must_recv()?;
     }
     return Ok((tx_id, *self.last_index.rl()));
   }
 
   pub fn commit(&self, tx_id: usize) -> Result<()> {
     let records = self.buffer.commit(tx_id);
-    Ok(self.io_c.send_with_done(records).drop_one())
+    self.io_c.send_with_done(records).must_recv()
   }
 
   fn replay(&self) -> Result<(usize, usize)> {
