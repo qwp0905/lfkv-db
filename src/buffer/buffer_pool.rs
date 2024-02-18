@@ -4,8 +4,11 @@ use std::{
 };
 
 use crate::{
-  disk::PageSeeker, size, wal::CommitInfo, ContextReceiver, Error, Page, Result,
-  Serializable, ShortenedMutex, ThreadPool, UnwrappedSender, PAGE_SIZE,
+  disk::{Disk, PageSeeker},
+  size,
+  wal::CommitInfo,
+  ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex, ThreadPool,
+  UnwrappedSender, PAGE_SIZE,
 };
 
 use super::{CacheStorage, RollbackStorage};

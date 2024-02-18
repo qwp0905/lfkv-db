@@ -11,48 +11,57 @@ use crate::{
   ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
 
-enum Operation<const N: usize> {
+enum Command<const N: usize> {
   Read(usize),
   Write(usize, Page<N>),
   Flush,
 }
-impl<const N: usize> Operation<N> {
+impl<const N: usize> Command<N> {
   fn exec(&self, file: &mut File) -> std::io::Result<Option<Page<N>>> {
     match self {
-      Operation::Read(index) => {
+      Command::Read(index) => {
         file.seek(SeekFrom::Start(get_offset(*index, N)))?;
         let mut page = Page::new_empty();
         file.read_exact(page.as_mut())?;
         Ok(Some(page))
       }
-      Operation::Write(index, page) => {
+      Command::Write(index, page) => {
         file.seek(SeekFrom::Start(get_offset(*index, N)))?;
         file.write_all(page.as_ref())?;
         Ok(None)
       }
-      Operation::Flush => file.sync_all().map(|_| None),
+      Command::Flush => file.sync_all().map(|_| None),
     }
   }
 }
 
-pub struct DiskConfig {
+pub struct FinderConfig {
   pub path: PathBuf,
   pub batch_delay: Duration,
   pub batch_size: usize,
 }
 
-pub struct BlockManager<const N: usize> {
-  io_c: StoppableChannel<Operation<N>, Result<Option<Page<N>>>>,
+pub struct Finder<const N: usize> {
+  io_c: StoppableChannel<Command<N>, Result<Option<Page<N>>>>,
   batch_c: StoppableChannel<(usize, Page<N>), Result>,
   background: Arc<ThreadPool>,
-  config: DiskConfig,
+  config: FinderConfig,
 }
-impl<const N: usize> BlockManager<N> {
+impl<const N: usize> Finder<N> {
+  pub fn open(config: FinderConfig, background: Arc<ThreadPool>) -> Result<Self> {
+    let (io_c, rx) = StoppableChannel::new();
+    let (batch_c, batch_rx) = StoppableChannel::new();
+    let disk = Finder::new(io_c, batch_c, background, config);
+    disk.open_file(rx)?;
+    disk.start_batch(batch_rx);
+    Ok(disk)
+  }
+
   fn new(
-    io_c: StoppableChannel<Operation<N>, Result<Option<Page<N>>>>,
+    io_c: StoppableChannel<Command<N>, Result<Option<Page<N>>>>,
     batch_c: StoppableChannel<(usize, Page<N>), Result>,
     background: Arc<ThreadPool>,
-    config: DiskConfig,
+    config: FinderConfig,
   ) -> Self {
     Self {
       io_c,
@@ -64,7 +73,7 @@ impl<const N: usize> BlockManager<N> {
 
   fn open_file(
     &self,
-    rx: ContextReceiver<Operation<N>, Result<Option<Page<N>>>>,
+    rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>,
   ) -> Result {
     let mut file = OpenOptions::new()
       .create(true)
@@ -74,8 +83,8 @@ impl<const N: usize> BlockManager<N> {
       .map_err(Error::IO)?;
 
     self.background.schedule(move || {
-      while let Ok((op, done)) = rx.recv_done() {
-        let r = op.exec(&mut file).map_err(Error::IO);
+      while let Ok((cmd, done)) = rx.recv_done() {
+        let r = cmd.exec(&mut file).map_err(Error::IO);
         done.must_send(r);
       }
     });
@@ -91,10 +100,7 @@ impl<const N: usize> BlockManager<N> {
       let mut timer = delay.as_timer();
       while let Ok(o) = rx.recv_done_or_timeout(timer.get_remain()) {
         if let Some(((index, page), done)) = o {
-          if let Err(err) = io_c
-            .send_with_done(Operation::Write(index, page))
-            .must_recv()
-          {
+          if let Err(err) = io_c.send_with_done(Command::Write(index, page)).must_recv() {
             done.must_send(Err(err));
             timer.check();
             continue;
@@ -107,7 +113,7 @@ impl<const N: usize> BlockManager<N> {
           }
         }
 
-        if let Err(_) = io_c.send_with_done(Operation::Flush).must_recv() {
+        if let Err(_) = io_c.send_with_done(Command::Flush).must_recv() {
           continue;
         }
 
@@ -117,20 +123,8 @@ impl<const N: usize> BlockManager<N> {
     });
   }
 
-  pub fn open(config: DiskConfig, background: Arc<ThreadPool>) -> Result<Self> {
-    let (io_c, rx) = StoppableChannel::new();
-    let (batch_c, batch_rx) = StoppableChannel::new();
-    let disk = BlockManager::new(io_c, batch_c, background, config);
-    disk.open_file(rx)?;
-    disk.start_batch(batch_rx);
-    Ok(disk)
-  }
-
   pub fn read(&self, index: usize) -> Result<Page<N>> {
-    let r = self
-      .io_c
-      .send_with_done(Operation::Read(index))
-      .must_recv()?;
+    let r = self.io_c.send_with_done(Command::Read(index)).must_recv()?;
     Ok(r.unwrap())
   }
 
@@ -141,7 +135,7 @@ impl<const N: usize> BlockManager<N> {
     let page = v.serialize()?;
     self
       .io_c
-      .send_with_done(Operation::Write(index, page))
+      .send_with_done(Command::Write(index, page))
       .must_recv()?;
     Ok(())
   }
@@ -151,12 +145,11 @@ impl<const N: usize> BlockManager<N> {
     T: Serializable<Error, N>,
   {
     let page = v.serialize()?;
-    self.batch_c.send_with_done((index, page)).must_recv()?;
-    Ok(())
+    self.batch_c.send_with_done((index, page)).must_recv()
   }
 
   pub fn fsync(&self) -> Result {
-    self.io_c.send_with_done(Operation::Flush).must_recv()?;
+    self.io_c.send_with_done(Command::Flush).must_recv()?;
     Ok(())
   }
 }

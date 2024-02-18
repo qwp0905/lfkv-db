@@ -7,5 +7,8 @@ pub use page::*;
 mod serialize;
 pub use serialize::*;
 
-mod manager;
-pub use manager::*;
+mod finder;
+pub use finder::*;
+
+mod traits;
+pub use traits::*;

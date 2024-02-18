@@ -3,13 +3,14 @@ use std::{
   ops::Add,
   path::PathBuf,
   sync::{Arc, Mutex},
-  time::{Duration, Instant},
+  time::Duration,
 };
 
 use crate::{
-  disk::PageSeeker, wal::CommitInfo, ContextReceiver, Error, Page, Result, Serializable,
-  ShortenedMutex, StoppableChannel, ThreadPool, Timer, UnwrappedReceiver,
-  UnwrappedSender, PAGE_SIZE,
+  disk::{Disk, PageSeeker},
+  wal::CommitInfo,
+  ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex, StoppableChannel,
+  ThreadPool, Timer, UnwrappedReceiver, UnwrappedSender, PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};

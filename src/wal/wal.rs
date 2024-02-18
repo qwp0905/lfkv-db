@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-  disk::{BlockManager, DiskConfig},
+  disk::{Finder, FinderConfig},
   ContextReceiver, DroppableReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
   ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
@@ -30,7 +30,7 @@ struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo>,
   background: Arc<ThreadPool>,
-  disk: Arc<BlockManager<WAL_PAGE_SIZE>>,
+  disk: Arc<Finder<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>, Result>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
@@ -44,12 +44,12 @@ impl WriteAheadLog {
     flush_c: StoppableChannel<(), Option<usize>>,
     background: Arc<ThreadPool>,
   ) -> Result<Self> {
-    let disk_config = DiskConfig {
+    let disk_config = FinderConfig {
       path: config.path.clone(),
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
     };
-    let disk = Arc::new(BlockManager::open(disk_config, background.clone())?);
+    let disk = Arc::new(Finder::open(disk_config, background.clone())?);
     let buffer = Arc::new(LogBuffer::new());
 
     let (io_c, io_rx) = StoppableChannel::new();
@@ -80,7 +80,7 @@ impl WriteAheadLog {
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<CommitInfo>,
     background: Arc<ThreadPool>,
-    disk: Arc<BlockManager<WAL_PAGE_SIZE>>,
+    disk: Arc<Finder<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>, Result>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
