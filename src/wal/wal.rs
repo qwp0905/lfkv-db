@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-  disk::{Disk, DiskConfig},
+  disk::{BlockManager, DiskConfig},
   ContextReceiver, DroppableReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
   ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
@@ -30,7 +30,7 @@ struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo>,
   background: Arc<ThreadPool>,
-  disk: Arc<Disk<WAL_PAGE_SIZE>>,
+  disk: Arc<BlockManager<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>, Result>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
@@ -49,7 +49,7 @@ impl WriteAheadLog {
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
     };
-    let disk = Arc::new(Disk::open(disk_config, background.clone())?);
+    let disk = Arc::new(BlockManager::open(disk_config, background.clone())?);
     let buffer = Arc::new(LogBuffer::new());
 
     let (io_c, io_rx) = StoppableChannel::new();
@@ -80,7 +80,7 @@ impl WriteAheadLog {
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<CommitInfo>,
     background: Arc<ThreadPool>,
-    disk: Arc<Disk<WAL_PAGE_SIZE>>,
+    disk: Arc<BlockManager<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>, Result>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,

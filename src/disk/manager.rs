@@ -41,13 +41,13 @@ pub struct DiskConfig {
   pub batch_size: usize,
 }
 
-pub struct Disk<const N: usize> {
+pub struct BlockManager<const N: usize> {
   io_c: StoppableChannel<Operation<N>, Result<Option<Page<N>>>>,
   batch_c: StoppableChannel<(usize, Page<N>), Result>,
   background: Arc<ThreadPool>,
   config: DiskConfig,
 }
-impl<const N: usize> Disk<N> {
+impl<const N: usize> BlockManager<N> {
   fn new(
     io_c: StoppableChannel<Operation<N>, Result<Option<Page<N>>>>,
     batch_c: StoppableChannel<(usize, Page<N>), Result>,
@@ -120,7 +120,7 @@ impl<const N: usize> Disk<N> {
   pub fn open(config: DiskConfig, background: Arc<ThreadPool>) -> Result<Self> {
     let (io_c, rx) = StoppableChannel::new();
     let (batch_c, batch_rx) = StoppableChannel::new();
-    let disk = Disk::new(io_c, batch_c, background, config);
+    let disk = BlockManager::new(io_c, batch_c, background, config);
     disk.open_file(rx)?;
     disk.start_batch(batch_rx);
     Ok(disk)
