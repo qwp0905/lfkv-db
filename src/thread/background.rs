@@ -27,31 +27,21 @@ where
   ) -> JoinHandle<()> {
     let builder = Builder::new().name(name).stack_size(stack_size);
 
-    match self {
-      BackgroundJob::New(job) => builder.spawn(move || {
-        while let Ok(v) = rx.recv_new() {
-          job(v);
+    let f = match self {
+      BackgroundJob::New(job) => {
+        let job = job.clone();
+        move || {
+          while let Ok(v) = rx.recv_new() {
+            job(v);
+          }
         }
-      }),
-      BackgroundJob::NewOrTimeout(timeout, job) => builder.spawn(move || {
-        while let Ok(v) = rx.recv_new_or_timeout(*timeout) {
-          job(v);
-        }
-      }),
-      BackgroundJob::Done(job) => builder.spawn(move || {
-        while let Ok((v, done)) = rx.recv_done() {
-          let r = job(v);
-          done.must_send(r);
-        }
-      }),
-      BackgroundJob::All(job) => builder.spawn(move || {
-        while let Ok((v, done)) = rx.recv_all() {
-          let r = job(v);
-          done.map(|tx| tx.must_send(r));
-        }
-      }),
-    }
-    .unwrap()
+      }
+      BackgroundJob::NewOrTimeout(_, _) => todo!(),
+      BackgroundJob::Done(_) => todo!(),
+      BackgroundJob::All(_) => todo!(),
+    };
+
+    builder.spawn(f).unwrap()
   }
 }
 
