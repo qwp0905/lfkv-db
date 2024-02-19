@@ -3,54 +3,90 @@ use std::{
   time::Duration,
 };
 
-use crate::{logger, StoppableChannel, UnwrappedSender};
+use crate::{logger, ContextReceiver, StoppableChannel, UnwrappedSender};
 // fn testest() {
 //   StoppableThread::new(String::from("sdf"), 190, |v: usize| v);
 // }
 
-pub enum BackgroundJob {
-  New,
-  NewOrTimeout(Duration),
-  Done,
-  DoneOrTimeout(Duration),
-  All,
+pub enum BackgroundJob<T, R> {
+  New(fn(T) -> R),
+  NewOrTimeout(Duration, fn(Option<T>) -> R),
+  Done(fn(T) -> R),
+  All(fn(T) -> R),
 }
-impl BackgroundJob {
-  fn to_thread() {}
-}
-
-pub struct BackgroundThread<T, R, F>
-where
-  F: Fn(T) -> R + Clone + 'static,
-{
-  _type: BackgroundJob,
-  channel: StoppableChannel<T, R>,
-  thread: Option<JoinHandle<()>>,
-  job: F,
-  name: String,
-  stack_size: usize,
-}
-
-impl<T, R, F> BackgroundThread<T, R, F>
+impl<T, R> BackgroundJob<T, R>
 where
   T: Send + 'static,
   R: Send + 'static,
-  F: Fn(T) -> R + Send + Clone + 'static,
 {
-  // fn new(name: String, stack_size: usize, _type: BackgroundType<T, R>, job: F) -> Self {
-  //   let (channel, rx) = StoppableChannel::new();
-  //   let builder = Builder::new().name(name.clone()).stack_size(stack_size);
-  //   let cloned = job.clone();
-  //   Self {
-  //     _type,
-  //     channel,
-  //     thread: Some(thread),
-  //     job,
-  //     name,
-  //     stack_size,
-  //   }
-  // }
+  fn to_thread(
+    &self,
+    name: String,
+    stack_size: usize,
+    rx: ContextReceiver<T, R>,
+  ) -> JoinHandle<()> {
+    let builder = Builder::new().name(name).stack_size(stack_size);
+
+    match self {
+      BackgroundJob::New(job) => builder.spawn(move || {
+        while let Ok(v) = rx.recv_new() {
+          job(v);
+        }
+      }),
+      BackgroundJob::NewOrTimeout(timeout, job) => builder.spawn(move || {
+        while let Ok(v) = rx.recv_new_or_timeout(*timeout) {
+          job(v);
+        }
+      }),
+      BackgroundJob::Done(job) => builder.spawn(move || {
+        while let Ok((v, done)) = rx.recv_done() {
+          let r = job(v);
+          done.must_send(r);
+        }
+      }),
+      BackgroundJob::All(job) => builder.spawn(move || {
+        while let Ok((v, done)) = rx.recv_all() {
+          let r = job(v);
+          done.map(|tx| tx.must_send(r));
+        }
+      }),
+    }
+    .unwrap()
+  }
 }
+
+// pub struct BackgroundThread<T, R, F>
+// where
+//   F: Fn(T) -> R + Clone + 'static,
+// {
+//   _type: BackgroundJob,
+//   channel: StoppableChannel<T, R>,
+//   thread: Option<JoinHandle<()>>,
+//   job: F,
+//   name: String,
+//   stack_size: usize,
+// }
+
+// impl<T, R, F> BackgroundThread<T, R, F>
+// where
+//   T: Send + 'static,
+//   R: Send + 'static,
+//   F: Fn(T) -> R + Send + Clone + 'static,
+// {
+// fn new(name: String, stack_size: usize, _type: BackgroundType<T, R>, job: F) -> Self {
+//   let (channel, rx) = StoppableChannel::new();
+//   let builder = Builder::new().name(name.clone()).stack_size(stack_size);
+//   let cloned = job.clone();
+//   Self {
+//     _type,
+//     channel,
+//     thread: Some(thread),
+//     job,
+//     name,
+//     stack_size,
+//   }
+// }
+// }
 
 // struct StoppableThread<T, R> {
 //   channel: StoppableChannel<T, R>,
