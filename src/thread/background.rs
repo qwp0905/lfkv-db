@@ -25,8 +25,6 @@ where
     stack_size: usize,
     rx: ContextReceiver<T, R>,
   ) -> JoinHandle<()> {
-    let builder = Builder::new().name(name).stack_size(stack_size);
-
     let f = match self {
       BackgroundJob::New(job) => {
         let job = job.clone();
@@ -41,7 +39,11 @@ where
       BackgroundJob::All(_) => todo!(),
     };
 
-    builder.spawn(f).unwrap()
+    Builder::new()
+      .name(name)
+      .stack_size(stack_size)
+      .spawn(f)
+      .unwrap()
   }
 }
 
