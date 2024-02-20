@@ -1,4 +1,5 @@
 use std::{
+  sync::Mutex,
   thread::{Builder, JoinHandle},
   time::Duration,
 };
@@ -6,13 +7,16 @@ use std::{
 use crossbeam::channel::Sender;
 
 use crate::{
-  logger, ContextReceiver, StoppableChannel, UnwrappedReceiver, UnwrappedSender,
+  logger, ContextReceiver, ShortenedMutex, StoppableChannel, UnwrappedReceiver,
+  UnwrappedSender,
 };
+
+type Job<T, R> = dyn Fn(T) -> R + Send + Sync;
 
 pub enum BackgroundJob<T, R> {
   New(fn(T) -> R),
   NewOrTimeout(Duration, fn(Option<T>) -> R),
-  Done(fn(T) -> R),
+  Done(Box<Job<T, R>>),
   DoneOrTimeout(Duration, fn(Option<(T, Sender<R>)>)),
   All(fn(T) -> R),
 }
@@ -78,8 +82,28 @@ where
     t.unwrap()
   }
 }
+pub struct BackgroundThread<T, R>(Mutex<BackgroundThreadInner<T, R>>);
+impl<T, R> BackgroundThread<T, R>
+where
+  T: Send + 'static,
+  R: Send + 'static,
+{
+  pub fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
+    Self(Mutex::new(BackgroundThreadInner::new(
+      name, stack_size, job,
+    )))
+  }
 
-pub struct BackgroundThread<T, R> {
+  pub fn send(&self, v: T) {
+    self.0.l().send(v)
+  }
+
+  pub fn send_await(&self, v: T) -> R {
+    self.0.l().send_await(v)
+  }
+}
+
+struct BackgroundThreadInner<T, R> {
   job: BackgroundJob<T, R>,
   channel: StoppableChannel<T, R>,
   name: String,
@@ -87,12 +111,12 @@ pub struct BackgroundThread<T, R> {
   thread: Option<JoinHandle<()>>,
 }
 
-impl<T, R> BackgroundThread<T, R>
+impl<T, R> BackgroundThreadInner<T, R>
 where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
+  fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
     let (channel, rx) = StoppableChannel::new();
     let thread = job.to_thread(name.clone(), stack_size, rx);
     Self {
@@ -117,16 +141,18 @@ where
     self.thread = Some(nt);
   }
 
-  pub fn send(&self, v: T) {
+  fn send(&mut self, v: T) {
+    self.ensure_thread();
     self.channel.send(v);
   }
 
-  pub fn send_and_wait(&self, v: T) -> R {
+  fn send_await(&mut self, v: T) -> R {
+    self.ensure_thread();
     self.channel.send_with_done(v).must_recv()
   }
 }
 
-impl<T, R> Drop for BackgroundThread<T, R> {
+impl<T, R> Drop for BackgroundThreadInner<T, R> {
   fn drop(&mut self) {
     if let Some(t) = self.thread.take() {
       if !t.is_finished() {

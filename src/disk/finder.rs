@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::{
-  AsTimer, ContextReceiver, Error, Page, Result, Serializable, StoppableChannel,
-  ThreadPool, UnwrappedReceiver, UnwrappedSender,
+  AsTimer, BackgroundJob, BackgroundThread, ContextReceiver, Error, Page, Result,
+  Serializable, StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
 
 enum Command<const N: usize> {
@@ -39,6 +39,41 @@ pub struct FinderConfig {
   pub path: PathBuf,
   pub batch_delay: Duration,
   pub batch_size: usize,
+}
+
+pub struct F<const N: usize> {
+  io_c: BackgroundThread<Command<N>, Result<Option<Page<N>>>>,
+  batch_c: BackgroundThread<(usize, Page<N>), Result>,
+  config: FinderConfig,
+}
+impl<const N: usize> F<N> {
+  pub fn open(config: FinderConfig) -> Result<Self> {
+    let mut file = OpenOptions::new()
+      .create(true)
+      .read(true)
+      .write(true)
+      .open(&config.path)
+      .map_err(Error::IO)?;
+
+    let io_c = BackgroundThread::new(
+      format!(""),
+      10,
+      BackgroundJob::Done(Box::new(|cmd: Command<N>| {
+        cmd.exec(&mut file).map_err(Error::IO)
+      })),
+    );
+
+    let batch_c = BackgroundThread::new(
+      format!(""),
+      10,
+      BackgroundJob::DoneOrTimeout(config.batch_delay, |a| {}),
+    );
+    Ok(Self {
+      io_c,
+      config,
+      batch_c,
+    })
+  }
 }
 
 pub struct Finder<const N: usize> {
