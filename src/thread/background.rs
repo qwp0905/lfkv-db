@@ -49,7 +49,7 @@ where
   R: Send + 'static,
 {
   fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
-    let (channel, thread) = generate(name.clone(), stack_size, job.);
+    let (channel, thread) = generate(name.clone(), stack_size, job);
     Self {
       job,
       channel,
