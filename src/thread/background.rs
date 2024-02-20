@@ -3,6 +3,8 @@ use std::{
   time::Duration,
 };
 
+use crossbeam::channel::Sender;
+
 use crate::{logger, ContextReceiver, StoppableChannel, UnwrappedSender};
 // fn testest() {
 //   StoppableThread::new(String::from("sdf"), 190, |v: usize| v);
@@ -12,6 +14,7 @@ pub enum BackgroundJob<T, R> {
   New(fn(T) -> R),
   NewOrTimeout(Duration, fn(Option<T>) -> R),
   Done(fn(T) -> R),
+  DoneOrTimeout(Duration, fn(Option<(T, Sender<R>)>)),
   All(fn(T) -> R),
 }
 impl<T, R> BackgroundJob<T, R>
@@ -25,25 +28,55 @@ where
     stack_size: usize,
     rx: ContextReceiver<T, R>,
   ) -> JoinHandle<()> {
-    let f = match self {
+    let builder = Builder::new().name(name).stack_size(stack_size);
+    let t = match self {
       BackgroundJob::New(job) => {
         let job = job.clone();
-        move || {
+        builder.spawn(move || {
           while let Ok(v) = rx.recv_new() {
             job(v);
           }
-        }
+        })
       }
-      BackgroundJob::NewOrTimeout(_, _) => todo!(),
-      BackgroundJob::Done(_) => todo!(),
-      BackgroundJob::All(_) => todo!(),
+      BackgroundJob::NewOrTimeout(timeout, job) => {
+        let job = job.clone();
+        let timeout = *timeout;
+        builder.spawn(move || {
+          while let Ok(v) = rx.recv_new_or_timeout(timeout) {
+            job(v);
+          }
+        })
+      }
+      BackgroundJob::Done(job) => {
+        let job = job.clone();
+        builder.spawn(move || {
+          while let Ok((v, done)) = rx.recv_done() {
+            let r = job(v);
+            done.must_send(r)
+          }
+        })
+      }
+      BackgroundJob::DoneOrTimeout(timeout, job) => {
+        let job = job.clone();
+        let timeout = *timeout;
+        builder.spawn(move || {
+          while let Ok(v) = rx.recv_done_or_timeout(timeout) {
+            job(v);
+          }
+        })
+      }
+      BackgroundJob::All(job) => {
+        let job = job.clone();
+        builder.spawn(move || {
+          while let Ok((v, done)) = rx.recv_all() {
+            let r = job(v);
+            done.map(|tx| tx.must_send(r));
+          }
+        })
+      }
     };
 
-    Builder::new()
-      .name(name)
-      .stack_size(stack_size)
-      .spawn(f)
-      .unwrap()
+    t.unwrap()
   }
 }
 
