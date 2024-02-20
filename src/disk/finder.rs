@@ -55,19 +55,9 @@ impl<const N: usize> F<N> {
       .open(&config.path)
       .map_err(Error::IO)?;
 
-    let io_c = BackgroundThread::new(
-      format!(""),
-      10,
-      BackgroundJob::Done(Box::new(|cmd: Command<N>| {
-        cmd.exec(&mut file).map_err(Error::IO)
-      })),
-    );
+    let io_c = BackgroundThread::new(format!(""), 10, move |rx| {});
 
-    let batch_c = BackgroundThread::new(
-      format!(""),
-      10,
-      BackgroundJob::DoneOrTimeout(config.batch_delay, |a| {}),
-    );
+    let batch_c = BackgroundThread::new(format!(""), 10, move |rx| {});
     Ok(Self {
       io_c,
       config,

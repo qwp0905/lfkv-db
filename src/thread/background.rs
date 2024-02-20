@@ -1,96 +1,28 @@
 use std::{
   sync::Mutex,
   thread::{Builder, JoinHandle},
-  time::Duration,
 };
-
-use crossbeam::channel::Sender;
 
 use crate::{
   logger, ContextReceiver, ShortenedMutex, StoppableChannel, UnwrappedReceiver,
-  UnwrappedSender,
 };
 
-type Job<T, R> = dyn Fn(T) -> R + Send + Sync;
+pub type BackgroundJob<T, R> = Box<dyn FnOnce(ContextReceiver<T, R>) + Send>;
 
-pub enum BackgroundJob<T, R> {
-  New(fn(T) -> R),
-  NewOrTimeout(Duration, fn(Option<T>) -> R),
-  Done(Box<Job<T, R>>),
-  DoneOrTimeout(Duration, fn(Option<(T, Sender<R>)>)),
-  All(fn(T) -> R),
-}
-impl<T, R> BackgroundJob<T, R>
-where
-  T: Send + 'static,
-  R: Send + 'static,
-{
-  fn to_thread(
-    &self,
-    name: String,
-    stack_size: usize,
-    rx: ContextReceiver<T, R>,
-  ) -> JoinHandle<()> {
-    let builder = Builder::new().name(name).stack_size(stack_size);
-    let t = match self {
-      BackgroundJob::New(job) => {
-        let job = job.clone();
-        builder.spawn(move || {
-          while let Ok(v) = rx.recv_new() {
-            job(v);
-          }
-        })
-      }
-      BackgroundJob::NewOrTimeout(timeout, job) => {
-        let job = job.clone();
-        let timeout = *timeout;
-        builder.spawn(move || {
-          while let Ok(v) = rx.recv_new_or_timeout(timeout) {
-            job(v);
-          }
-        })
-      }
-      BackgroundJob::Done(job) => {
-        let job = job.clone();
-        builder.spawn(move || {
-          while let Ok((v, done)) = rx.recv_done() {
-            let r = job(v);
-            done.must_send(r)
-          }
-        })
-      }
-      BackgroundJob::DoneOrTimeout(timeout, job) => {
-        let job = job.clone();
-        let timeout = *timeout;
-        builder.spawn(move || {
-          while let Ok(v) = rx.recv_done_or_timeout(timeout) {
-            job(v);
-          }
-        })
-      }
-      BackgroundJob::All(job) => {
-        let job = job.clone();
-        builder.spawn(move || {
-          while let Ok((v, done)) = rx.recv_all() {
-            let r = job(v);
-            done.map(|tx| tx.must_send(r));
-          }
-        })
-      }
-    };
-
-    t.unwrap()
-  }
-}
 pub struct BackgroundThread<T, R>(Mutex<BackgroundThreadInner<T, R>>);
 impl<T, R> BackgroundThread<T, R>
 where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
+  pub fn new<F>(name: String, stack_size: usize, job: F) -> Self
+  where
+    F: FnOnce(ContextReceiver<T, R>) + Send + Sync + 'static,
+  {
     Self(Mutex::new(BackgroundThreadInner::new(
-      name, stack_size, job,
+      name,
+      stack_size,
+      Box::new(job),
     )))
   }
 
@@ -117,8 +49,7 @@ where
   R: Send + 'static,
 {
   fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
-    let (channel, rx) = StoppableChannel::new();
-    let thread = job.to_thread(name.clone(), stack_size, rx);
+    let (channel, thread) = generate(name.clone(), stack_size, job.);
     Self {
       job,
       channel,
@@ -135,10 +66,9 @@ where
       }
     }
 
-    let (channel, rx) = StoppableChannel::new();
-    let nt = self.job.to_thread(self.name.clone(), self.stack_size, rx);
+    let (channel, thread) = generate(self.name.clone(), self.stack_size, self.job);
     self.channel = channel;
-    self.thread = Some(nt);
+    self.thread = Some(thread);
   }
 
   fn send(&mut self, v: T) {
@@ -164,4 +94,22 @@ impl<T, R> Drop for BackgroundThreadInner<T, R> {
       }
     }
   }
+}
+
+fn generate<T, R>(
+  name: String,
+  stack_size: usize,
+  job: BackgroundJob<T, R>,
+) -> (StoppableChannel<T, R>, JoinHandle<()>)
+where
+  T: Send + 'static,
+  R: Send + 'static,
+{
+  let (channel, rx) = StoppableChannel::new();
+  let thread = Builder::new()
+    .name(name)
+    .stack_size(stack_size)
+    .spawn(move || job(rx))
+    .unwrap();
+  (channel, thread)
 }
