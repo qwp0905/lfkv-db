@@ -9,8 +9,8 @@ use std::{
 
 use crate::{
   disk::{Finder, FinderConfig},
-  ContextReceiver, DroppableReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
-  ThreadPool, UnwrappedReceiver, UnwrappedSender,
+  BackgroundThread, ContextReceiver, DroppableReceiver, Page, Result, ShortenedRwLock,
+  StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -49,7 +49,7 @@ impl WriteAheadLog {
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
     };
-    let disk = Arc::new(Finder::open(disk_config, background.clone())?);
+    let disk = Arc::new(Finder::open(disk_config)?);
     let buffer = Arc::new(LogBuffer::new());
 
     let (io_c, io_rx) = StoppableChannel::new();
@@ -107,50 +107,96 @@ impl WriteAheadLog {
     let checkpoint_c = self.checkpoint_c.clone();
     let last_index = self.last_index.clone();
     let commit_c = self.commit_c.clone();
+    // BackgroundThread::new(
+    //   "wal io thread",
+    //   move |rx: ContextReceiver<Vec<LogRecord>, Result>| {
+    //     let mut current = LogEntry::new();
+    //     let mut counter = 0;
 
-    self.background.schedule(move || {
-      let mut current = LogEntry::new();
-      let mut counter = 0;
+    //     while let Ok((records, done)) = rx.recv_done() {
+    //       counter += records.len();
+    //       let r = records.into_iter().try_for_each(|mut record| {
+    //         let mut l = last_index.wl();
+    //         record.index = *l + 1;
+    //         if let Operation::Commit = record.operation {
+    //           commit_c.send(CommitInfo::new(record.transaction_id, record.index));
+    //         }
 
-      while let Ok((records, done)) = rx.recv_done() {
-        counter += records.len();
-        let r = records.into_iter().try_for_each(|mut record| {
-          let mut l = last_index.wl();
-          record.index = *l + 1;
-          if let Operation::Commit = record.operation {
-            commit_c.send(CommitInfo::new(record.transaction_id, record.index));
-          }
+    //         if !current.is_available(&record) {
+    //           let entry = take(&mut current);
+    //           if let Err(err) = disk.batch_write(cursor, &entry) {
+    //             return ControlFlow::Break(err);
+    //           };
+    //           cursor = cursor.add(1).rem_euclid(max_file_size);
+    //         }
+    //         current.append(record);
+    //         *l += 1;
+    //         ControlFlow::Continue(())
+    //       });
 
-          if !current.is_available(&record) {
-            let entry = take(&mut current);
-            if let Err(err) = disk.batch_write(cursor, &entry) {
-              return ControlFlow::Break(err);
-            };
-            cursor = cursor.add(1).rem_euclid(max_file_size);
-          }
-          current.append(record);
-          *l += 1;
-          ControlFlow::Continue(())
-        });
+    //       if let ControlFlow::Break(err) = r {
+    //         done.must_send(Err(err));
+    //         continue;
+    //       }
 
-        if let ControlFlow::Break(err) = r {
-          done.must_send(Err(err));
-          continue;
-        }
+    //       if let Err(err) = disk.batch_write(cursor, &current) {
+    //         done.must_send(Err(err));
+    //         continue;
+    //       };
 
-        if let Err(err) = disk.batch_write(cursor, &current) {
-          done.must_send(Err(err));
-          continue;
-        };
+    //       if checkpoint_count <= counter {
+    //         checkpoint_c.send(());
+    //         counter = 0;
+    //       }
 
-        if checkpoint_count <= counter {
-          checkpoint_c.send(());
-          counter = 0;
-        }
+    //       done.must_send(Ok(()))
+    //     }
+    //   },
+    // );
 
-        done.must_send(Ok(()))
-      }
-    });
+    // self.background.schedule(move || {
+    //   let mut current = LogEntry::new();
+    //   let mut counter = 0;
+
+    //   while let Ok((records, done)) = rx.recv_done() {
+    //     counter += records.len();
+    //     let r = records.into_iter().try_for_each(|mut record| {
+    //       let mut l = last_index.wl();
+    //       record.index = *l + 1;
+    //       if let Operation::Commit = record.operation {
+    //         commit_c.send(CommitInfo::new(record.transaction_id, record.index));
+    //       }
+
+    //       if !current.is_available(&record) {
+    //         let entry = take(&mut current);
+    //         if let Err(err) = disk.batch_write(cursor, &entry) {
+    //           return ControlFlow::Break(err);
+    //         };
+    //         cursor = cursor.add(1).rem_euclid(max_file_size);
+    //       }
+    //       current.append(record);
+    //       *l += 1;
+    //       ControlFlow::Continue(())
+    //     });
+
+    //     if let ControlFlow::Break(err) = r {
+    //       done.must_send(Err(err));
+    //       continue;
+    //     }
+
+    //     if let Err(err) = disk.batch_write(cursor, &current) {
+    //       done.must_send(Err(err));
+    //       continue;
+    //     };
+
+    //     if checkpoint_count <= counter {
+    //       checkpoint_c.send(());
+    //       counter = 0;
+    //     }
+
+    //     done.must_send(Ok(()))
+    //   }
+    // });
   }
 
   fn start_checkpoint(&self, rx: ContextReceiver<()>) {

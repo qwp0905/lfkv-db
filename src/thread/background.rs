@@ -1,24 +1,24 @@
-use std::{
-  sync::Mutex,
-  thread::{Builder, JoinHandle},
-};
+use std::thread::{Builder, JoinHandle};
 
-use crate::{
-  logger, ContextReceiver, ShortenedMutex, StoppableChannel, UnwrappedReceiver,
-};
+use crate::{logger, ContextReceiver, StoppableChannel, UnwrappedReceiver};
 
-pub type BackgroundJob<T, R> = dyn Callable<ContextReceiver<T, R>> + Send;
+pub type BackgroundJob<T, R> = dyn CallableBox<ContextReceiver<T, R>> + Send;
 
-pub trait Callable<T> {
-  fn call_box(self: Box<Self>, rx: T);
+pub trait CallableBox<T> {
+  fn call_box(self: Box<Self>, v: T);
 }
-impl<T, F: FnMut(T)> Callable<T> for F {
-  fn call_box(mut self: Box<Self>, rx: T) {
-    self(rx)
+impl<T, F: FnMut(T)> CallableBox<T> for F {
+  fn call_box(mut self: Box<Self>, v: T) {
+    self(v)
   }
 }
 
-pub struct BackgroundThread<T, R, const N: usize>(Mutex<BackgroundThreadInner<T, R, N>>);
+pub struct BackgroundThread<T, R, const N: usize> {
+  channel: StoppableChannel<T, R>,
+  name: String,
+  thread: Option<JoinHandle<()>>,
+}
+
 impl<T, R, const N: usize> BackgroundThread<T, R, N>
 where
   T: Send + 'static,
@@ -28,37 +28,10 @@ where
   where
     F: FnMut(ContextReceiver<T, R>) + Send + 'static,
   {
-    Self(Mutex::new(BackgroundThreadInner::new(
-      name.to_string(),
-      Box::new(job),
-    )))
-  }
-
-  pub fn send(&self, v: T) {
-    self.0.l().send(v)
-  }
-
-  pub fn send_await(&self, v: T) -> R {
-    self.0.l().send_await(v)
-  }
-}
-
-struct BackgroundThreadInner<T, R, const N: usize> {
-  channel: StoppableChannel<T, R>,
-  name: String,
-  thread: Option<JoinHandle<()>>,
-}
-
-impl<T, R, const N: usize> BackgroundThreadInner<T, R, N>
-where
-  T: Send + 'static,
-  R: Send + 'static,
-{
-  fn new(name: String, job: Box<BackgroundJob<T, R>>) -> Self {
-    let (channel, thread) = generate(name.clone(), N, job);
+    let (channel, thread) = generate(name.to_string(), N, Box::new(job));
     Self {
       channel,
-      name,
+      name: name.to_string(),
       thread: Some(thread),
     }
   }
@@ -75,18 +48,26 @@ where
   //   self.thread = Some(thread);
   // }
 
-  fn send(&mut self, v: T) {
+  pub fn send(&self, v: T) {
     // self.ensure_thread();
     self.channel.send(v);
   }
 
-  fn send_await(&mut self, v: T) -> R {
+  pub fn send_await(&self, v: T) -> R {
     // self.ensure_thread();
     self.channel.send_with_done(v).must_recv()
   }
+
+  pub fn get_channel(&self) -> Self {
+    Self {
+      channel: self.channel.clone(),
+      name: self.name.clone(),
+      thread: None,
+    }
+  }
 }
 
-impl<T, R, const N: usize> Drop for BackgroundThreadInner<T, R, N> {
+impl<T, R, const N: usize> Drop for BackgroundThread<T, R, N> {
   fn drop(&mut self) {
     if let Some(t) = self.thread.take() {
       if !t.is_finished() {

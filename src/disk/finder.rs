@@ -2,13 +2,12 @@ use std::{
   fs::{File, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
   path::PathBuf,
-  sync::Arc,
   time::Duration,
 };
 
 use crate::{
   AsTimer, BackgroundThread, ContextReceiver, Error, Page, Result, Serializable,
-  StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
+  UnwrappedSender,
 };
 
 enum Command<const N: usize> {
@@ -41,12 +40,12 @@ pub struct FinderConfig {
   pub batch_size: usize,
 }
 
-pub struct F<const N: usize> {
+pub struct Finder<const N: usize> {
   io_c: BackgroundThread<Command<N>, Result<Option<Page<N>>>, 1>,
   batch_c: BackgroundThread<(usize, Page<N>), Result, 1>,
   config: FinderConfig,
 }
-impl<const N: usize> F<N> {
+impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
     let mut file = OpenOptions::new()
       .create(true)
@@ -56,7 +55,7 @@ impl<const N: usize> F<N> {
       .map_err(Error::IO)?;
 
     let io_c = BackgroundThread::new(
-      "",
+      "finder io",
       move |rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>| {
         while let Ok((cmd, done)) = rx.recv_done() {
           let r = cmd.exec(&mut file).map_err(Error::IO);
@@ -65,76 +64,17 @@ impl<const N: usize> F<N> {
       },
     );
 
-    let batch_c = BackgroundThread::new("", move |rx| {});
+    let c = io_c.get_channel();
 
-    Ok(Self {
-      io_c,
-      config,
-      batch_c,
-    })
-  }
-}
+    let delay = config.batch_delay;
+    let count = config.batch_size;
 
-pub struct Finder<const N: usize> {
-  io_c: StoppableChannel<Command<N>, Result<Option<Page<N>>>>,
-  batch_c: StoppableChannel<(usize, Page<N>), Result>,
-  background: Arc<ThreadPool>,
-  config: FinderConfig,
-}
-impl<const N: usize> Finder<N> {
-  pub fn open(config: FinderConfig, background: Arc<ThreadPool>) -> Result<Self> {
-    let (io_c, rx) = StoppableChannel::new();
-    let (batch_c, batch_rx) = StoppableChannel::new();
-    let disk = Finder::new(io_c, batch_c, background, config);
-    disk.open_file(rx)?;
-    disk.start_batch(batch_rx);
-    Ok(disk)
-  }
-
-  fn new(
-    io_c: StoppableChannel<Command<N>, Result<Option<Page<N>>>>,
-    batch_c: StoppableChannel<(usize, Page<N>), Result>,
-    background: Arc<ThreadPool>,
-    config: FinderConfig,
-  ) -> Self {
-    Self {
-      io_c,
-      batch_c,
-      background,
-      config,
-    }
-  }
-
-  fn open_file(
-    &self,
-    rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>,
-  ) -> Result {
-    let mut file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .open(&self.config.path)
-      .map_err(Error::IO)?;
-
-    self.background.schedule(move || {
-      while let Ok((cmd, done)) = rx.recv_done() {
-        let r = cmd.exec(&mut file).map_err(Error::IO);
-        done.must_send(r);
-      }
-    });
-    Ok(())
-  }
-
-  fn start_batch(&self, rx: ContextReceiver<(usize, Page<N>), Result>) {
-    let delay = self.config.batch_delay;
-    let count = self.config.batch_size;
-    let io_c = self.io_c.clone();
-    self.background.schedule(move || {
+    let batch_c = BackgroundThread::new("finder batch", move |rx| {
       let mut v = vec![];
       let mut timer = delay.as_timer();
       while let Ok(o) = rx.recv_done_or_timeout(timer.get_remain()) {
         if let Some(((index, page), done)) = o {
-          if let Err(err) = io_c.send_with_done(Command::Write(index, page)).must_recv() {
+          if let Err(err) = c.send_await(Command::Write(index, page)) {
             done.must_send(Err(err));
             timer.check();
             continue;
@@ -147,7 +87,7 @@ impl<const N: usize> Finder<N> {
           }
         }
 
-        if let Err(_) = io_c.send_with_done(Command::Flush).must_recv() {
+        if let Err(_) = c.send_await(Command::Flush) {
           continue;
         }
 
@@ -155,10 +95,16 @@ impl<const N: usize> Finder<N> {
         timer.reset()
       }
     });
+
+    Ok(Self {
+      io_c,
+      config,
+      batch_c,
+    })
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {
-    let r = self.io_c.send_with_done(Command::Read(index)).must_recv()?;
+    let r = self.io_c.send_await(Command::Read(index))?;
     Ok(r.unwrap())
   }
 
@@ -167,10 +113,7 @@ impl<const N: usize> Finder<N> {
     T: Serializable<Error, N>,
   {
     let page = v.serialize()?;
-    self
-      .io_c
-      .send_with_done(Command::Write(index, page))
-      .must_recv()?;
+    self.io_c.send_await(Command::Write(index, page))?;
     Ok(())
   }
 
@@ -179,11 +122,11 @@ impl<const N: usize> Finder<N> {
     T: Serializable<Error, N>,
   {
     let page = v.serialize()?;
-    self.batch_c.send_with_done((index, page)).must_recv()
+    self.batch_c.send_await((index, page))
   }
 
   pub fn fsync(&self) -> Result {
-    self.io_c.send_with_done(Command::Flush).must_recv()?;
+    self.io_c.send_await(Command::Flush)?;
     Ok(())
   }
 }
