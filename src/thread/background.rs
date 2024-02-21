@@ -7,21 +7,29 @@ use crate::{
   logger, ContextReceiver, ShortenedMutex, StoppableChannel, UnwrappedReceiver,
 };
 
-pub type BackgroundJob<T, R> = Box<dyn FnOnce(ContextReceiver<T, R>) + Send>;
+pub type BackgroundJob<T, R> = dyn Callable<ContextReceiver<T, R>> + Send;
 
-pub struct BackgroundThread<T, R>(Mutex<BackgroundThreadInner<T, R>>);
-impl<T, R> BackgroundThread<T, R>
+pub trait Callable<T> {
+  fn call_box(self: Box<Self>, rx: T);
+}
+impl<T, F: FnMut(T)> Callable<T> for F {
+  fn call_box(mut self: Box<Self>, rx: T) {
+    self(rx)
+  }
+}
+
+pub struct BackgroundThread<T, R, const N: usize>(Mutex<BackgroundThreadInner<T, R, N>>);
+impl<T, R, const N: usize> BackgroundThread<T, R, N>
 where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new<F>(name: String, stack_size: usize, job: F) -> Self
+  pub fn new<F>(name: &str, job: F) -> Self
   where
-    F: FnOnce(ContextReceiver<T, R>) + Send + Sync + 'static,
+    F: FnMut(ContextReceiver<T, R>) + Send + 'static,
   {
     Self(Mutex::new(BackgroundThreadInner::new(
-      name,
-      stack_size,
+      name.to_string(),
       Box::new(job),
     )))
   }
@@ -35,54 +43,50 @@ where
   }
 }
 
-struct BackgroundThreadInner<T, R> {
-  job: BackgroundJob<T, R>,
+struct BackgroundThreadInner<T, R, const N: usize> {
   channel: StoppableChannel<T, R>,
   name: String,
-  stack_size: usize,
   thread: Option<JoinHandle<()>>,
 }
 
-impl<T, R> BackgroundThreadInner<T, R>
+impl<T, R, const N: usize> BackgroundThreadInner<T, R, N>
 where
   T: Send + 'static,
   R: Send + 'static,
 {
-  fn new(name: String, stack_size: usize, job: BackgroundJob<T, R>) -> Self {
-    let (channel, thread) = generate(name.clone(), stack_size, job);
+  fn new(name: String, job: Box<BackgroundJob<T, R>>) -> Self {
+    let (channel, thread) = generate(name.clone(), N, job);
     Self {
-      job,
       channel,
       name,
-      stack_size,
       thread: Some(thread),
     }
   }
 
-  fn ensure_thread(&mut self) {
-    if let Some(thread) = &self.thread {
-      if !thread.is_finished() {
-        return;
-      }
-    }
+  // fn ensure_thread(&mut self) {
+  //   if let Some(thread) = &self.thread {
+  //     if !thread.is_finished() {
+  //       return;
+  //     }
+  //   }
 
-    let (channel, thread) = generate(self.name.clone(), self.stack_size, self.job);
-    self.channel = channel;
-    self.thread = Some(thread);
-  }
+  //   let (channel, thread) = generate(self.name.clone(), self.stack_size, self.job);
+  //   self.channel = channel;
+  //   self.thread = Some(thread);
+  // }
 
   fn send(&mut self, v: T) {
-    self.ensure_thread();
+    // self.ensure_thread();
     self.channel.send(v);
   }
 
   fn send_await(&mut self, v: T) -> R {
-    self.ensure_thread();
+    // self.ensure_thread();
     self.channel.send_with_done(v).must_recv()
   }
 }
 
-impl<T, R> Drop for BackgroundThreadInner<T, R> {
+impl<T, R, const N: usize> Drop for BackgroundThreadInner<T, R, N> {
   fn drop(&mut self) {
     if let Some(t) = self.thread.take() {
       if !t.is_finished() {
@@ -99,7 +103,7 @@ impl<T, R> Drop for BackgroundThreadInner<T, R> {
 fn generate<T, R>(
   name: String,
   stack_size: usize,
-  job: BackgroundJob<T, R>,
+  job: Box<BackgroundJob<T, R>>,
 ) -> (StoppableChannel<T, R>, JoinHandle<()>)
 where
   T: Send + 'static,
@@ -109,7 +113,7 @@ where
   let thread = Builder::new()
     .name(name)
     .stack_size(stack_size)
-    .spawn(move || job(rx))
+    .spawn(move || job.call_box(rx))
     .unwrap();
   (channel, thread)
 }

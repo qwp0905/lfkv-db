@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::{
-  AsTimer, BackgroundJob, BackgroundThread, ContextReceiver, Error, Page, Result,
-  Serializable, StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
+  AsTimer, BackgroundThread, ContextReceiver, Error, Page, Result, Serializable,
+  StoppableChannel, ThreadPool, UnwrappedReceiver, UnwrappedSender,
 };
 
 enum Command<const N: usize> {
@@ -42,8 +42,8 @@ pub struct FinderConfig {
 }
 
 pub struct F<const N: usize> {
-  io_c: BackgroundThread<Command<N>, Result<Option<Page<N>>>>,
-  batch_c: BackgroundThread<(usize, Page<N>), Result>,
+  io_c: BackgroundThread<Command<N>, Result<Option<Page<N>>>, 1>,
+  batch_c: BackgroundThread<(usize, Page<N>), Result, 1>,
   config: FinderConfig,
 }
 impl<const N: usize> F<N> {
@@ -55,9 +55,18 @@ impl<const N: usize> F<N> {
       .open(&config.path)
       .map_err(Error::IO)?;
 
-    let io_c = BackgroundThread::new(format!(""), 10, move |rx| {});
+    let io_c = BackgroundThread::new(
+      "",
+      move |rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>| {
+        while let Ok((cmd, done)) = rx.recv_done() {
+          let r = cmd.exec(&mut file).map_err(Error::IO);
+          done.must_send(r);
+        }
+      },
+    );
 
-    let batch_c = BackgroundThread::new(format!(""), 10, move |rx| {});
+    let batch_c = BackgroundThread::new("", move |rx| {});
+
     Ok(Self {
       io_c,
       config,
