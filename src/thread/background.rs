@@ -1,6 +1,6 @@
 use std::thread::{Builder, JoinHandle};
 
-use crate::{logger, ContextReceiver, StoppableChannel, UnwrappedReceiver};
+use crate::{logger, ContextReceiver, StoppableChannel};
 
 pub type BackgroundJob<T, R> = dyn CallableBox<ContextReceiver<T, R>> + Send;
 
