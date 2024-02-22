@@ -55,15 +55,11 @@ where
 
   pub fn send_await(&self, v: T) -> R {
     // self.ensure_thread();
-    self.channel.send_with_done(v).must_recv()
+    self.channel.send_await(v)
   }
 
-  pub fn get_channel(&self) -> Self {
-    Self {
-      channel: self.channel.clone(),
-      name: self.name.clone(),
-      thread: None,
-    }
+  pub fn get_channel(&self) -> StoppableChannel<T, R> {
+    self.channel.clone()
   }
 }
 

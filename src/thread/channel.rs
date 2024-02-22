@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
-use crate::UnwrappedSender;
+use crate::{UnwrappedReceiver, UnwrappedSender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -41,6 +41,12 @@ impl<T, R> StoppableChannel<T, R> {
     let (ctx, rx) = StoppableContext::with_done(v);
     self.0.must_send(ctx);
     return rx;
+  }
+
+  pub fn send_await(&self, v: T) -> R {
+    let (ctx, rx) = StoppableContext::with_done(v);
+    self.0.must_send(ctx);
+    rx.must_recv()
   }
 
   pub fn send(&self, v: T) {
