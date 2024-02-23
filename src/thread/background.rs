@@ -1,6 +1,9 @@
-use std::thread::{Builder, JoinHandle};
+use std::{
+  sync::RwLock,
+  thread::{Builder, JoinHandle},
+};
 
-use crate::{logger, ContextReceiver, StoppableChannel};
+use crate::{logger, ContextReceiver, ShortenedRwLock, StoppableChannel};
 
 pub type BackgroundJob<T, R> = dyn CallableBox<ContextReceiver<T, R>> + Send;
 
@@ -14,9 +17,7 @@ impl<T, F: FnMut(T)> CallableBox<T> for F {
 }
 
 pub struct BackgroundThread<T, R, const N: usize> {
-  channel: StoppableChannel<T, R>,
-  name: String,
-  thread: Option<JoinHandle<()>>,
+  inner: RwLock<BackgroundThreadInner<T, R, N>>,
 }
 
 impl<T, R, const N: usize> BackgroundThread<T, R, N>
@@ -26,13 +27,14 @@ where
 {
   pub fn new<F>(name: &str, job: F) -> Self
   where
-    F: FnMut(ContextReceiver<T, R>) + Send + 'static,
+    F: CallableBox<ContextReceiver<T, R>> + Send + 'static,
   {
-    let (channel, thread) = generate(name.to_string(), N, Box::new(job));
     Self {
-      channel,
-      name: name.to_string(),
-      thread: Some(thread),
+      inner: RwLock::new(BackgroundThreadInner {
+        name: name.to_string(),
+        thread: None,
+        job: Some(Box::new(job)),
+      }),
     }
   }
 
@@ -49,32 +51,55 @@ where
   // }
 
   pub fn send(&self, v: T) {
-    // self.ensure_thread();
-    self.channel.send(v);
+    let mut inner = self.inner.wl();
+    if let Some((_, channel)) = inner.thread {
+      return channel.send(v);
+    }
+
+    let job = inner.job.take().unwrap();
+    let (channel, thread) = generate(inner.name.clone(), N, job);
+    channel.send(v);
+    inner.thread = Some((thread, channel));
   }
 
   pub fn send_await(&self, v: T) -> R {
-    // self.ensure_thread();
-    self.channel.send_await(v)
+    let mut inner = self.inner.wl();
+    if let Some((thread, channel)) = inner.thread {
+      return channel.send_await(v);
+    }
+
+    let job = inner.job.take().unwrap();
+    let (channel, thread) = generate(inner.name.clone(), N, job);
+    let r = channel.send_await(v);
+    inner.thread = Some((thread, channel));
+    r
   }
 
   pub fn get_channel(&self) -> StoppableChannel<T, R> {
-    self.channel.clone()
+    let inner = self.inner.rl();
+    let (_, channel) = inner.thread.unwrap();
+    channel.clone()
   }
 }
 
-impl<T, R, const N: usize> Drop for BackgroundThread<T, R, N> {
+impl<T, R, const N: usize> Drop for BackgroundThreadInner<T, R, N> {
   fn drop(&mut self) {
-    if let Some(t) = self.thread.take() {
-      if !t.is_finished() {
-        self.channel.terminate()
+    if let Some((thread, channel)) = self.thread.take() {
+      if !thread.is_finished() {
+        channel.terminate()
       }
 
-      if let Err(err) = t.join() {
+      if let Err(err) = thread.join() {
         logger::error(format!("error on thread {}\n{:?}", self.name, err));
       }
     }
   }
+}
+
+pub struct BackgroundThreadInner<T, R, const N: usize> {
+  name: String,
+  thread: Option<(JoinHandle<()>, StoppableChannel<T, R>)>,
+  job: Option<Box<BackgroundJob<T, R>>>,
 }
 
 fn generate<T, R>(
