@@ -28,7 +28,7 @@ pub struct WriteAheadLogConfig {
 
 struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
-  commit_c: StoppableChannel<CommitInfo>,
+  commit_c: StoppableChannel<CommitInfo, Result>,
   disk: Arc<Finder<WAL_PAGE_SIZE>>,
   io_c: StoppableChannel<Vec<LogRecord>, Result>,
   checkpoint_c: StoppableChannel<()>,
@@ -39,7 +39,7 @@ struct WriteAheadLog {
 impl WriteAheadLog {
   pub fn open(
     config: WriteAheadLogConfig,
-    commit_c: StoppableChannel<CommitInfo>,
+    commit_c: StoppableChannel<CommitInfo, Result>,
     flush_c: StoppableChannel<(), Option<usize>>,
   ) -> Result<Self> {
     let disk_config = FinderConfig {
@@ -75,7 +75,7 @@ impl WriteAheadLog {
 
   fn new(
     buffer: Arc<LogBuffer>,
-    commit_c: StoppableChannel<CommitInfo>,
+    commit_c: StoppableChannel<CommitInfo, Result>,
     disk: Arc<Finder<WAL_PAGE_SIZE>>,
     io_c: StoppableChannel<Vec<LogRecord>, Result>,
     checkpoint_c: StoppableChannel<()>,

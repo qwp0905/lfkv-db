@@ -70,70 +70,56 @@ pub struct BufferPool {
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
   disk: Arc<PageSeeker<BLOCK_SIZE>>,
-  background: ThreadPool<Result>,
 }
 impl BufferPool {
-  fn start_write(&self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) {
-    let disk = self.disk.clone();
-    self.background.schedule(move || {
-      while let Ok(((index, page), done)) = rx.recv_done() {
-        let r = disk.write(index, page);
-        done.must_send(r);
-      }
-      Ok(())
-    })
-  }
-
   fn start_flush(&self, rx: ContextReceiver<(), Option<usize>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
-
-    self.background.schedule(move || {
-      while let Ok((_, done)) = rx.recv_all() {
-        let max_index = cache.flush_all()?;
-        disk.fsync()?;
-        done.map(|tx| tx.must_send(max_index));
+    rx.to_all("name", 1, move |_| {
+      let max_index = match cache.flush_all() {
+        Ok(o) => o,
+        Err(_) => return None,
+      };
+      if let Err(_) = disk.fsync() {
+        return None;
       }
 
-      Ok(())
+      max_index
     });
   }
 
-  fn start_commit(&self, rx: ContextReceiver<CommitInfo>) {
+  fn start_commit(&self, rx: ContextReceiver<CommitInfo, Result>) {
     let uncommitted = self.uncommitted.clone();
     let cache = self.cache.clone();
     let disk = self.disk.clone();
     let rollback = self.rollback.clone();
 
-    self.background.schedule(move || {
-      while let Ok(commit) = rx.recv_new() {
-        let mut u = uncommitted.l();
-        if let Some(v) = u.remove(&commit.tx_id) {
-          for index in v {
-            let undo_index = match cache.commit(index, commit.as_ref()) {
-              Ok(applied) => {
-                if applied {
-                  continue;
-                }
-
-                let mut block: DataBlock = disk.read(index)?.deserialize()?;
-                if block.tx_id == commit.tx_id {
-                  block.commit_index = commit.commit_index;
-                  cache.insert(index, block);
-                  continue;
-                }
-
-                let undo_index = block.undo_index;
-                cache.insert(index, block);
-                undo_index
+    rx.to_new("", 1, move |commit| {
+      let mut u = uncommitted.l();
+      if let Some(v) = u.remove(&commit.tx_id) {
+        for index in v {
+          let undo_index = match cache.commit(index, commit.as_ref()) {
+            Ok(applied) => {
+              if applied {
+                continue;
               }
-              Err(undo_index) => undo_index,
-            };
-            rollback.commit(undo_index, commit.as_ref())?;
-          }
-        };
-      }
 
+              let mut block: DataBlock = disk.read(index)?.deserialize()?;
+              if block.tx_id == commit.tx_id {
+                block.commit_index = commit.commit_index;
+                cache.insert(index, block);
+                continue;
+              }
+
+              let undo_index = block.undo_index;
+              cache.insert(index, block);
+              undo_index
+            }
+            Err(undo_index) => undo_index,
+          };
+          rollback.commit(undo_index, commit.as_ref())?;
+        }
+      };
       Ok(())
     });
   }
