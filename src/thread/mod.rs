@@ -8,6 +8,3 @@ use worker::*;
 
 mod pool;
 pub use pool::*;
-
-mod background;
-pub use background::*;

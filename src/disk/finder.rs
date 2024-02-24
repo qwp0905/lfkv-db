@@ -5,8 +5,10 @@ use std::{
   time::Duration,
 };
 
+use crossbeam::channel::Sender;
+
 use crate::{
-  AsTimer, BackgroundThread, ContextReceiver, Error, Page, Result, Serializable,
+  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, Timer,
   UnwrappedSender,
 };
 
@@ -41,66 +43,70 @@ pub struct FinderConfig {
 }
 
 pub struct Finder<const N: usize> {
-  io_c: BackgroundThread<Command<N>, Result<Option<Page<N>>>, 1>,
-  batch_c: BackgroundThread<(usize, Page<N>), Result, 1>,
+  io_c: StoppableChannel<Command<N>, Result<Option<Page<N>>>>,
+  batch_c: StoppableChannel<(usize, Page<N>), Result>,
   config: FinderConfig,
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
+    let (io_c, io_rx) = StoppableChannel::new();
+    let (batch_c, batch_rx) = StoppableChannel::new();
+    let finder = Self {
+      io_c,
+      config,
+      batch_c,
+    };
+    finder.start_io(io_rx)?;
+    finder.start_batch(batch_rx);
+    Ok(finder)
+  }
+
+  fn start_io(&self, rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>) -> Result {
     let mut file = OpenOptions::new()
       .create(true)
       .read(true)
       .write(true)
-      .open(&config.path)
+      .open(&self.config.path)
       .map_err(Error::IO)?;
+    rx.to_done("finder io", 3 * N, move |cmd: Command<N>| {
+      cmd.exec(&mut file).map_err(Error::IO)
+    });
+    Ok(())
+  }
 
-    let io_c = BackgroundThread::new(
-      "finder io",
-      move |rx: ContextReceiver<Command<N>, Result<Option<Page<N>>>>| {
-        while let Ok((cmd, done)) = rx.recv_done() {
-          let r = cmd.exec(&mut file).map_err(Error::IO);
-          done.must_send(r);
-        }
-      },
-    );
-
-    let c = io_c.get_channel();
-
-    let delay = config.batch_delay;
-    let count = config.batch_size;
-
-    let batch_c = BackgroundThread::new("finder batch", move |rx| {
-      let mut v = vec![];
-      let mut timer = delay.as_timer();
-      while let Ok(o) = rx.recv_done_or_timeout(timer.get_remain()) {
+  fn start_batch(&self, rx: ContextReceiver<(usize, Page<N>), Result>) {
+    let delay = self.config.batch_delay;
+    let count = self.config.batch_size;
+    let c = self.io_c.clone();
+    rx.with_timer(
+      "finder batch",
+      N * 3,
+      delay,
+      move |v: &mut Vec<Sender<Result>>,
+            timer: &mut Timer,
+            o: Option<((usize, Page<N>), Sender<Result>)>| {
         if let Some(((index, page), done)) = o {
           if let Err(err) = c.send_await(Command::Write(index, page)) {
             done.must_send(Err(err));
             timer.check();
-            continue;
+            return;
           };
 
           v.push(done);
           if v.len() < count {
             timer.check();
-            continue;
+            return;
           }
         }
 
         if let Err(_) = c.send_await(Command::Flush) {
-          continue;
+          return;
         }
 
         v.drain(..).for_each(|done| done.must_send(Ok(())));
         timer.reset()
-      }
-    });
-
-    Ok(Self {
-      io_c,
-      config,
-      batch_c,
-    })
+      },
+    );
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {

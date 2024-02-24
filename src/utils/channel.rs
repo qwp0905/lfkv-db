@@ -2,10 +2,14 @@ use crossbeam::channel::{Receiver, Sender};
 
 pub trait UnwrappedSender<T> {
   fn must_send(&self, t: T);
+  fn maybe_send(&self, t: T);
 }
 impl<T> UnwrappedSender<T> for Sender<T> {
   fn must_send(&self, t: T) {
     self.send(t).unwrap();
+  }
+  fn maybe_send(&self, t: T) {
+    self.send(t).ok();
   }
 }
 
