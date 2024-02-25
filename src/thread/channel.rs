@@ -2,7 +2,7 @@ use std::{thread::JoinHandle, time::Duration};
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
-use crate::{AsTimer, Timer, UnwrappedReceiver, UnwrappedSender};
+use crate::{AsTimer, UnwrappedReceiver, UnwrappedSender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -253,7 +253,7 @@ where
   ) -> JoinHandle<()>
   where
     F: FnMut(&mut D, Option<(T, Sender<R>)>) -> bool + Send + 'static,
-    D: Default + Send + 'static,
+    D: Default,
   {
     std::thread::Builder::new()
       .name(name.to_string())
