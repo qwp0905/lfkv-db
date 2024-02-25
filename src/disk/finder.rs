@@ -8,8 +8,7 @@ use std::{
 use crossbeam::channel::Sender;
 
 use crate::{
-  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, Timer,
-  UnwrappedSender,
+  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, UnwrappedSender,
 };
 
 enum Command<const N: usize> {
