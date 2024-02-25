@@ -1,16 +1,9 @@
-use std::{
-  collections::HashMap,
-  ops::Add,
-  path::PathBuf,
-  sync::{Arc, Mutex},
-  time::Duration,
-};
+use std::{ops::Add, path::PathBuf, sync::Mutex, time::Duration};
 
 use crate::{
-  disk::{Disk, PageSeeker},
+  disk::{Finder, FinderConfig},
   wal::CommitInfo,
-  ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex, StoppableChannel,
-  ThreadPool, Timer, UnwrappedReceiver, UnwrappedSender, PAGE_SIZE,
+  Error, Page, Result, Serializable, ShortenedMutex, PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};
@@ -40,6 +33,16 @@ impl UndoLog {
       data,
       undo_index,
     }
+  }
+
+  fn from_data(index: usize, data: DataBlock) -> Self {
+    Self::new(
+      index,
+      data.commit_index,
+      data.tx_id,
+      data.data,
+      data.undo_index,
+    )
   }
 }
 impl Clone for UndoLog {
@@ -98,34 +101,32 @@ pub struct RollbackStorageConfig {
 }
 
 pub struct RollbackStorage {
-  cache: Arc<Mutex<LRUCache<usize, UndoLog>>>,
-  disk: Arc<PageSeeker<UNDO_PAGE_SIZE>>,
-  background: Arc<ThreadPool<Result<()>>>,
-  io_c: StoppableChannel<DataBlock, usize>,
+  cache: Mutex<LRUCache<usize, UndoLog>>,
+  disk: Finder<UNDO_PAGE_SIZE>,
   config: RollbackStorageConfig,
+  cursor: Mutex<usize>,
 }
 impl RollbackStorage {
-  pub fn open(
-    config: RollbackStorageConfig,
-    background: Arc<ThreadPool<Result<()>>>,
-  ) -> Result<Self> {
-    let disk = Arc::new(PageSeeker::open(config.path.as_path())?);
+  pub fn open(config: RollbackStorageConfig) -> Result<Self> {
+    let disk = Finder::open(FinderConfig {
+      path: config.path.clone(),
+      batch_delay: config.fsync_delay,
+      batch_size: config.fsync_count,
+    })?;
     let cache = Default::default();
-    let (io_c, rx) = StoppableChannel::new();
+    let cursor = Default::default();
 
     let storage = Self {
       cache,
       disk,
-      background,
-      io_c,
       config,
+      cursor,
     };
-    let cursor = storage.replay()?;
-    storage.start_io(rx, cursor);
+    storage.replay()?;
     Ok(storage)
   }
 
-  fn replay(&self) -> Result<usize> {
+  fn replay(&self) -> Result<()> {
     let mut cursor = 0;
     for index in 0..self.config.max_file_size {
       let log: UndoLog = match self.disk.read(index) {
@@ -144,42 +145,9 @@ impl RollbackStorage {
         break;
       }
     }
+    *self.cursor.l() = cursor;
 
-    Ok(cursor)
-  }
-
-  fn start_io(&self, rx: ContextReceiver<DataBlock, usize>, mut cursor: usize) {
-    let count = self.config.fsync_count;
-    let delay = self.config.fsync_delay;
-    let max = self.config.max_file_size;
-    let disk = self.disk.clone();
-
-    self.background.schedule(move || {
-      let mut timer = Timer::new(delay);
-      let mut m = HashMap::new();
-      while let Ok(o) = rx.recv_done_or_timeout(timer.get_remain()) {
-        if let Some((data, done)) = o {
-          m.insert(cursor, done);
-          let mut log: UndoLog = data.into();
-          log.index = cursor;
-          disk.write(cursor.rem_euclid(max), log.serialize()?)?;
-          cursor = cursor.add(1).rem_euclid(usize::MAX);
-
-          if m.len() < count {
-            timer.check();
-            continue;
-          }
-        }
-
-        if m.len() != 0 {
-          disk.fsync()?;
-          m.drain().for_each(|(i, done)| done.must_send(i))
-        }
-
-        timer.reset()
-      }
-      Ok(())
-    });
+    Ok(())
   }
 
   pub fn get(&self, commit_index: usize, undo_index: usize) -> Result<Page> {
@@ -216,7 +184,16 @@ impl RollbackStorage {
   }
 
   pub fn append(&self, data: DataBlock) -> Result<usize> {
-    Ok(self.io_c.send_with_done(data).must_recv())
+    let index = {
+      let mut c = self.cursor.l();
+      let index = c.add(1).rem_euclid(usize::MAX);
+      *c = index;
+      index
+    };
+    self
+      .disk
+      .batch_write_from(index, &UndoLog::from_data(index, data))?;
+    Ok(index)
   }
 
   pub fn commit(&self, undo_index: usize, commit: &CommitInfo) -> Result<()> {

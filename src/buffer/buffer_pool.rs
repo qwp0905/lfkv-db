@@ -4,11 +4,8 @@ use std::{
 };
 
 use crate::{
-  disk::{Disk, PageSeeker},
-  size,
-  wal::CommitInfo,
-  ContextReceiver, Error, Page, Result, Serializable, ShortenedMutex, ThreadPool,
-  UnwrappedSender, PAGE_SIZE,
+  disk::Finder, size, wal::CommitInfo, ContextReceiver, Error, Page, Result,
+  Serializable, ShortenedMutex, PAGE_SIZE,
 };
 
 use super::{CacheStorage, RollbackStorage};
@@ -69,9 +66,16 @@ pub struct BufferPool {
   cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
-  disk: Arc<PageSeeker<BLOCK_SIZE>>,
+  disk: Arc<Finder<BLOCK_SIZE>>,
 }
 impl BufferPool {
+  fn start_write(&self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) {
+    // let disk = self.disk.clone();
+    // rx.to_done("name", 1, move |(index, block)| {
+    //   // disk.write(index)
+    // });
+  }
+
   fn start_flush(&self, rx: ContextReceiver<(), Option<usize>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
@@ -140,7 +144,7 @@ impl BufferPool {
       return Ok(block.data.copy());
     }
 
-    return self.rollback.get(commit_index, block.undo_index);
+    self.rollback.get(commit_index, block.undo_index)
   }
 
   pub fn insert(&self, tx_id: usize, index: usize, data: Page) -> Result<()> {

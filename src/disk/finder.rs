@@ -114,26 +114,44 @@ impl<const N: usize> Finder<N> {
     Ok(r.unwrap())
   }
 
-  pub fn write<T>(&self, index: usize, v: &T) -> Result
-  where
-    T: Serializable<Error, N>,
-  {
-    let page = v.serialize()?;
+  pub fn write(&self, index: usize, page: Page<N>) -> Result {
     self.io_c.send_await(Command::Write(index, page))?;
     Ok(())
-  }
-
-  pub fn batch_write<T>(&self, index: usize, v: &T) -> Result
-  where
-    T: Serializable<Error, N>,
-  {
-    let page = v.serialize()?;
-    self.batch_c.send_await((index, page))
   }
 
   pub fn fsync(&self) -> Result {
     self.io_c.send_await(Command::Flush)?;
     Ok(())
+  }
+
+  pub fn batch_write(&self, index: usize, page: Page<N>) -> Result {
+    self.batch_c.send_await((index, page))
+  }
+}
+
+impl<const N: usize> Finder<N> {
+  pub fn read_to<T>(&self, index: usize) -> Result<T>
+  where
+    T: Serializable<Error, N>,
+  {
+    let page = self.read(index)?;
+    page.deserialize()
+  }
+
+  pub fn write_from<T>(&self, index: usize, v: &T) -> Result
+  where
+    T: Serializable<Error, N>,
+  {
+    let page = v.serialize()?;
+    self.write(index, page)
+  }
+
+  pub fn batch_write_from<T>(&self, index: usize, v: &T) -> Result
+  where
+    T: Serializable<Error, N>,
+  {
+    let page = v.serialize()?;
+    self.batch_write(index, page)
   }
 }
 

@@ -9,6 +9,3 @@ pub use serialize::*;
 
 mod finder;
 pub use finder::*;
-
-mod traits;
-pub use traits::*;

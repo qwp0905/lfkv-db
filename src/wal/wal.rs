@@ -116,14 +116,14 @@ impl WriteAheadLog {
 
         if !current.is_available(&record) {
           let entry = take(&mut current);
-          disk.batch_write(cursor, &entry)?;
+          disk.batch_write_from(cursor, &entry)?;
           cursor = cursor.add(1).rem_euclid(max_file_size);
         }
         current.append(record);
         *l += 1;
       }
 
-      disk.batch_write(cursor, &current)?;
+      disk.batch_write_from(cursor, &current)?;
 
       if checkpoint_count <= counter {
         checkpoint_c.send(());
