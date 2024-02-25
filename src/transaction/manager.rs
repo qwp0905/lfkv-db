@@ -4,7 +4,6 @@ use std::{
 };
 
 use crate::{
-  logger,
   utils::{size, EmptySender, ShortenedMutex},
   DroppableReceiver,
 };
@@ -32,20 +31,17 @@ impl LockManager {
 
   fn start_release(&self, rx: ContextReceiver<usize>) {
     let cloned = self.tree_locks.clone();
-    self.background.schedule(move || {
-      while let Ok(index) = rx.recv_new() {
-        let mut locks = cloned.l();
-        if let Some(pl) = locks.get_mut(&index) {
-          if let Some(blocked) = pl.release() {
-            for tx in blocked {
-              tx.close();
-            }
-            continue;
+    rx.to_new("sdf", 1, move |index| {
+      let mut locks = cloned.l();
+      if let Some(pl) = locks.get_mut(&index) {
+        if let Some(blocked) = pl.release() {
+          for tx in blocked {
+            tx.close();
           }
-          locks.remove(&index);
+          return;
         }
+        locks.remove(&index);
       }
-      logger::info(format!("lock manager background terminated"));
     });
   }
 
@@ -91,9 +87,5 @@ impl LockManager {
       };
       rx.drop_one();
     }
-  }
-
-  pub fn close_background(&self) {
-    self.release.terminate();
   }
 }
