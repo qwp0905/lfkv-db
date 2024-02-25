@@ -70,16 +70,16 @@ pub struct BufferPool {
 }
 impl BufferPool {
   fn start_write(&self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) {
-    // let disk = self.disk.clone();
-    // rx.to_done("name", 1, move |(index, block)| {
-    //   // disk.write(index)
-    // });
+    let disk = self.disk.clone();
+    rx.to_done("bufferpool write", 1, move |(index, page)| {
+      disk.write(index, page)
+    });
   }
 
   fn start_flush(&self, rx: ContextReceiver<(), Option<usize>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
-    rx.to_all("name", 1, move |_| {
+    rx.to_all("bufferpool flush", 1, move |_| {
       let max_index = match cache.flush_all() {
         Ok(o) => o,
         Err(_) => return None,
@@ -98,7 +98,7 @@ impl BufferPool {
     let disk = self.disk.clone();
     let rollback = self.rollback.clone();
 
-    rx.to_new("", 1, move |commit| {
+    rx.to_new("bufferpool commit", 1, move |commit| {
       let mut u = uncommitted.l();
       if let Some(v) = u.remove(&commit.tx_id) {
         for index in v {
@@ -108,7 +108,7 @@ impl BufferPool {
                 continue;
               }
 
-              let mut block: DataBlock = disk.read(index)?.deserialize()?;
+              let mut block: DataBlock = disk.read_to(index)?;
               if block.tx_id == commit.tx_id {
                 block.commit_index = commit.commit_index;
                 cache.insert(index, block);
@@ -128,12 +128,14 @@ impl BufferPool {
     });
   }
 
+  fn start_rollback(&self) {}
+
   pub fn get(&self, commit_index: usize, index: usize) -> Result<Page> {
     let block = {
       match self.cache.get(&index) {
         Some(block) => block.copy(),
         None => {
-          let block: DataBlock = self.disk.read(index)?.deserialize()?;
+          let block: DataBlock = self.disk.read_to(index)?;
           self.cache.insert(index, block.copy());
           block
         }

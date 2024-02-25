@@ -17,13 +17,13 @@ use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE
 
 #[derive(Debug, Clone)]
 pub struct WriteAheadLogConfig {
-  path: PathBuf,
-  max_buffer_size: usize,
-  checkpoint_interval: Duration,
-  checkpoint_count: usize,
-  group_commit_delay: Duration,
-  group_commit_count: usize,
-  max_file_size: usize,
+  pub path: PathBuf,
+  pub max_buffer_size: usize,
+  pub checkpoint_interval: Duration,
+  pub checkpoint_count: usize,
+  pub group_commit_delay: Duration,
+  pub group_commit_count: usize,
+  pub max_file_size: usize,
 }
 
 struct WriteAheadLog {

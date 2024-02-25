@@ -85,13 +85,6 @@ impl CacheStorage {
     core.evicted.remove(&index);
   }
 
-  pub fn clear(&self, tx_id: usize, commit_index: usize) {
-    let mut core = self.0.l();
-    core.evicted.retain(|_, v| {
-      (v.commit_index == 0 && v.tx_id > tx_id) || v.commit_index >= commit_index
-    })
-  }
-
   pub fn flush_all(&self) -> Result<Option<usize>> {
     let (max_index, wait) = {
       let mut l = vec![];

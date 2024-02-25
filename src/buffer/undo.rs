@@ -165,8 +165,7 @@ impl RollbackStorage {
 
       let log: UndoLog = self
         .disk
-        .read(undo_index.rem_euclid(self.config.max_file_size))?
-        .deserialize()?;
+        .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
       if log.index != undo_index {
         return Err(Error::NotFound);
       }
@@ -211,8 +210,7 @@ impl RollbackStorage {
 
       let mut log: UndoLog = self
         .disk
-        .read(undo_index.rem_euclid(self.config.max_file_size))?
-        .deserialize()?;
+        .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
       if log.index != undo_index {
         return Err(Error::NotFound);
       }
