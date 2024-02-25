@@ -2,7 +2,7 @@ use std::{thread::JoinHandle, time::Duration};
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
-use crate::{Timer, UnwrappedReceiver, UnwrappedSender};
+use crate::{AsTimer, Timer, UnwrappedReceiver, UnwrappedSender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -259,7 +259,7 @@ where
       .name(name.to_string())
       .stack_size(stack_size)
       .spawn(move || {
-        let mut timer = Timer::new(timeout);
+        let mut timer = timeout.as_timer();
         let mut d = Default::default();
         while let Ok(v) = self.recv_done_or_timeout(timer.get_remain()) {
           match f(&mut d, v) {
