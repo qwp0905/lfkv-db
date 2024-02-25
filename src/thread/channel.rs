@@ -252,17 +252,20 @@ where
     mut f: F,
   ) -> JoinHandle<()>
   where
-    F: FnMut(&mut D, &mut Timer, Option<(T, Sender<R>)>) + Send + 'static,
+    F: FnMut(&mut D, Option<(T, Sender<R>)>) -> bool + Send + 'static,
     D: Default + Send + 'static,
   {
-    let mut timer = Timer::new(timeout);
-    let mut d = Default::default();
     std::thread::Builder::new()
       .name(name.to_string())
       .stack_size(stack_size)
       .spawn(move || {
+        let mut timer = Timer::new(timeout);
+        let mut d = Default::default();
         while let Ok(v) = self.recv_done_or_timeout(timer.get_remain()) {
-          f(&mut d, &mut timer, v);
+          match f(&mut d, v) {
+            true => timer.reset(),
+            false => timer.check(),
+          }
         }
       })
       .unwrap()

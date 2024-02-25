@@ -83,28 +83,25 @@ impl<const N: usize> Finder<N> {
       N * 3,
       delay,
       move |v: &mut Vec<Sender<Result>>,
-            timer: &mut Timer,
             o: Option<((usize, Page<N>), Sender<Result>)>| {
         if let Some(((index, page), done)) = o {
           if let Err(err) = c.send_await(Command::Write(index, page)) {
             done.must_send(Err(err));
-            timer.check();
-            return;
+            return false;
           };
 
           v.push(done);
           if v.len() < count {
-            timer.check();
-            return;
+            return false;
           }
         }
 
         if let Err(_) = c.send_await(Command::Flush) {
-          return;
+          return false;
         }
 
         v.drain(..).for_each(|done| done.must_send(Ok(())));
-        timer.reset()
+        true
       },
     );
   }
