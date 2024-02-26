@@ -21,6 +21,9 @@ pub enum Error {
 
   #[error("end of file")]
   EOF,
+
+  #[error("transaction already closed")]
+  TransactionClosed,
 }
 impl Error {
   pub fn to_string(&self) -> String {
@@ -30,6 +33,7 @@ impl Error {
       Self::Unknown(err) => format!("unknown error {}", err.error),
       Self::EOF => format!("end of file"),
       Self::IO(err) => err.to_string(),
+      Self::TransactionClosed => format!("transaction already closed"),
     }
   }
 
