@@ -26,7 +26,7 @@ pub struct WriteAheadLogConfig {
   pub max_file_size: usize,
 }
 
-struct WriteAheadLog {
+pub struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo, Result>,
   disk: Arc<Finder<WAL_PAGE_SIZE>>,

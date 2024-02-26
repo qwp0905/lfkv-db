@@ -128,7 +128,16 @@ impl BufferPool {
     });
   }
 
-  fn start_rollback(&self) {}
+  // fn start_rollback(&self, rx: ContextReceiver<usize>) {
+  //   let uncommitted = self.uncommitted.clone();
+  //   let cache = self.cache.clone();
+
+  //   rx.to_done("bufferpool rollback", 1, move |tx_id| {
+  //     if let Some(v) = uncommitted.l().get(&tx_id) {
+  //       for i in v {}
+  //     }
+  //   });
+  // }
 
   pub fn get(&self, commit_index: usize, index: usize) -> Result<Page> {
     let block = {
@@ -164,8 +173,7 @@ impl BufferPool {
     let undo_index = self.rollback.append(block.into())?;
     let new_block = DataBlock::uncommitted(tx_id, undo_index, data);
     self.cache.insert_new(index, new_block);
-    let mut un_c = self.uncommitted.l();
-    un_c.entry(tx_id).or_default().push(index);
+    self.uncommitted.l().entry(tx_id).or_default().push(index);
     Ok(())
   }
 }

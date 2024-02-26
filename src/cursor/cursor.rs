@@ -10,6 +10,57 @@
 //   TreeHeader, HEADER_INDEX, MAX_NODE_LEN,
 // };
 
+use std::sync::Arc;
+
+use crate::{
+  buffer::BufferPool, transaction::LockManager, wal::WriteAheadLog, Error, Result,
+  Serializable,
+};
+
+use super::{CursorEntry, TreeHeader, HEADER_INDEX};
+
+pub struct Cursor {
+  tx_id: usize,
+  last_commit_index: usize,
+  buffer: Arc<BufferPool>,
+  wal: Arc<WriteAheadLog>,
+  locks: Arc<LockManager>,
+}
+impl Cursor {
+  pub fn get<T>(&self, key: &String) -> Result<T>
+  where
+    T: Serializable,
+  {
+    let i = self.get_index(key)?;
+    self
+      .buffer
+      .get(self.last_commit_index, i)
+      .and_then(|page| page.deserialize())
+  }
+}
+impl Cursor {
+  fn get_index(&self, key: &String) -> Result<usize> {
+    let header: TreeHeader = self
+      .buffer
+      .get(self.last_commit_index, HEADER_INDEX)?
+      .deserialize()?;
+    let mut index = header.get_root();
+    loop {
+      let entry: CursorEntry = self
+        .buffer
+        .get(self.last_commit_index, index)?
+        .deserialize()?;
+      match entry.find_or_next(key) {
+        Ok(i) => return Ok(i),
+        Err(n) => match n {
+          Some(i) => index = i,
+          None => return Err(Error::NotFound),
+        },
+      }
+    }
+  }
+}
+
 // pub struct Cursor {
 //   writer: CursorWriter,
 //   locks: CursorLocks,

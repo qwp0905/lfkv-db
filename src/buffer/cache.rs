@@ -80,11 +80,6 @@ impl CacheStorage {
     Ok(false)
   }
 
-  pub fn flush(&self, index: usize) {
-    let mut core = self.0.l();
-    core.evicted.remove(&index);
-  }
-
   pub fn flush_all(&self) -> Result<Option<usize>> {
     let (max_index, wait) = {
       let mut l = vec![];
