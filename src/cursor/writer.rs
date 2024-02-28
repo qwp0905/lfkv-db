@@ -1,52 +1,48 @@
-// use std::sync::Arc;
+use std::sync::Arc;
 
-// use crate::{buffer::BufferPool, disk::Page, error::Result, wal::WAL};
+use crate::{
+  buffer::BufferPool, wal::WriteAheadLog, Error, Result, Serializable, PAGE_SIZE,
+};
 
-// pub struct CursorWriter {
-//   transaction_id: usize,
-//   wal: Arc<WAL>,
-//   buffer: Arc<BufferPool>,
-// }
-// impl CursorWriter {
-//   pub fn new(
-//     transaction_id: usize,
-//     wal: Arc<WAL>,
-//     buffer: Arc<BufferPool>,
-//   ) -> Self {
-//     Self {
-//       transaction_id,
-//       wal,
-//       buffer,
-//     }
-//   }
+pub struct CursorWriter {
+  tx_id: usize,
+  last_commit_index: usize,
+  wal: Arc<WriteAheadLog>,
+  buffer: Arc<BufferPool>,
+}
+impl CursorWriter {
+  pub fn new(
+    tx_id: usize,
+    last_commit_index: usize,
+    wal: Arc<WriteAheadLog>,
+    buffer: Arc<BufferPool>,
+  ) -> Self {
+    Self {
+      tx_id,
+      last_commit_index,
+      wal,
+      buffer,
+    }
+  }
 
-//   pub fn get(&self, index: usize) -> Result<Page> {
-//     self.buffer.get(index)
-//   }
+  pub fn get<T>(&self, index: usize) -> Result<T>
+  where
+    T: Serializable<Error, PAGE_SIZE>,
+  {
+    let page = self.buffer.get(self.last_commit_index, index)?;
+    page.deserialize()
+  }
 
-//   pub fn insert(&self, index: usize, page: Page) -> Result<()> {
-//     let before = self.buffer.get(index).unwrap_or(Page::new_empty());
-//     self
-//       .wal
-//       .append(self.transaction_id, index, before, page.copy())?;
+  pub fn insert<T>(&self, index: usize, value: T) -> Result
+  where
+    T: Serializable<Error, PAGE_SIZE>,
+  {
+    let page = value.serialize()?;
+    self.buffer.insert(self.tx_id, index, page.copy())?;
+    self.wal.append(self.tx_id, index, page)
+  }
 
-//     // self.wal.append(self.transaction_id, index, page.copy())?;
-//     self.buffer.insert(index, page)
-//   }
-
-//   // pub fn remove(&self, index: usize) -> Result<()> {
-//   //   let page = Page::new_empty();
-//   //   self.wal.append(self.transaction_id, index, page.copy())?;
-//   //   self.buffer.insert(index, page)
-//   // }
-// }
-
-// impl Drop for CursorWriter {
-//   fn drop(&mut self) {
-//     for _ in 0..1 {
-//       if self.wal.commit(self.transaction_id).is_ok() {
-//         return;
-//       };
-//     }
-//   }
-// }
+  pub fn commit(&self) -> Result {
+    self.wal.commit(self.tx_id)
+  }
+}

@@ -35,6 +35,32 @@
 //   }
 // }
 
+use std::sync::Arc;
+
+use crate::{buffer::BufferPool, wal::WriteAheadLog, Cursor, FreeList, Result};
+
+pub struct Engine {
+  wal: Arc<WriteAheadLog>,
+  buffer_pool: Arc<BufferPool>,
+  freelist: Arc<FreeList>,
+}
+impl Engine {
+  pub fn new_transaction(&self) -> Result<Cursor> {
+    self
+      .wal
+      .new_transaction()
+      .map(|(tx_id, last_commit_index)| {
+        Cursor::new(
+          self.freelist.clone(),
+          self.wal.clone(),
+          self.buffer_pool.clone(),
+          tx_id,
+          last_commit_index,
+        )
+      })
+  }
+}
+
 // pub struct Engine {
 //   wal: Arc<WAL>,
 //   lock_manager: Arc<LockManager>,

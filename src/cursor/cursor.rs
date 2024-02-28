@@ -4,22 +4,34 @@ use std::sync::{
 };
 
 use crate::{
-  buffer::BufferPool, transaction::LockManager, wal::WriteAheadLog, Error, FreeList,
-  Page, Result, Serializable, PAGE_SIZE,
+  buffer::BufferPool, wal::WriteAheadLog, Error, FreeList, Result, Serializable,
 };
 
-use super::{CursorEntry, TreeHeader, HEADER_INDEX, MAX_NODE_LEN};
+use super::{
+  CursorEntry, CursorWriter, InternalNode, TreeHeader, HEADER_INDEX, MAX_NODE_LEN,
+};
 
 pub struct Cursor {
-  tx_id: usize,
-  last_commit_index: usize,
-  buffer: Arc<BufferPool>,
-  wal: Arc<WriteAheadLog>,
   // locks: Arc<LockManager>,
-  committed: AtomicBool,
+  committed: Arc<AtomicBool>,
   freelist: Arc<FreeList>,
+  writer: CursorWriter,
 }
 impl Cursor {
+  pub fn new(
+    freelist: Arc<FreeList>,
+    wal: Arc<WriteAheadLog>,
+    buffer: Arc<BufferPool>,
+    tx_id: usize,
+    last_commit_index: usize,
+  ) -> Self {
+    Self {
+      committed: Arc::new(AtomicBool::new(false)),
+      freelist,
+      writer: CursorWriter::new(tx_id, last_commit_index, wal, buffer),
+    }
+  }
+
   pub fn get<T>(&self, key: &String) -> Result<T>
   where
     T: Serializable,
@@ -29,10 +41,7 @@ impl Cursor {
     }
 
     let i = self.get_index(key)?;
-    self
-      .buffer
-      .get(self.last_commit_index, i)
-      .and_then(|page| page.deserialize())
+    self.writer.get(i)
   }
 
   pub fn insert<T>(&self, key: String, value: T) -> Result
@@ -43,33 +52,39 @@ impl Cursor {
       return Err(Error::TransactionClosed);
     }
 
-    let data = value.serialize()?;
-
     match self.get_index(&key) {
-      Ok(index) => {
-        self.buffer.insert(self.tx_id, index, data.copy())?;
-        self.wal.append(self.tx_id, index, data)
-      }
+      Ok(index) => self.writer.insert(index, value),
       Err(Error::NotFound) => {
-        let header = self.buffer.get(self.last_commit_index, HEADER_INDEX)?;
+        let mut header: TreeHeader = self.writer.get(HEADER_INDEX)?;
+        if let Ok((s, i)) = self.append_at(header.get_root(), key, value)? {
+          let nri = self.freelist.acquire()?;
+          let new_root = CursorEntry::Internal(InternalNode {
+            keys: vec![s],
+            children: vec![header.get_root(), i],
+          });
+          self.writer.insert(nri, new_root)?;
+
+          header.set_root(nri);
+          self.writer.insert(HEADER_INDEX, header)?;
+        }
         Ok(())
       }
       Err(err) => Err(err),
     }
   }
+
+  pub fn commit(&self) -> Result {
+    self.writer.commit()?;
+    self.committed.store(true, Ordering::SeqCst);
+    Ok(())
+  }
 }
 impl Cursor {
   fn get_index(&self, key: &String) -> Result<usize> {
-    let header: TreeHeader = self
-      .buffer
-      .get(self.last_commit_index, HEADER_INDEX)?
-      .deserialize()?;
+    let header: TreeHeader = self.writer.get(HEADER_INDEX)?;
     let mut index = header.get_root();
     loop {
-      let entry: CursorEntry = self
-        .buffer
-        .get(self.last_commit_index, index)?
-        .deserialize()?;
+      let entry: CursorEntry = self.writer.get(index)?;
       match entry.find_or_next(key) {
         Ok(i) => return Ok(i),
         Err(n) => match n {
@@ -80,45 +95,37 @@ impl Cursor {
     }
   }
 
-  fn append_at(
+  fn append_at<T>(
     &self,
     current: usize,
     key: String,
-    page: Page<PAGE_SIZE>,
-  ) -> Result<core::result::Result<(String, usize), Option<String>>> {
-    let entry: CursorEntry = self
-      .buffer
-      .get(self.last_commit_index, current)?
-      .deserialize()?;
+    value: T,
+  ) -> Result<core::result::Result<(String, usize), Option<String>>>
+  where
+    T: Serializable,
+  {
+    let entry: CursorEntry = self.writer.get(current)?;
     match entry {
       CursorEntry::Internal(mut node) => {
         let i = node.next(&key);
-        match self.append_at(i, key, page)? {
+        match self.append_at(i, key, value)? {
           Ok((s, ni)) => {
             node.add(s, ni);
             if node.len() <= MAX_NODE_LEN {
-              let page = node.serialize()?;
-              self.buffer.insert(self.tx_id, current, page.copy())?;
-              self.wal.append(self.tx_id, current, page)?;
+              self.writer.insert(current, node)?;
               return Ok(Err(None));
             }
 
             let (n, s) = node.split();
             let new_i = self.freelist.acquire()?;
-            let np = n.serialize()?;
-            let mp = node.serialize()?;
-            self.buffer.insert(self.tx_id, new_i, np.copy())?;
-            self.wal.append(self.tx_id, new_i, np)?;
-            self.buffer.insert(self.tx_id, current, mp.copy())?;
-            self.wal.append(self.tx_id, current, mp)?;
+            self.writer.insert(new_i, n)?;
+            self.writer.insert(current, node)?;
             Ok(Ok((s, new_i)))
           }
           Err(oi) => {
             if let Some(s) = oi {
               node.keys.insert(i - 1, s);
-              let page = node.serialize()?;
-              self.buffer.insert(self.tx_id, current, page.copy())?;
-              self.wal.append(self.tx_id, current, page)?;
+              self.writer.insert(current, node)?;
             }
             Ok(Err(None))
           }
@@ -126,35 +133,25 @@ impl Cursor {
       }
       CursorEntry::Leaf(mut node) => {
         if let Some(i) = node.find(&key) {
-          self
-            .buffer
-            .insert(self.tx_id, node.keys[i].1, page.copy())?;
-          self.wal.append(self.tx_id, node.keys[i].1, page)?;
+          self.writer.insert(node.keys[i].1, value)?;
           return Ok(Err(None));
         };
 
         let pi = self.freelist.acquire()?;
-        self.buffer.insert(self.tx_id, pi, page.copy())?;
-        self.wal.append(self.tx_id, pi, page)?;
+        self.writer.insert(pi, value)?;
         let lk = node.add(key, pi);
         if node.len() <= MAX_NODE_LEN {
-          let np = node.serialize()?;
-          self.buffer.insert(self.tx_id, current, np.copy())?;
+          self.writer.insert(current, node)?;
           return Ok(Err(lk));
         }
 
         let ni = self.freelist.acquire()?;
         let (n, s) = node.split(current, ni);
-        let np = n.serialize()?;
-        let mp = node.serialize()?;
-        self.buffer.insert(self.tx_id, ni, np.copy())?;
-        self.wal.append(self.tx_id, ni, np)?;
-        self.buffer.insert(self.tx_id, current, mp.copy())?;
-        self.wal.append(self.tx_id, current, mp)?;
+        self.writer.insert(ni, n)?;
+        self.writer.insert(current, node)?;
         Ok(Ok((s, ni)))
       }
     }
-    // Ok(())
   }
 }
 

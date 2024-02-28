@@ -138,10 +138,10 @@ impl RollbackStorage {
       };
       let before = cursor;
       cursor = log.index.add(1).rem_euclid(usize::MAX);
-      if index == 0 {
+      if index.eq(&0) {
         continue;
       }
-      if before != log.index {
+      if before.ne(&log.index) {
         break;
       }
     }
@@ -155,7 +155,7 @@ impl RollbackStorage {
     loop {
       let mut cache = self.cache.l();
       if let Some(log) = cache.get(&current) {
-        if commit_index <= log.commit_index {
+        if commit_index.le(&log.commit_index) {
           return Ok(log.data.copy());
         }
 
@@ -166,15 +166,15 @@ impl RollbackStorage {
       let log: UndoLog = self
         .disk
         .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
-      if log.index != undo_index {
+      if log.index.ne(&undo_index) {
         return Err(Error::NotFound);
       }
 
       cache.insert(undo_index, log.clone());
-      if cache.len() >= self.config.max_cache_size {
+      if cache.len().ge(&self.config.max_cache_size) {
         cache.pop_old();
       }
-      if commit_index <= log.commit_index {
+      if commit_index.le(&log.commit_index) {
         return Ok(log.data);
       }
 
@@ -200,7 +200,7 @@ impl RollbackStorage {
     loop {
       let mut cache = self.cache.l();
       if let Some(log) = cache.get_mut(&current) {
-        if commit.tx_id == log.tx_id {
+        if commit.tx_id.eq(&log.tx_id) {
           log.commit_index = commit.commit_index;
           return Ok(());
         }
@@ -211,15 +211,15 @@ impl RollbackStorage {
       let mut log: UndoLog = self
         .disk
         .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
-      if log.index != undo_index {
+      if log.index.ne(&undo_index) {
         return Err(Error::NotFound);
       }
 
-      if commit.tx_id == log.tx_id {
+      if commit.tx_id.eq(&log.tx_id) {
         log.commit_index = commit.commit_index;
 
         cache.insert(undo_index, log);
-        if cache.len() >= self.config.max_cache_size {
+        if cache.len().ge(&self.config.max_cache_size) {
           cache.pop_old();
         }
 

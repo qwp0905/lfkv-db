@@ -1,7 +1,7 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   mem::take,
-  ops::Add,
+  ops::{Add, AddAssign},
   path::PathBuf,
   sync::{Arc, RwLock},
   time::Duration,
@@ -109,7 +109,7 @@ impl WriteAheadLog {
       counter += records.len();
       for mut record in records {
         let mut l = last_index.wl();
-        record.index = *l + 1;
+        record.assign_id(l.add(1));
         if let Operation::Commit = record.operation {
           commit_c.send(CommitInfo::new(record.transaction_id, record.index));
         }
@@ -120,7 +120,7 @@ impl WriteAheadLog {
           cursor = cursor.add(1).rem_euclid(max_file_size);
         }
         current.append(record);
-        *l += 1;
+        l.add_assign(1);
       }
 
       disk.batch_write_from(cursor, &current)?;
@@ -159,7 +159,7 @@ impl WriteAheadLog {
     if self.buffer.len() >= self.config.max_buffer_size {
       self.io_c.send_with_done(self.buffer.flush()).must_recv()?;
     }
-    return Ok((tx_id, *self.last_index.rl()));
+    Ok((tx_id, *self.last_index.rl()))
   }
 
   pub fn commit(&self, tx_id: usize) -> Result<()> {
