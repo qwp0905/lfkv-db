@@ -19,6 +19,19 @@ struct CacheStorageCore {
   write_c: StoppableChannel<(usize, Page<BLOCK_SIZE>), Result>,
 }
 impl CacheStorage {
+  pub fn new(
+    max_cache_size: usize,
+    write_c: StoppableChannel<(usize, Page<BLOCK_SIZE>), Result>,
+  ) -> Self {
+    Self(Mutex::new(CacheStorageCore {
+      cache: Default::default(),
+      evicted: Default::default(),
+      max_cache_size,
+      dirty: Default::default(),
+      write_c,
+    }))
+  }
+
   pub fn get(&self, index: &usize) -> Option<DataBlock> {
     let mut core = self.0.l();
     if let Some(block) = core.cache.get(index) {

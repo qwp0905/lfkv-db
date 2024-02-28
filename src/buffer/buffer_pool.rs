@@ -5,62 +5,10 @@ use std::{
 
 use crate::{
   disk::Finder, size, wal::CommitInfo, ContextReceiver, Error, Page, Result,
-  Serializable, ShortenedMutex, PAGE_SIZE,
+  ShortenedMutex, StoppableChannel,
 };
 
-use super::{CacheStorage, RollbackStorage};
-
-pub const BLOCK_SIZE: usize = size::kb(4);
-
-pub struct DataBlock {
-  pub commit_index: usize,
-  pub tx_id: usize,
-  pub undo_index: usize,
-  pub data: Page,
-}
-
-impl DataBlock {
-  pub fn uncommitted(tx_id: usize, undo_index: usize, data: Page) -> Self {
-    Self::new(0, tx_id, undo_index, data)
-  }
-
-  pub fn new(commit_index: usize, tx_id: usize, undo_index: usize, data: Page) -> Self {
-    Self {
-      commit_index,
-      tx_id,
-      undo_index,
-      data,
-    }
-  }
-
-  pub fn copy(&self) -> Self {
-    Self::new(
-      self.commit_index,
-      self.tx_id,
-      self.undo_index,
-      self.data.copy(),
-    )
-  }
-}
-impl Serializable<Error, BLOCK_SIZE> for DataBlock {
-  fn serialize(&self) -> std::prelude::v1::Result<Page<BLOCK_SIZE>, Error> {
-    let mut page = Page::new();
-    let mut wt = page.writer();
-    wt.write(self.commit_index.to_be_bytes().as_ref())?;
-    wt.write(self.tx_id.to_be_bytes().as_ref())?;
-    wt.write(self.undo_index.to_be_bytes().as_ref())?;
-    wt.write(self.data.as_ref())?;
-    Ok(page)
-  }
-  fn deserialize(value: &Page<BLOCK_SIZE>) -> std::prelude::v1::Result<Self, Error> {
-    let mut sc = value.scanner();
-    let commit_index = sc.read_usize()?;
-    let tx_id = sc.read_usize()?;
-    let undo_index = sc.read_usize()?;
-    let data = sc.read_n(PAGE_SIZE)?.into();
-    Ok(Self::new(commit_index, tx_id, undo_index, data))
-  }
-}
+use super::{CacheStorage, DataBlock, RollbackStorage, BLOCK_SIZE};
 
 pub struct BufferPool {
   cache: Arc<CacheStorage>,
@@ -69,9 +17,34 @@ pub struct BufferPool {
   disk: Arc<Finder<BLOCK_SIZE>>,
 }
 impl BufferPool {
+  pub fn generate(
+    rollback: Arc<RollbackStorage>,
+    disk: Arc<Finder<BLOCK_SIZE>>,
+    max_cache_size: usize,
+  ) -> (
+    Self,
+    StoppableChannel<(), Option<usize>>,
+    StoppableChannel<CommitInfo, Result>,
+  ) {
+    let (write_c, write_rx) = StoppableChannel::new();
+    let (flush_c, flush_rx) = StoppableChannel::new();
+    let (commit_c, commit_rx) = StoppableChannel::new();
+    let bp = Self {
+      cache: Arc::new(CacheStorage::new(max_cache_size, write_c)),
+      rollback,
+      uncommitted: Default::default(),
+      disk,
+    };
+    bp.start_write(write_rx);
+    bp.start_flush(flush_rx);
+    bp.start_commit(commit_rx);
+
+    (bp, flush_c, commit_c)
+  }
+
   fn start_write(&self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) {
     let disk = self.disk.clone();
-    rx.to_done("bufferpool write", 1, move |(index, page)| {
+    rx.to_done("bufferpool write", size::kb(10), move |(index, page)| {
       disk.write(index, page)
     });
   }
@@ -79,7 +52,7 @@ impl BufferPool {
   fn start_flush(&self, rx: ContextReceiver<(), Option<usize>>) {
     let cache = self.cache.clone();
     let disk = self.disk.clone();
-    rx.to_all("bufferpool flush", 1, move |_| {
+    rx.to_all("bufferpool flush", size::mb(100), move |_| {
       let max_index = match cache.flush_all() {
         Ok(o) => o,
         Err(_) => return None,
@@ -98,7 +71,7 @@ impl BufferPool {
     let disk = self.disk.clone();
     let rollback = self.rollback.clone();
 
-    rx.to_new("bufferpool commit", 1, move |commit| {
+    rx.to_new("bufferpool commit", size::kb(10), move |commit| {
       let mut u = uncommitted.l();
       if let Some(v) = u.remove(&commit.tx_id) {
         for index in v {
