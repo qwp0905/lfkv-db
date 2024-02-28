@@ -7,8 +7,8 @@ pub mod size;
 mod channel;
 pub use channel::*;
 
-mod tuple;
-pub use tuple::*;
+mod closure;
+pub use closure::*;
 
 mod default;
 pub use default::*;
