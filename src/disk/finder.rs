@@ -1,6 +1,7 @@
 use std::{
   fs::{File, Metadata, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
+  ops::Mul,
   path::PathBuf,
   time::Duration,
 };
@@ -60,34 +61,33 @@ impl<const N: usize> Finder<N> {
       config,
       batch_c,
     };
-    finder.start_io(io_rx)?;
-    finder.start_batch(batch_rx);
-    Ok(finder)
+    finder.start_batch(batch_rx).start_io(io_rx)
   }
 
   fn start_io(
-    &self,
+    self,
     rx: ContextReceiver<Command<N>, Result<(Option<Page<N>>, Option<Metadata>)>>,
-  ) -> Result {
+  ) -> Result<Self> {
     let mut file = OpenOptions::new()
       .create(true)
       .read(true)
       .write(true)
       .open(&self.config.path)
       .map_err(Error::IO)?;
-    rx.to_done("finder io", 3 * N, move |cmd: Command<N>| {
+    let name = format!("{} finder io", self.config.path.to_string_lossy());
+    rx.to_done(&name, N.mul(1000), move |cmd: Command<N>| {
       cmd.exec(&mut file).map_err(Error::IO)
     });
-    Ok(())
+    Ok(self)
   }
 
-  fn start_batch(&self, rx: ContextReceiver<(usize, Page<N>), Result>) {
+  fn start_batch(self, rx: ContextReceiver<(usize, Page<N>), Result>) -> Self {
     let delay = self.config.batch_delay;
     let count = self.config.batch_size;
     let c = self.io_c.clone();
     rx.with_timer(
       "finder batch",
-      N * 3,
+      N.mul(2).mul(count),
       delay,
       move |v: &mut Vec<Sender<Result>>,
             o: Option<((usize, Page<N>), Sender<Result>)>| {
@@ -98,7 +98,7 @@ impl<const N: usize> Finder<N> {
           };
 
           v.push(done);
-          if v.len() < count {
+          if v.len().lt(&count) {
             return false;
           }
         }
@@ -111,6 +111,7 @@ impl<const N: usize> Finder<N> {
         true
       },
     );
+    self
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {
@@ -165,5 +166,5 @@ impl<const N: usize> Finder<N> {
 }
 
 fn get_offset(index: usize, n: usize) -> u64 {
-  (index * n) as u64
+  (index.mul(n)) as u64
 }

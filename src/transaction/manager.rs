@@ -23,11 +23,10 @@ impl LockManager {
       tree_locks: Default::default(),
       release,
     };
-    tm.start_release(recv);
-    return tm;
+    tm.start_release(recv)
   }
 
-  fn start_release(&self, rx: ContextReceiver<usize>) {
+  fn start_release(self, rx: ContextReceiver<usize>) -> Self {
     let cloned = self.tree_locks.clone();
     rx.to_new("sdf", 1, move |index| {
       let mut locks = cloned.l();
@@ -41,6 +40,7 @@ impl LockManager {
         locks.remove(&index);
       }
     });
+    self
   }
 
   pub fn fetch_read_lock(&self, index: usize) -> PageLock {

@@ -1,4 +1,6 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{ops::Mul, path::Path, sync::Arc, time::Duration};
+
+use sysinfo::System;
 
 use crate::{
   buffer::{BufferPool, RollbackStorage, RollbackStorageConfig},
@@ -17,10 +19,7 @@ where
   pub defragmentation_interval: Duration,
   pub undo_batch_delay: Duration,
   pub undo_batch_size: usize,
-  pub undo_cache_size: usize,
   pub undo_file_size: usize,
-  pub buffer_pool_size: usize,
-  pub wal_buffer_size: usize,
   pub wal_file_size: usize,
   pub checkpoint_interval: Duration,
   pub checkpoint_count: usize,
@@ -42,6 +41,7 @@ impl Engine {
   where
     T: AsRef<Path>,
   {
+    let mem_size = System::new().total_memory() as usize;
     let disk = Arc::new(Finder::open(FinderConfig {
       path: config.base_path.as_ref().join(DISK_PATH),
       batch_delay: config.disk_batch_delay,
@@ -53,19 +53,19 @@ impl Engine {
     let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
       fsync_delay: config.undo_batch_delay,
       fsync_count: config.undo_batch_size,
-      max_cache_size: config.undo_cache_size,
+      max_cache_size: mem_size.div_ceil(10),
       max_file_size: config.undo_file_size,
       path: config.base_path.as_ref().join(UNDO_PATH),
     })?);
 
     let (bp, flush_c, commit_c) =
-      BufferPool::generate(rollback, disk, config.buffer_pool_size);
+      BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3));
     let buffer_pool = Arc::new(bp);
 
     let wal = Arc::new(WriteAheadLog::open(
       WriteAheadLogConfig {
         path: config.base_path.as_ref().join(WAL_PATH),
-        max_buffer_size: config.wal_buffer_size,
+        max_buffer_size: mem_size.div_ceil(10).mul(1),
         checkpoint_interval: config.checkpoint_interval,
         checkpoint_count: config.checkpoint_count,
         group_commit_delay: config.group_commit_delay,

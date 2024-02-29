@@ -1,4 +1,9 @@
-use std::{ops::Add, path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+  ops::{Add, AddAssign, DivAssign},
+  path::PathBuf,
+  sync::Mutex,
+  time::Duration,
+};
 
 use crate::{
   disk::{Finder, FinderConfig},
@@ -107,7 +112,10 @@ pub struct RollbackStorage {
   cursor: Mutex<usize>,
 }
 impl RollbackStorage {
-  pub fn open(config: RollbackStorageConfig) -> Result<Self> {
+  pub fn open(mut config: RollbackStorageConfig) -> Result<Self> {
+    config.max_file_size.div_assign(UNDO_PAGE_SIZE);
+    config.max_cache_size.div_assign(UNDO_PAGE_SIZE);
+
     let disk = Finder::open(FinderConfig {
       path: config.path.clone(),
       batch_delay: config.fsync_delay,

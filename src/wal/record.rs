@@ -1,3 +1,5 @@
+use std::ops::{Add, Sub};
+
 use crate::{
   disk::{Page, PageScanner, PageWriter},
   size, Error, Serializable, PAGE_SIZE,
@@ -86,8 +88,8 @@ impl LogRecord {
     }
   }
 
-  fn size(&self) -> usize {
-    self.operation.size() + 16
+  pub fn size(&self) -> usize {
+    self.operation.size().add(16)
   }
 
   fn write_to(&self, wt: &mut PageWriter<WAL_PAGE_SIZE>) -> crate::Result<()> {
@@ -109,7 +111,7 @@ impl LogRecord {
       }
       Operation::Insert(log) => {
         wt.write(&[4])?;
-        wt.write(&log.page_index.to_be_bytes())?;
+        wt.write(log.page_index.to_be_bytes().as_ref())?;
         wt.write(log.data.as_ref())?;
       }
     }
@@ -147,7 +149,12 @@ impl LogEntry {
   }
 
   pub fn is_available(&self, record: &LogRecord) -> bool {
-    self.records.iter().fold(0, |a, r| a + r.size()) + record.size() <= WAL_PAGE_SIZE - 30
+    self
+      .records
+      .iter()
+      .fold(0, |a, r| a.add(r.size()))
+      .add(record.size())
+      .le(&WAL_PAGE_SIZE.sub(30))
   }
 
   pub fn append(&mut self, record: LogRecord) {

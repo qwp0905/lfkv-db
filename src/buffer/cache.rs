@@ -40,7 +40,7 @@ impl CacheStorage {
 
     core.evicted.remove(index).and_then(|block| {
       core.cache.insert(*index, block.copy());
-      if core.cache.len() >= core.max_cache_size {
+      if core.cache.len().ge(&core.max_cache_size) {
         core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
       };
       Some(block)
@@ -51,7 +51,7 @@ impl CacheStorage {
     let mut core = self.0.l();
     core.evicted.remove(&index);
     core.cache.insert(index, block);
-    if core.cache.len() >= core.max_cache_size {
+    if core.cache.len().ge(&core.max_cache_size) {
       core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
     }
   }
@@ -61,7 +61,7 @@ impl CacheStorage {
     core.dirty.insert(index);
     core.evicted.remove(&index);
     core.cache.insert(index, block);
-    if core.cache.len() >= core.max_cache_size {
+    if core.cache.len().ge(&core.max_cache_size) {
       core.cache.pop_old().map(|(i, b)| core.evicted.insert(i, b));
     }
   }
@@ -73,7 +73,7 @@ impl CacheStorage {
   ) -> core::result::Result<bool, usize> {
     let mut core = self.0.l();
     if let Some(block) = core.cache.get_mut(&index) {
-      if block.tx_id == commit.tx_id {
+      if block.tx_id.eq(&commit.tx_id) {
         block.commit_index = commit.commit_index;
         return Ok(true);
       }
@@ -82,7 +82,7 @@ impl CacheStorage {
     };
 
     if let Some(block) = core.evicted.get_mut(&index) {
-      if block.tx_id == commit.tx_id {
+      if block.tx_id.eq(&commit.tx_id) {
         block.commit_index = commit.commit_index;
         return Ok(true);
       }

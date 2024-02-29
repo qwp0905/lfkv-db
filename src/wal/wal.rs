@@ -1,7 +1,7 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   mem::take,
-  ops::{Add, AddAssign},
+  ops::{Add, AddAssign, DivAssign, Mul},
   path::PathBuf,
   sync::{Arc, RwLock},
   time::Duration,
@@ -10,7 +10,6 @@ use std::{
 use crate::{
   disk::{Finder, FinderConfig},
   size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
-  UnwrappedReceiver,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -38,10 +37,12 @@ pub struct WriteAheadLog {
 }
 impl WriteAheadLog {
   pub fn open(
-    config: WriteAheadLogConfig,
+    mut config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo, Result>,
     flush_c: StoppableChannel<(), Option<usize>>,
   ) -> Result<Self> {
+    config.max_file_size.div_assign(WAL_PAGE_SIZE);
+
     let disk_config = FinderConfig {
       path: config.path.clone(),
       batch_delay: config.group_commit_delay,
@@ -67,10 +68,7 @@ impl WriteAheadLog {
     let (last_transaction, cursor) = core.replay()?;
 
     core.buffer.initial_state(last_transaction);
-    core.start_checkpoint(checkpoint_rx);
-    core.start_io(io_rx, cursor);
-
-    Ok(core)
+    Ok(core.start_checkpoint(checkpoint_rx).start_io(io_rx, cursor))
   }
 
   fn new(
@@ -95,7 +93,11 @@ impl WriteAheadLog {
     }
   }
 
-  fn start_io(&self, rx: ContextReceiver<Vec<LogRecord>, Result>, mut cursor: usize) {
+  fn start_io(
+    self,
+    rx: ContextReceiver<Vec<LogRecord>, Result>,
+    mut cursor: usize,
+  ) -> Self {
     let max_file_size = self.config.max_file_size;
     let checkpoint_count = self.config.checkpoint_count;
     let disk = self.disk.clone();
@@ -105,7 +107,7 @@ impl WriteAheadLog {
     let mut current = LogEntry::new();
     let mut counter = 0;
 
-    rx.to_done("wal io", 1000 * WAL_PAGE_SIZE, move |records| {
+    rx.to_done("wal io", WAL_PAGE_SIZE.mul(100), move |records| {
       counter += records.len();
       for mut record in records {
         let mut l = last_index.wl();
@@ -125,15 +127,16 @@ impl WriteAheadLog {
 
       disk.batch_write_from(cursor, &current)?;
 
-      if checkpoint_count <= counter {
+      if checkpoint_count.lt(&counter) {
         checkpoint_c.send(());
         counter = 0;
       }
       Ok(())
     });
+    self
   }
 
-  fn start_checkpoint(&self, rx: ContextReceiver<()>) {
+  fn start_checkpoint(self, rx: ContextReceiver<()>) -> Self {
     let timeout = self.config.checkpoint_interval;
     let flush_c = self.flush_c.clone();
     let io_c = self.io_c.clone();
@@ -144,12 +147,13 @@ impl WriteAheadLog {
           .ok();
       }
     });
+    self
   }
 
   pub fn append(&self, tx_id: usize, page_index: usize, data: Page) -> Result<()> {
     self.buffer.append(tx_id, page_index, data);
-    if self.buffer.len() >= self.config.max_buffer_size {
-      self.io_c.send_with_done(self.buffer.flush()).must_recv()?;
+    if self.buffer.len().ge(&self.config.max_buffer_size) {
+      self.io_c.send_await(self.buffer.flush())?;
     }
     Ok(())
   }
@@ -157,14 +161,14 @@ impl WriteAheadLog {
   pub fn new_transaction(&self) -> Result<(usize, usize)> {
     let tx_id = self.buffer.new_transaction();
     if self.buffer.len() >= self.config.max_buffer_size {
-      self.io_c.send_with_done(self.buffer.flush()).must_recv()?;
+      self.io_c.send_await(self.buffer.flush())?;
     }
     Ok((tx_id, *self.last_index.rl()))
   }
 
   pub fn commit(&self, tx_id: usize) -> Result<()> {
     let records = self.buffer.commit(tx_id);
-    self.io_c.send_with_done(records).must_recv()
+    self.io_c.send_await(records)
   }
 
   fn replay(&self) -> Result<(usize, usize)> {
@@ -181,7 +185,7 @@ impl WriteAheadLog {
         Err(_) => break,
       };
       for record in entry.records {
-        if record.index < cursor_index {
+        if record.index.lt(&cursor_index) {
           cursor = index;
         }
         cursor_index = record.index;

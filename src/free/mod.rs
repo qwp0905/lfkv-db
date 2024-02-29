@@ -24,8 +24,7 @@ impl FreeList {
       interval,
       chan,
     };
-    f.start_defragmentation(rx);
-    f
+    f.start_defragmentation(rx)
   }
   pub fn acquire(&self) -> Result<usize> {
     if let Some(i) = self.list.l().pop_first() {
@@ -39,7 +38,7 @@ impl FreeList {
     self.list.l().insert(i);
   }
 
-  fn start_defragmentation(&self, rx: ContextReceiver<(), Result>) {
+  fn start_defragmentation(self, rx: ContextReceiver<(), Result>) -> Self {
     let file = self.file.clone();
     let list = self.list.clone();
     rx.to_new_or_timeout(
@@ -58,6 +57,7 @@ impl FreeList {
         Ok(())
       },
     );
+    self
   }
 }
 impl Drop for FreeList {

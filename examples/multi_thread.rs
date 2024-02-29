@@ -1,25 +1,22 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use no_db::{Engine, EngineConfig};
+use no_db::{size, Engine, EngineConfig};
 
 // use std::{sync::Arc, time::Duration};
 fn main() -> no_db::Result {
   let engine = Arc::new(Engine::bootstrap(EngineConfig {
     base_path: "./.local",
-    disk_batch_delay: todo!(),
-    disk_batch_size: todo!(),
-    defragmentation_interval: todo!(),
-    undo_batch_delay: todo!(),
-    undo_batch_size: todo!(),
-    undo_cache_size: todo!(),
-    undo_file_size: todo!(),
-    buffer_pool_size: todo!(),
-    wal_buffer_size: todo!(),
-    wal_file_size: todo!(),
-    checkpoint_interval: todo!(),
-    checkpoint_count: todo!(),
-    group_commit_delay: todo!(),
-    group_commit_count: todo!(),
+    disk_batch_delay: Duration::from_millis(10),
+    disk_batch_size: 100,
+    defragmentation_interval: Duration::from_secs(30 * 60),
+    undo_batch_delay: Duration::from_millis(10),
+    undo_batch_size: 100,
+    undo_file_size: size::mb(16),
+    wal_file_size: size::mb(16),
+    checkpoint_interval: Duration::from_secs(30),
+    checkpoint_count: 10000,
+    group_commit_delay: Duration::from_millis(10),
+    group_commit_count: 100,
   })?);
 
   let cursor = engine.new_transaction()?;
