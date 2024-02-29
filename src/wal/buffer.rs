@@ -45,7 +45,7 @@ impl LogBuffer {
     let mut records = core.map.remove(&tx_id).unwrap_or_default();
     core.size -= records.len();
     records.push(LogRecord::new_commit(tx_id));
-    return records;
+    records
   }
 
   pub fn rollback(&self, tx_id: usize) {

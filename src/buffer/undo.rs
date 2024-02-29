@@ -93,11 +93,11 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
 }
 
 pub struct RollbackStorageConfig {
-  fsync_delay: Duration,
-  fsync_count: usize,
-  max_cache_size: usize,
-  max_file_size: usize,
-  path: PathBuf,
+  pub fsync_delay: Duration,
+  pub fsync_count: usize,
+  pub max_cache_size: usize,
+  pub max_file_size: usize,
+  pub path: PathBuf,
 }
 
 pub struct RollbackStorage {

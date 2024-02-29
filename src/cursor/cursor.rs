@@ -22,14 +22,21 @@ impl Cursor {
     freelist: Arc<FreeList>,
     wal: Arc<WriteAheadLog>,
     buffer: Arc<BufferPool>,
-    tx_id: usize,
-    last_commit_index: usize,
-  ) -> Self {
-    Self {
+  ) -> Result<Self> {
+    let (tx_id, last_commit_index) = wal.new_transaction()?;
+    Ok(Self {
       committed: Arc::new(AtomicBool::new(false)),
       freelist,
       writer: CursorWriter::new(tx_id, last_commit_index, wal, buffer),
-    }
+    })
+  }
+
+  pub fn initialize(&self) -> Result {
+    if let Err(Error::NotFound) = self.writer.get::<TreeHeader>(HEADER_INDEX) {
+      let header = TreeHeader::initial_state();
+      self.writer.insert(HEADER_INDEX, header)?;
+    };
+    Ok(())
   }
 
   pub fn get<T>(&self, key: &String) -> Result<T>
@@ -77,6 +84,10 @@ impl Cursor {
     self.writer.commit()?;
     self.committed.store(true, Ordering::SeqCst);
     Ok(())
+  }
+
+  pub fn abort(&self) -> Result {
+    todo!()
   }
 }
 impl Cursor {
@@ -151,6 +162,13 @@ impl Cursor {
         self.writer.insert(current, node)?;
         Ok(Ok((s, ni)))
       }
+    }
+  }
+}
+impl Drop for Cursor {
+  fn drop(&mut self) {
+    if !self.committed.load(Ordering::SeqCst) {
+      self.abort().ok();
     }
   }
 }

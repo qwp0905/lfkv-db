@@ -49,7 +49,7 @@ impl InternalNode {
     let mut keys = self.keys.split_off(c);
     let m = keys.remove(0);
     let children = self.children.split_off(c + 1);
-    return (CursorEntry::Internal(InternalNode { keys, children }), m);
+    (CursorEntry::Internal(InternalNode { keys, children }), m)
   }
 
   pub fn add(&mut self, key: String, index: usize) {
@@ -90,7 +90,7 @@ impl Serializable for InternalNode {
     for &i in &self.children {
       wt.write(&i.to_be_bytes())?;
     }
-    return Ok(p);
+    Ok(p)
   }
 
   fn deserialize(value: &Page) -> Result<Self, Error> {
@@ -107,7 +107,7 @@ impl Serializable for InternalNode {
       children.push(sc.read_usize()?);
     }
 
-    return Ok(InternalNode { keys, children });
+    Ok(InternalNode { keys, children })
   }
 }
 
@@ -118,32 +118,28 @@ pub struct LeafNode {
   pub prev: Option<usize>,
 }
 impl LeafNode {
-  pub fn empty() -> Self {
-    Self {
-      keys: vec![],
-      prev: None,
-      next: None,
-    }
-  }
+  // pub fn empty() -> Self {
+  //   Self {
+  //     keys: vec![],
+  //     prev: None,
+  //     next: None,
+  //   }
+  // }
 
-  pub fn split(
-    &mut self,
-    current: usize,
-    added: usize,
-  ) -> (CursorEntry, String) {
+  pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, String) {
     let c = self.keys.len() / 2;
     let keys = self.keys.split_off(c);
     let m = keys[0].0.clone();
     let next = self.next.take();
     self.next = Some(added);
-    return (
+    (
       CursorEntry::Leaf(LeafNode {
         keys,
         next,
         prev: Some(current),
       }),
       m,
-    );
+    )
   }
 
   pub fn add(&mut self, key: String, index: usize) -> Option<String> {
@@ -153,7 +149,7 @@ impl LeafNode {
       self.keys.append(keys.as_mut());
       return i.eq(&0).then(|| key);
     };
-    return None;
+    None
   }
 
   pub fn len(&self) -> usize {
@@ -183,7 +179,7 @@ impl Serializable for LeafNode {
     wt.write(&prev.to_be_bytes())?;
     let next = self.next.unwrap_or(0);
     wt.write(&next.to_be_bytes())?;
-    return Ok(p);
+    Ok(p)
   }
 
   fn deserialize(value: &Page) -> Result<Self, Error> {
@@ -201,6 +197,6 @@ impl Serializable for LeafNode {
     let prev = if prev == 0 { None } else { Some(prev) };
     let next = sc.read_usize()?;
     let next = if next == 0 { None } else { Some(next) };
-    return Ok(Self { keys, prev, next });
+    Ok(Self { keys, prev, next })
   }
 }

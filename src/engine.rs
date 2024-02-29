@@ -1,43 +1,36 @@
-// use std::time::Duration;
-// use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
-// use crate::disk::PageSeeker;
-// use crate::utils::size;
-// use crate::Error;
+use crate::{
+  buffer::{BufferPool, RollbackStorage, RollbackStorageConfig},
+  disk::{Finder, FinderConfig},
+  wal::{WriteAheadLog, WriteAheadLogConfig},
+  Cursor, FreeList, Result,
+};
 
-// use crate::{
-//   buffer::BufferPool, error::Result, transaction::LockManager, wal::WAL, Cursor,
-// };
+pub struct EngineConfig<T>
+where
+  T: AsRef<Path>,
+{
+  pub base_path: T,
+  pub disk_batch_delay: Duration,
+  pub disk_batch_size: usize,
+  pub defragmentation_interval: Duration,
+  pub undo_batch_delay: Duration,
+  pub undo_batch_size: usize,
+  pub undo_cache_size: usize,
+  pub undo_file_size: usize,
+  pub buffer_pool_size: usize,
+  pub wal_buffer_size: usize,
+  pub wal_file_size: usize,
+  pub checkpoint_interval: Duration,
+  pub checkpoint_count: usize,
+  pub group_commit_delay: Duration,
+  pub group_commit_count: usize,
+}
 
-// static WAL_FILE: &str = "wal.db";
-// static DB_FILE: &str = "no.db";
-
-// pub struct EngineConfig<T>
-// where
-//   T: AsRef<Path>,
-// {
-//   pub max_log_size: usize,
-//   pub max_wal_buffer_size: usize,
-//   pub checkpoint_interval: Duration,
-//   pub max_cache_size: usize,
-//   pub base_dir: T,
-// }
-
-// impl Default for EngineConfig<&str> {
-//   fn default() -> Self {
-//     Self {
-//       max_log_size: size::mb(16),
-//       max_wal_buffer_size: size::mb(2),
-//       checkpoint_interval: Duration::from_millis(2000),
-//       max_cache_size: size::mb(512),
-//       base_dir: "/var/lib/nodb",
-//     }
-//   }
-// }
-
-use std::sync::Arc;
-
-use crate::{buffer::BufferPool, wal::WriteAheadLog, Cursor, FreeList, Result};
+const WAL_PATH: &str = "wal.nodb";
+const UNDO_PATH: &str = "undo.nodb";
+const DISK_PATH: &str = "data.nodb";
 
 pub struct Engine {
   wal: Arc<WriteAheadLog>,
@@ -45,89 +38,61 @@ pub struct Engine {
   freelist: Arc<FreeList>,
 }
 impl Engine {
+  pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
+  where
+    T: AsRef<Path>,
+  {
+    let disk = Arc::new(Finder::open(FinderConfig {
+      path: config.base_path.as_ref().join(DISK_PATH),
+      batch_delay: config.disk_batch_delay,
+      batch_size: config.disk_batch_size,
+    })?);
+
+    let freelist = Arc::new(FreeList::new(config.defragmentation_interval, disk.clone()));
+
+    let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
+      fsync_delay: config.undo_batch_delay,
+      fsync_count: config.undo_batch_size,
+      max_cache_size: config.undo_cache_size,
+      max_file_size: config.undo_file_size,
+      path: config.base_path.as_ref().join(UNDO_PATH),
+    })?);
+
+    let (bp, flush_c, commit_c) =
+      BufferPool::generate(rollback, disk, config.buffer_pool_size);
+    let buffer_pool = Arc::new(bp);
+
+    let wal = Arc::new(WriteAheadLog::open(
+      WriteAheadLogConfig {
+        path: config.base_path.as_ref().join(WAL_PATH),
+        max_buffer_size: config.wal_buffer_size,
+        checkpoint_interval: config.checkpoint_interval,
+        checkpoint_count: config.checkpoint_count,
+        group_commit_delay: config.group_commit_delay,
+        group_commit_count: config.group_commit_count,
+        max_file_size: config.wal_file_size,
+      },
+      commit_c,
+      flush_c,
+    )?);
+
+    let engine = Self {
+      wal,
+      buffer_pool,
+      freelist,
+    };
+    engine.new_transaction().and_then(|cursor| {
+      cursor.initialize()?;
+      cursor.commit()
+    })?;
+    Ok(engine)
+  }
+
   pub fn new_transaction(&self) -> Result<Cursor> {
-    self
-      .wal
-      .new_transaction()
-      .map(|(tx_id, last_commit_index)| {
-        Cursor::new(
-          self.freelist.clone(),
-          self.wal.clone(),
-          self.buffer_pool.clone(),
-          tx_id,
-          last_commit_index,
-        )
-      })
+    Cursor::new(
+      self.freelist.clone(),
+      self.wal.clone(),
+      self.buffer_pool.clone(),
+    )
   }
 }
-
-// pub struct Engine {
-//   wal: Arc<WAL>,
-//   lock_manager: Arc<LockManager>,
-//   buffer_pool: Arc<BufferPool>,
-// }
-
-// impl Engine {
-//   fn from_components(
-//     buffer_pool: Arc<BufferPool>,
-//     wal: Arc<WAL>,
-//     lock_manager: Arc<LockManager>,
-//   ) -> Self {
-//     Self {
-//       buffer_pool,
-//       wal,
-//       lock_manager,
-//     }
-//   }
-//   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
-//   where
-//     T: AsRef<Path>,
-//   {
-//     let wal_path = Path::join(config.base_dir.as_ref(), WAL_FILE);
-//     let db_path = Path::join(config.base_dir.as_ref(), DB_FILE);
-
-//     let db = Arc::new(PageSeeker::open(db_path)?);
-
-//     let lock_manager = Arc::new(LockManager::new());
-//     let buffer_pool = Arc::new(BufferPool::new(
-//       db.clone(),
-//       config.max_cache_size,
-//       lock_manager.clone(),
-//     ));
-
-//     let wal = Arc::new(WAL::open(
-//       wal_path,
-//       config.max_log_size,
-//       config.max_wal_buffer_size,
-//       db,
-//       config.checkpoint_interval,
-//     )?);
-
-//     wal.replay()?;
-//     if let Err(Error::NotFound) = buffer_pool.get(0) {
-//       Cursor::new(
-//         wal.next_transaction()?,
-//         buffer_pool.clone(),
-//         wal.clone(),
-//         lock_manager.clone(),
-//       )
-//       .initialize()?;
-//     }
-//     Ok(Self::from_components(buffer_pool, wal, lock_manager))
-//   }
-// }
-
-// impl Engine {
-//   pub fn new_transaction(&self) -> Result<Cursor> {
-//     let id = self.wal.next_transaction()?;
-//     let buffer = self.buffer_pool.clone();
-//     let wal = self.wal.clone();
-//     let locks = self.lock_manager.clone();
-//     Ok(Cursor::new(id, buffer, wal, locks))
-//   }
-// }
-// // impl Drop for Engine {
-// //   fn drop(&mut self) {
-// //     self.wal.close();
-// //   }
-// // }

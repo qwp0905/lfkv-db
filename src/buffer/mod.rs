@@ -10,7 +10,7 @@ pub use buffer_pool::*;
 mod list;
 
 mod undo;
-use undo::*;
+pub use undo::*;
 
 mod block;
 pub use block::*;

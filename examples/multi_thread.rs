@@ -1,5 +1,32 @@
+use std::sync::Arc;
+
+use no_db::{Engine, EngineConfig};
+
 // use std::{sync::Arc, time::Duration};
-fn main() {}
+fn main() -> no_db::Result {
+  let engine = Arc::new(Engine::bootstrap(EngineConfig {
+    base_path: "./.local",
+    disk_batch_delay: todo!(),
+    disk_batch_size: todo!(),
+    defragmentation_interval: todo!(),
+    undo_batch_delay: todo!(),
+    undo_batch_size: todo!(),
+    undo_cache_size: todo!(),
+    undo_file_size: todo!(),
+    buffer_pool_size: todo!(),
+    wal_buffer_size: todo!(),
+    wal_file_size: todo!(),
+    checkpoint_interval: todo!(),
+    checkpoint_count: todo!(),
+    group_commit_delay: todo!(),
+    group_commit_count: todo!(),
+  })?);
+
+  let cursor = engine.new_transaction()?;
+  cursor.insert(format!("sdfsdfs"), T { i: 1 })?;
+  cursor.commit()?;
+  Ok(())
+}
 // fn main() -> no_db::Result<()> {
 //   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
 //     max_log_size: no_db::size::mb(16),
@@ -57,23 +84,21 @@ fn main() {}
 //   Ok(())
 // }
 
-// #[derive(Debug)]
-// struct T {
-//   i: usize,
-// }
+#[derive(Debug)]
+struct T {
+  i: usize,
+}
 
-// impl no_db::Serializable for T {
-//   fn deserialize(
-//     value: &no_db::Page,
-//   ) -> std::prelude::v1::Result<Self, no_db::Error> {
-//     let i = value.scanner().read_usize()?;
-//     Ok(T { i })
-//   }
+impl no_db::Serializable for T {
+  fn deserialize(value: &no_db::Page) -> std::prelude::v1::Result<Self, no_db::Error> {
+    let i = value.scanner().read_usize()?;
+    Ok(T { i })
+  }
 
-//   fn serialize(&self) -> std::prelude::v1::Result<no_db::Page, no_db::Error> {
-//     let mut p = no_db::Page::new();
-//     let mut wt = p.writer();
-//     wt.write(&self.i.to_be_bytes())?;
-//     return Ok(p);
-//   }
-// }
+  fn serialize(&self) -> std::prelude::v1::Result<no_db::Page, no_db::Error> {
+    let mut p = no_db::Page::new();
+    let mut wt = p.writer();
+    wt.write(&self.i.to_be_bytes())?;
+    Ok(p)
+  }
+}
