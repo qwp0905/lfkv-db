@@ -107,7 +107,7 @@ impl WriteAheadLog {
     let mut current = LogEntry::new();
     let mut counter = 0;
 
-    rx.to_done("wal io", WAL_PAGE_SIZE.mul(100), move |records| {
+    rx.to_done("wal io", WAL_PAGE_SIZE.mul(1000), move |records| {
       counter += records.len();
       for mut record in records {
         let mut l = last_index.wl();
@@ -244,5 +244,15 @@ impl WriteAheadLog {
     *self.last_index.wl() = last_index;
 
     Ok((last_transaction, cursor))
+  }
+}
+impl Drop for WriteAheadLog {
+  fn drop(&mut self) {
+    self.commit_c.terminate();
+    self.io_c.send_await(self.buffer.flush()).ok();
+    self.checkpoint_c.send_await(());
+    self.checkpoint_c.terminate();
+    self.io_c.terminate();
+    self.flush_c.terminate();
   }
 }

@@ -164,6 +164,12 @@ impl<const N: usize> Finder<N> {
     self.batch_write(index, page)
   }
 }
+impl<const N: usize> Drop for Finder<N> {
+  fn drop(&mut self) {
+    self.batch_c.terminate();
+    self.io_c.terminate();
+  }
+}
 
 fn get_offset(index: usize, n: usize) -> u64 {
   (index.mul(n)) as u64

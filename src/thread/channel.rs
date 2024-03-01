@@ -56,11 +56,6 @@ impl<T, R> Clone for StoppableChannel<T, R> {
     Self(self.0.clone())
   }
 }
-impl<T, R> Drop for StoppableChannel<T, R> {
-  fn drop(&mut self) {
-    self.terminate()
-  }
-}
 
 #[allow(unused)]
 pub struct ContextReceiver<T, R = ()>(Receiver<StoppableContext<T, R>>);
