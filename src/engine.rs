@@ -5,6 +5,7 @@ use sysinfo::System;
 use crate::{
   buffer::{BufferPool, RollbackStorage, RollbackStorageConfig},
   disk::{Finder, FinderConfig},
+  logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
   Cursor, FreeList, Result,
 };
@@ -41,7 +42,9 @@ impl Engine {
   where
     T: AsRef<Path>,
   {
-    let mem_size = System::new().total_memory() as usize;
+    let mem_size = System::new_all().total_memory() as usize;
+    logger::info(format!("{} system memory", mem_size));
+
     let disk = Arc::new(Finder::open(FinderConfig {
       path: config.base_path.as_ref().join(DISK_PATH),
       batch_delay: config.disk_batch_delay,
