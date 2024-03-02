@@ -1,6 +1,6 @@
 use std::{
   fs::{File, Metadata, OpenOptions},
-  io::{Read, Seek, SeekFrom, Write},
+  io::{self, Read, Seek, SeekFrom, Write},
   ops::Mul,
   path::PathBuf,
   time::Duration,
@@ -19,24 +19,34 @@ enum Command<const N: usize> {
   Metadata,
 }
 impl<const N: usize> Command<N> {
-  fn exec(
-    &self,
-    file: &mut File,
-  ) -> std::io::Result<(Option<Page<N>>, Option<Metadata>)> {
+  fn exec(&self, file: &mut File) -> Result<(Option<Page<N>>, Option<Metadata>)> {
     match self {
       Command::Read(index) => {
-        file.seek(SeekFrom::Start(get_offset(*index, N)))?;
+        file
+          .seek(SeekFrom::Start(get_offset(*index, N)))
+          .map_err(Error::IO)?;
         let mut page = Page::new_empty();
-        file.read_exact(page.as_mut())?;
+        if let Err(err) = file.read_exact(page.as_mut()) {
+          match err.kind() {
+            io::ErrorKind::UnexpectedEof => return Err(Error::NotFound),
+            _ => return Err(Error::IO(err)),
+          }
+        };
+        if page.is_empty() {
+          return Err(Error::NotFound);
+        }
+
         Ok((Some(page), None))
       }
       Command::Write(index, page) => {
-        file.seek(SeekFrom::Start(get_offset(*index, N)))?;
-        file.write_all(page.as_ref())?;
+        file
+          .seek(SeekFrom::Start(get_offset(*index, N)))
+          .map_err(Error::IO)?;
+        file.write_all(page.as_ref()).map_err(Error::IO)?;
         Ok((None, None))
       }
-      Command::Flush => file.sync_all().map(|_| (None, None)),
-      Command::Metadata => file.metadata().map(|m| (None, Some(m))),
+      Command::Flush => file.sync_all().map(|_| (None, None)).map_err(Error::IO),
+      Command::Metadata => file.metadata().map(|m| (None, Some(m))).map_err(Error::IO),
     }
   }
 }
@@ -76,7 +86,7 @@ impl<const N: usize> Finder<N> {
       .map_err(Error::IO)?;
     let name = format!("{} finder io", self.config.path.to_string_lossy());
     rx.to_done(&name, N.mul(1000), move |cmd: Command<N>| {
-      cmd.exec(&mut file).map_err(Error::IO)
+      cmd.exec(&mut file)
     });
     Ok(self)
   }

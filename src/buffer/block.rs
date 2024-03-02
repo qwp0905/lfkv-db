@@ -2,6 +2,7 @@ use crate::{size, Error, Page, Serializable, PAGE_SIZE};
 
 pub const BLOCK_SIZE: usize = size::kb(4);
 
+#[derive(Debug)]
 pub struct DataBlock {
   pub commit_index: usize,
   pub tx_id: usize,

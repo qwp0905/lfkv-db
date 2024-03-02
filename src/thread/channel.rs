@@ -1,8 +1,11 @@
-use std::{thread::JoinHandle, time::Duration};
+use std::{
+  thread::{Builder, JoinHandle},
+  time::Duration,
+};
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
-use crate::{AsTimer, UnwrappedReceiver, UnwrappedSender};
+use crate::{logger, AsTimer, UnwrappedReceiver, UnwrappedSender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -143,15 +146,11 @@ where
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        while let Ok(v) = self.recv_new() {
-          f.call(v);
-        }
-      })
-      .unwrap()
+    spawn(name, stack_size, move || {
+      while let Ok(v) = self.recv_new() {
+        f.call(v);
+      }
+    })
   }
 
   pub fn to_new_or_timeout<F>(
@@ -164,31 +163,23 @@ where
   where
     F: FnMut(Option<T>) -> R + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        while let Ok(v) = self.recv_new_or_timeout(timeout) {
-          f.call(v);
-        }
-      })
-      .unwrap()
+    spawn(name, stack_size, move || {
+      while let Ok(v) = self.recv_new_or_timeout(timeout) {
+        f.call(v);
+      }
+    })
   }
 
   pub fn to_done<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        while let Ok((v, done)) = self.recv_done() {
-          let r = f.call(v);
-          done.must_send(r);
-        }
-      })
-      .unwrap()
+    spawn(name, stack_size, move || {
+      while let Ok((v, done)) = self.recv_done() {
+        let r = f.call(v);
+        done.must_send(r);
+      }
+    })
   }
 
   pub fn to_done_or_timeout<F>(
@@ -201,42 +192,30 @@ where
   where
     F: FnMut(Option<(T, Sender<R>)>) -> R + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        while let Ok(v) = self.recv_done_or_timeout(timeout) {
-          f.call(v);
-        }
-      })
-      .unwrap()
+    spawn(name, stack_size, move || {
+      while let Ok(v) = self.recv_done_or_timeout(timeout) {
+        f.call(v);
+      }
+    })
   }
 
   pub fn to_thread<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
   where
     F: FnMut(ContextReceiver<T, R>) + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || f.call(self))
-      .unwrap()
+    spawn(name, stack_size, move || f.call(self))
   }
 
   pub fn to_all<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        while let Ok((v, done)) = self.recv_all() {
-          let r = f.call(v);
-          done.map(|t| t.must_send(r));
-        }
-      })
-      .unwrap()
+    spawn(name, stack_size, move || {
+      while let Ok((v, done)) = self.recv_all() {
+        let r = f.call(v);
+        done.map(|t| t.must_send(r));
+      }
+    })
   }
 
   pub fn with_timer<F, D>(
@@ -250,20 +229,16 @@ where
     F: FnMut(&mut D, Option<(T, Sender<R>)>) -> bool + Send + 'static,
     D: Default,
   {
-    std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(stack_size)
-      .spawn(move || {
-        let mut timer = timeout.as_timer();
-        let mut d = Default::default();
-        while let Ok(v) = self.recv_done_or_timeout(timer.get_remain()) {
-          match f(&mut d, v) {
-            true => timer.reset(),
-            false => timer.check(),
-          }
+    spawn(name, stack_size, move || {
+      let mut timer = timeout.as_timer();
+      let mut d = Default::default();
+      while let Ok(v) = self.recv_done_or_timeout(timer.get_remain()) {
+        match f(&mut d, v) {
+          true => timer.reset(),
+          false => timer.check(),
         }
-      })
-      .unwrap()
+      }
+    })
   }
 }
 
@@ -274,6 +249,23 @@ impl<T, R, F: FnMut(T) -> R> Callable<T, R> for F {
   fn call(&mut self, v: T) -> R {
     self(v)
   }
+}
+
+fn spawn<F, R>(name: &str, size: usize, f: F) -> JoinHandle<R>
+where
+  R: Send + 'static,
+  F: FnOnce() -> R + Send + 'static,
+{
+  let s = name.to_string();
+  Builder::new()
+    .name(s.clone())
+    .stack_size(size)
+    .spawn(move || {
+      let r = f();
+      logger::info(format!("{} thread done", s));
+      r
+    })
+    .unwrap()
 }
 
 // pub struct ThreadManager {

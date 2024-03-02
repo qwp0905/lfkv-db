@@ -3,26 +3,28 @@ use std::{sync::Arc, time::Duration};
 use no_db::{size, Engine, EngineConfig};
 
 // use std::{sync::Arc, time::Duration};
-fn main() -> no_db::Result {
-  let engine = Arc::new(Engine::bootstrap(EngineConfig {
-    base_path: "./.local",
-    disk_batch_delay: Duration::from_millis(10),
-    disk_batch_size: 100,
-    defragmentation_interval: Duration::from_secs(30 * 60),
-    undo_batch_delay: Duration::from_millis(10),
-    undo_batch_size: 100,
-    undo_file_size: size::mb(16),
-    wal_file_size: size::mb(16),
-    checkpoint_interval: Duration::from_secs(30),
-    checkpoint_count: 10000,
-    group_commit_delay: Duration::from_millis(10),
-    group_commit_count: 100,
-  })?);
+fn main() {
+  let engine = Arc::new(
+    Engine::bootstrap(EngineConfig {
+      base_path: "./.local",
+      disk_batch_delay: Duration::from_millis(10),
+      disk_batch_size: 100,
+      defragmentation_interval: Duration::from_secs(30 * 60),
+      undo_batch_delay: Duration::from_millis(10),
+      undo_batch_size: 100,
+      undo_file_size: size::mb(16),
+      wal_file_size: size::mb(16),
+      checkpoint_interval: Duration::from_secs(30),
+      checkpoint_count: 10000,
+      group_commit_delay: Duration::from_millis(10),
+      group_commit_count: 100,
+    })
+    .unwrap(),
+  );
 
-  let cursor = engine.new_transaction()?;
-  cursor.insert(format!("sdfsdfs"), T { i: 1 })?;
-  cursor.commit()?;
-  Ok(())
+  let cursor = engine.new_transaction().unwrap();
+  dbg!(cursor.insert(format!("sdfsdfs"), T { i: 1 })).unwrap();
+  dbg!(cursor.commit()).unwrap();
 }
 // fn main() -> no_db::Result<()> {
 //   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {

@@ -1,10 +1,8 @@
-use std::sync::{
-  atomic::{AtomicBool, Ordering},
-  Arc,
-};
+use std::sync::{Arc, RwLock};
 
 use crate::{
-  buffer::BufferPool, wal::WriteAheadLog, Error, FreeList, Result, Serializable,
+  buffer::BufferPool, logger, wal::WriteAheadLog, Error, FreeList, Result, Serializable,
+  ShortenedRwLock,
 };
 
 use super::{
@@ -13,7 +11,7 @@ use super::{
 
 pub struct Cursor {
   // locks: Arc<LockManager>,
-  committed: Arc<AtomicBool>,
+  committed: Arc<RwLock<bool>>,
   freelist: Arc<FreeList>,
   writer: CursorWriter,
 }
@@ -24,8 +22,12 @@ impl Cursor {
     buffer: Arc<BufferPool>,
   ) -> Result<Self> {
     let (tx_id, last_commit_index) = wal.new_transaction()?;
+    logger::info(format!(
+      "cursor id {} and lsn {} init",
+      tx_id, last_commit_index
+    ));
     Ok(Self {
-      committed: Arc::new(AtomicBool::new(false)),
+      committed: Arc::new(RwLock::new(false)),
       freelist,
       writer: CursorWriter::new(tx_id, last_commit_index, wal, buffer),
     })
@@ -33,6 +35,7 @@ impl Cursor {
 
   pub fn initialize(&self) -> Result {
     if let Err(Error::NotFound) = self.writer.get::<TreeHeader>(HEADER_INDEX) {
+      logger::info(format!("there are no tree header and will be initialized"));
       let header = TreeHeader::initial_state();
       self.writer.insert(HEADER_INDEX, header)?;
     };
@@ -43,7 +46,7 @@ impl Cursor {
   where
     T: Serializable,
   {
-    if self.committed.load(Ordering::SeqCst) {
+    if self.committed.rl().eq(&true) {
       return Err(Error::TransactionClosed);
     }
 
@@ -55,7 +58,7 @@ impl Cursor {
   where
     T: Serializable,
   {
-    if self.committed.load(Ordering::SeqCst) {
+    if self.committed.rl().eq(&true) {
       return Err(Error::TransactionClosed);
     }
 
@@ -81,13 +84,20 @@ impl Cursor {
   }
 
   pub fn commit(&self) -> Result {
+    let mut committed = self.committed.wl();
+    if committed.eq(&true) {
+      return Err(Error::TransactionClosed);
+    }
+
+    logger::info(format!("cursor id {} commit start", self.writer.get_id()));
     self.writer.commit()?;
-    self.committed.store(true, Ordering::SeqCst);
+    *committed = true;
     Ok(())
   }
 
   pub fn abort(&self) -> Result {
-    todo!()
+    println!("abort not implemented");
+    Ok(())
   }
 }
 impl Cursor {
@@ -167,7 +177,11 @@ impl Cursor {
 }
 impl Drop for Cursor {
   fn drop(&mut self) {
-    if !self.committed.load(Ordering::SeqCst) {
+    if self.committed.rl().eq(&false) {
+      logger::warn(format!(
+        "cursor id {} which is uncommitted will be abort",
+        self.writer.get_id(),
+      ));
       self.abort().ok();
     }
   }

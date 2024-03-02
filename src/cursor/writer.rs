@@ -25,6 +25,10 @@ impl CursorWriter {
     }
   }
 
+  pub fn get_id(&self) -> usize {
+    self.tx_id
+  }
+
   pub fn get<T>(&self, index: usize) -> Result<T>
   where
     T: Serializable<Error, PAGE_SIZE>,

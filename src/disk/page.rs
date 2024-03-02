@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use crate::utils::size;
 
 use crate::error::{Error, Result};
@@ -25,13 +27,13 @@ impl<const T: usize> Page<T> {
 
   fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.bytes.len());
-    &mut self.bytes[start..end]
+    self.bytes[start..end].as_mut()
   }
 
   pub fn copy(&self) -> Self {
     let mut p = Self::new();
     p.as_mut().copy_from_slice(self.as_ref());
-    return p;
+    p
   }
 
   pub fn scanner(&self) -> PageScanner<'_, T> {
@@ -82,7 +84,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
     let mut page = Self::new();
     let len = value.len().min(T);
     page.range_mut(0, len).copy_from_slice(&value[0..len]);
-    return page;
+    page
   }
 }
 impl<const T: usize> From<Page<T>> for Vec<u8> {
@@ -94,7 +96,7 @@ impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
     let mut page = Page::new_empty();
     page.as_mut().copy_from_slice(value);
-    return page;
+    page
   }
 }
 
@@ -112,23 +114,23 @@ impl<'a, const T: usize> PageScanner<'a, T> {
       self.offset += 1;
       return Ok(i);
     }
-    return Err(Error::EOF);
+    Err(Error::EOF)
   }
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
-    if self.offset + n >= self.inner.len() {
+    if self.offset.add(n).gt(&self.inner.len()) {
       return Err(Error::EOF);
     }
-    let end = self.offset + n;
-    let b = &self.inner[self.offset..end];
+    let end = self.offset.add(n);
+    let b = self.inner[self.offset..end].as_ref();
     self.offset = end;
-    return Ok(b);
+    Ok(b)
   }
 
   pub fn read_usize(&mut self) -> Result<usize> {
     let mut b = [0; 8];
     b.copy_from_slice(self.read_n(8)?);
-    return Ok(usize::from_be_bytes(b));
+    Ok(usize::from_be_bytes(b))
   }
 
   pub fn is_eof(&self) -> bool {
@@ -147,12 +149,12 @@ impl<'a, const T: usize> PageWriter<'a, T> {
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
     let end = bytes.len() + self.offset;
-    if end >= PAGE_SIZE {
+    if end >= T {
       return Err(Error::EOF);
     };
     self.inner[self.offset..end].copy_from_slice(&bytes);
     self.offset = end;
-    return Ok(());
+    Ok(())
   }
 }
 

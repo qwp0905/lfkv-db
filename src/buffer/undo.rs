@@ -1,5 +1,5 @@
 use std::{
-  ops::{Add, AddAssign, DivAssign},
+  ops::{Add, DivAssign},
   path::PathBuf,
   sync::Mutex,
   time::Duration,

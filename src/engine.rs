@@ -1,4 +1,4 @@
-use std::{ops::Mul, path::Path, sync::Arc, time::Duration};
+use std::{fs, ops::Mul, path::Path, sync::Arc, time::Duration};
 
 use sysinfo::System;
 
@@ -7,7 +7,7 @@ use crate::{
   disk::{Finder, FinderConfig},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
-  Cursor, FreeList, Result,
+  Cursor, Error, FreeList, Result,
 };
 
 pub struct EngineConfig<T>
@@ -44,6 +44,7 @@ impl Engine {
   {
     let mem_size = System::new_all().total_memory() as usize;
     logger::info(format!("{} system memory", mem_size));
+    fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
     let disk = Arc::new(Finder::open(FinderConfig {
       path: config.base_path.as_ref().join(DISK_PATH),
@@ -84,10 +85,12 @@ impl Engine {
       buffer_pool,
       freelist,
     };
-    engine.new_transaction().and_then(|cursor| {
-      cursor.initialize()?;
-      cursor.commit()
-    })?;
+
+    let cursor = engine.new_transaction()?;
+    cursor.initialize()?;
+    cursor.commit()?;
+
+    logger::info(format!("engine initialized"));
     Ok(engine)
   }
 
