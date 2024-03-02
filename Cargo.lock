@@ -180,6 +180,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lfkv-db"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossbeam",
+ "hashbrown",
+ "serde_json",
+ "sysinfo",
+ "thiserror",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -190,18 +202,6 @@ name = "log"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
-
-[[package]]
-name = "no-db"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "crossbeam",
- "hashbrown",
- "serde_json",
- "sysinfo",
- "thiserror",
-]
 
 [[package]]
 name = "ntapi"

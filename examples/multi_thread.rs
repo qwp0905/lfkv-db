@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use no_db::{size, Engine, EngineConfig};
+use lfkv_db::{size, Engine, EngineConfig};
 
 // use std::{sync::Arc, time::Duration};
 fn main() {
@@ -88,14 +88,16 @@ struct T {
   i: usize,
 }
 
-impl no_db::Serializable for T {
-  fn deserialize(value: &no_db::Page) -> std::prelude::v1::Result<Self, no_db::Error> {
+impl lfkv_db::Serializable for T {
+  fn deserialize(
+    value: &lfkv_db::Page,
+  ) -> std::prelude::v1::Result<Self, lfkv_db::Error> {
     let i = value.scanner().read_usize()?;
     Ok(T { i })
   }
 
-  fn serialize(&self) -> std::prelude::v1::Result<no_db::Page, no_db::Error> {
-    let mut p = no_db::Page::new();
+  fn serialize(&self) -> std::prelude::v1::Result<lfkv_db::Page, lfkv_db::Error> {
+    let mut p = lfkv_db::Page::new();
     let mut wt = p.writer();
     wt.write(&self.i.to_be_bytes())?;
     Ok(p)

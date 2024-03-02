@@ -28,9 +28,9 @@ where
   pub group_commit_count: usize,
 }
 
-const WAL_PATH: &str = "wal.nodb";
-const UNDO_PATH: &str = "undo.nodb";
-const DISK_PATH: &str = "data.nodb";
+const WAL_PATH: &str = "wal.db";
+const UNDO_PATH: &str = "undo.db";
+const DISK_PATH: &str = "data.db";
 
 pub struct Engine {
   wal: Arc<WriteAheadLog>,
