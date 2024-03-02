@@ -13,7 +13,6 @@ use super::{
 };
 
 pub struct Cursor {
-  // locks: Arc<LockManager>,
   committed: Arc<RwLock<bool>>,
   freelist: Arc<FreeList<BLOCK_SIZE>>,
   writer: CursorWriter,
