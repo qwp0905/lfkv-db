@@ -1,38 +1,41 @@
 use std::{
   collections::BTreeSet,
   ops::Mul,
-  sync::{Arc, Mutex},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+  },
   time::Duration,
 };
 
-use crate::{
-  buffer::BLOCK_SIZE, disk::Finder, plus_pipe, ContextReceiver, Result, ShortenedMutex,
-  StoppableChannel,
-};
+use crate::{disk::Finder, ContextReceiver, Result, ShortenedMutex, StoppableChannel};
 
-pub struct FreeList {
+pub struct FreeList<const N: usize> {
   list: Arc<Mutex<BTreeSet<usize>>>,
-  file: Arc<Finder<BLOCK_SIZE>>,
+  file: Arc<Finder<N>>,
   interval: Duration,
   chan: StoppableChannel<(), Result>,
+  last_index: AtomicUsize,
 }
-impl FreeList {
-  pub fn new(interval: Duration, file: Arc<Finder<BLOCK_SIZE>>) -> Self {
+impl<const N: usize> FreeList<N> {
+  pub fn new(interval: Duration, file: Arc<Finder<N>>) -> Result<Self> {
     let (chan, rx) = StoppableChannel::new();
+    let last_index = file.len()?;
     let f = Self {
       list: Default::default(),
       file,
       interval,
       chan,
+      last_index: AtomicUsize::new(last_index),
     };
-    f.start_defragmentation(rx)
+    Ok(f.start_defragmentation(rx))
   }
-  pub fn acquire(&self) -> Result<usize> {
+  pub fn acquire(&self) -> usize {
     if let Some(i) = self.list.l().pop_first() {
-      return Ok(i);
+      return i;
     }
 
-    self.file.len().map(plus_pipe(1))
+    self.last_index.fetch_add(1, Ordering::SeqCst)
   }
 
   pub fn insert(&self, i: usize) {
@@ -40,28 +43,21 @@ impl FreeList {
   }
 
   fn start_defragmentation(self, rx: ContextReceiver<(), Result>) -> Self {
-    let file = self.file.clone();
-    let list = self.list.clone();
-    rx.to_new_or_timeout(
-      "defragmentation",
-      BLOCK_SIZE.mul(2),
-      self.interval,
-      move |_| {
-        let len = file.len()?;
-        for i in 0..len {
-          let page = file.read(i)?;
-          if !page.is_empty() {
-            continue;
-          }
-          list.l().insert(i);
-        }
-        Ok(())
-      },
-    );
+    // let file = self.file.clone();
+    // let list = self.list.clone();
+    rx.to_new_or_timeout("defragmentation", N.mul(2), self.interval, move |_| {
+      // let len = file.len()?;
+      // for i in 0..len {
+      //   if let Err(Error::NotFound) = file.read(i) {
+      //     list.l().insert(i);
+      //   };
+      // }
+      Ok(())
+    });
     self
   }
 }
-impl Drop for FreeList {
+impl<const N: usize> Drop for FreeList<N> {
   fn drop(&mut self) {
     self.chan.terminate()
   }

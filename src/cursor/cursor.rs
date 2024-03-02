@@ -1,8 +1,10 @@
 use std::sync::{Arc, RwLock};
 
 use crate::{
-  buffer::BufferPool, logger, wal::WriteAheadLog, Error, FreeList, Result, Serializable,
-  ShortenedRwLock,
+  buffer::{BufferPool, BLOCK_SIZE},
+  logger,
+  wal::WriteAheadLog,
+  Error, FreeList, Result, Serializable, ShortenedRwLock,
 };
 
 use super::{
@@ -12,12 +14,12 @@ use super::{
 pub struct Cursor {
   // locks: Arc<LockManager>,
   committed: Arc<RwLock<bool>>,
-  freelist: Arc<FreeList>,
+  freelist: Arc<FreeList<BLOCK_SIZE>>,
   writer: CursorWriter,
 }
 impl Cursor {
   pub fn new(
-    freelist: Arc<FreeList>,
+    freelist: Arc<FreeList<BLOCK_SIZE>>,
     wal: Arc<WriteAheadLog>,
     buffer: Arc<BufferPool>,
   ) -> Result<Self> {
@@ -67,7 +69,7 @@ impl Cursor {
       Err(Error::NotFound) => {
         let mut header: TreeHeader = self.writer.get(HEADER_INDEX)?;
         if let Ok((s, i)) = self.append_at(header.get_root(), key, value)? {
-          let nri = self.freelist.acquire()?;
+          let nri = self.freelist.acquire();
           let new_root = CursorEntry::Internal(InternalNode {
             keys: vec![s],
             children: vec![header.get_root(), i],
@@ -138,7 +140,7 @@ impl Cursor {
             }
 
             let (n, s) = node.split();
-            let new_i = self.freelist.acquire()?;
+            let new_i = self.freelist.acquire();
             self.writer.insert(new_i, n)?;
             self.writer.insert(current, node)?;
             Ok(Ok((s, new_i)))
@@ -158,7 +160,7 @@ impl Cursor {
           return Ok(Err(None));
         };
 
-        let pi = self.freelist.acquire()?;
+        let pi = self.freelist.acquire();
         self.writer.insert(pi, value)?;
         let lk = node.add(key, pi);
         if node.len() <= MAX_NODE_LEN {
@@ -166,7 +168,7 @@ impl Cursor {
           return Ok(Err(lk));
         }
 
-        let ni = self.freelist.acquire()?;
+        let ni = self.freelist.acquire();
         let (n, s) = node.split(current, ni);
         self.writer.insert(ni, n)?;
         self.writer.insert(current, node)?;

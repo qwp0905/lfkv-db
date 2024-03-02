@@ -3,7 +3,7 @@ use std::{fs, ops::Mul, path::Path, sync::Arc, time::Duration};
 use sysinfo::System;
 
 use crate::{
-  buffer::{BufferPool, RollbackStorage, RollbackStorageConfig},
+  buffer::{BufferPool, RollbackStorage, RollbackStorageConfig, BLOCK_SIZE},
   disk::{Finder, FinderConfig},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
@@ -35,7 +35,7 @@ const DISK_PATH: &str = "data.nodb";
 pub struct Engine {
   wal: Arc<WriteAheadLog>,
   buffer_pool: Arc<BufferPool>,
-  freelist: Arc<FreeList>,
+  freelist: Arc<FreeList<BLOCK_SIZE>>,
 }
 impl Engine {
   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
@@ -52,7 +52,10 @@ impl Engine {
       batch_size: config.disk_batch_size,
     })?);
 
-    let freelist = Arc::new(FreeList::new(config.defragmentation_interval, disk.clone()));
+    let freelist = Arc::new(FreeList::new(
+      config.defragmentation_interval,
+      disk.clone(),
+    )?);
 
     let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
       fsync_delay: config.undo_batch_delay,

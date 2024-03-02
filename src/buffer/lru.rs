@@ -87,6 +87,19 @@ where
     })
   }
 
+  pub fn get_only<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+  {
+    let h = hash(k, &self.hasher);
+    let eq = equivalent(k);
+    self
+      .raw
+      .get(h, eq)
+      .map(|e| unsafe { e.as_ref() }.element.as_ref())
+  }
+
   pub fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
   where
     K: Borrow<Q>,
