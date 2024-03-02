@@ -19,6 +19,3 @@ pub use utils::*;
 
 mod disk;
 pub use disk::{Page, Serializable, PAGE_SIZE};
-
-mod free;
-pub use free::*;

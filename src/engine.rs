@@ -4,10 +4,10 @@ use sysinfo::System;
 
 use crate::{
   buffer::{BufferPool, RollbackStorage, RollbackStorageConfig, BLOCK_SIZE},
-  disk::{Finder, FinderConfig},
+  disk::{Finder, FinderConfig, FreeList},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
-  Cursor, Error, FreeList, Result,
+  Cursor, Error, Result,
 };
 
 pub struct EngineConfig<T>

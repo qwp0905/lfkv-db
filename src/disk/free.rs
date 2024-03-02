@@ -8,7 +8,9 @@ use std::{
   time::Duration,
 };
 
-use crate::{disk::Finder, ContextReceiver, Result, ShortenedMutex, StoppableChannel};
+use crate::{ContextReceiver, Result, ShortenedMutex, StoppableChannel};
+
+use super::Finder;
 
 pub struct FreeList<const N: usize> {
   list: Arc<Mutex<BTreeSet<usize>>>,

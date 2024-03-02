@@ -2,9 +2,10 @@ use std::sync::{Arc, RwLock};
 
 use crate::{
   buffer::{BufferPool, BLOCK_SIZE},
+  disk::FreeList,
   logger,
   wal::WriteAheadLog,
-  Error, FreeList, Result, Serializable, ShortenedRwLock,
+  Error, Result, Serializable, ShortenedRwLock,
 };
 
 use super::{

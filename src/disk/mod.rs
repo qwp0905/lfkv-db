@@ -6,3 +6,6 @@ pub use serialize::*;
 
 mod finder;
 pub use finder::*;
+
+mod free;
+pub use free::*;
