@@ -19,12 +19,13 @@ enum Command<const N: usize> {
   Metadata,
 }
 impl<const N: usize> Command<N> {
-  fn exec(&self, file: &mut File) -> Result<(Option<Page<N>>, Option<Metadata>)> {
+  fn exec(&self, file: &mut File) -> Result<(Option<Page<N>>, Option<Metadata>)>
+  where
+    File: IndexedFile<N>,
+  {
     match self {
       Command::Read(index) => {
-        file
-          .seek(SeekFrom::Start(get_offset(*index, N)))
-          .map_err(Error::IO)?;
+        file.seek_index(*index)?;
         let mut page = Page::new_empty();
         if let Err(err) = file.read_exact(page.as_mut()) {
           match err.kind() {
@@ -39,9 +40,7 @@ impl<const N: usize> Command<N> {
         Ok((Some(page), None))
       }
       Command::Write(index, page) => {
-        file
-          .seek(SeekFrom::Start(get_offset(*index, N)))
-          .map_err(Error::IO)?;
+        file.seek_index(*index)?;
         file.write_all(page.as_ref()).map_err(Error::IO)?;
         Ok((None, None))
       }
@@ -181,6 +180,14 @@ impl<const N: usize> Drop for Finder<N> {
   }
 }
 
-fn get_offset(index: usize, n: usize) -> u64 {
-  (index.mul(n)) as u64
+trait IndexedFile<const N: usize> {
+  fn seek_index(&mut self, i: usize) -> Result<usize>;
+}
+impl<const N: usize> IndexedFile<N> for File {
+  fn seek_index(&mut self, i: usize) -> Result<usize> {
+    let r = self
+      .seek(SeekFrom::Start(i.mul(N) as u64))
+      .map_err(Error::IO)?;
+    Ok(r as usize)
+  }
 }

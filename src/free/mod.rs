@@ -1,5 +1,6 @@
 use std::{
   collections::BTreeSet,
+  ops::Mul,
   sync::{Arc, Mutex},
   time::Duration,
 };
@@ -43,7 +44,7 @@ impl FreeList {
     let list = self.list.clone();
     rx.to_new_or_timeout(
       "defragmentation",
-      BLOCK_SIZE * 2,
+      BLOCK_SIZE.mul(2),
       self.interval,
       move |_| {
         let len = file.len()?;
