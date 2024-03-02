@@ -1,5 +1,4 @@
 mod buffer;
-mod transaction;
 mod wal;
 
 mod thread;
