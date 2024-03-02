@@ -27,7 +27,7 @@ impl Serializable for CursorEntry {
   }
 }
 impl CursorEntry {
-  pub fn find_or_next(&self, key: &String) -> Result<usize, Option<usize>> {
+  pub fn find_or_next(&self, key: &Vec<u8>) -> Result<usize, Option<usize>> {
     match self {
       Self::Internal(node) => Err(Some(node.next(key))),
       Self::Leaf(node) => match node.find(key) {
@@ -40,11 +40,11 @@ impl CursorEntry {
 
 #[derive(Debug)]
 pub struct InternalNode {
-  pub keys: Vec<String>,
+  pub keys: Vec<Vec<u8>>,
   pub children: Vec<usize>,
 }
 impl InternalNode {
-  pub fn split(&mut self) -> (CursorEntry, String) {
+  pub fn split(&mut self) -> (CursorEntry, Vec<u8>) {
     let c = self.keys.len() / 2;
     let mut keys = self.keys.split_off(c);
     let m = keys.remove(0);
@@ -52,7 +52,7 @@ impl InternalNode {
     (CursorEntry::Internal(InternalNode { keys, children }), m)
   }
 
-  pub fn add(&mut self, key: String, index: usize) {
+  pub fn add(&mut self, key: Vec<u8>, index: usize) {
     if let Err(i) = self.keys.binary_search_by(|k| k.cmp(&key)) {
       let mut keys = self.keys.split_off(i);
       self.keys.push(key);
@@ -67,7 +67,7 @@ impl InternalNode {
     self.keys.len()
   }
 
-  pub fn next(&self, key: &String) -> usize {
+  pub fn next(&self, key: &Vec<u8>) -> usize {
     let i = self
       .keys
       .binary_search_by(|k| k.cmp(key))
@@ -85,7 +85,7 @@ impl Serializable for InternalNode {
     wt.write(&[self.keys.len() as u8])?;
     for k in &self.keys {
       wt.write(&[k.len() as u8])?;
-      wt.write(k.as_bytes())?;
+      wt.write(k.as_ref())?;
     }
     for &i in &self.children {
       wt.write(&i.to_be_bytes())?;
@@ -101,7 +101,7 @@ impl Serializable for InternalNode {
     let mut children = vec![];
     for _ in 0..kl {
       let n = sc.read()?;
-      keys.push(String::from_utf8_lossy(sc.read_n(n as usize)?).to_string());
+      keys.push(sc.read_n(n as usize)?.to_vec());
     }
     for _ in 0..(kl + 1) {
       children.push(sc.read_usize()?);
@@ -113,7 +113,7 @@ impl Serializable for InternalNode {
 
 #[derive(Debug)]
 pub struct LeafNode {
-  pub keys: Vec<(String, usize)>,
+  pub keys: Vec<(Vec<u8>, usize)>,
   pub next: Option<usize>,
   pub prev: Option<usize>,
 }
@@ -126,7 +126,7 @@ impl LeafNode {
   //   }
   // }
 
-  pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, String) {
+  pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, Vec<u8>) {
     let c = self.keys.len() / 2;
     let keys = self.keys.split_off(c);
     let m = keys[0].0.clone();
@@ -142,7 +142,7 @@ impl LeafNode {
     )
   }
 
-  pub fn add(&mut self, key: String, index: usize) -> Option<String> {
+  pub fn add(&mut self, key: Vec<u8>, index: usize) -> Option<Vec<u8>> {
     if let Err(i) = self.keys.binary_search_by(|(k, _)| k.cmp(&key)) {
       let mut keys = self.keys.split_off(i);
       self.keys.push((key.to_owned(), index));
@@ -156,7 +156,7 @@ impl LeafNode {
     self.keys.len()
   }
 
-  pub fn find(&self, key: &String) -> Option<usize> {
+  pub fn find(&self, key: &Vec<u8>) -> Option<usize> {
     self
       .keys
       .binary_search_by(|(k, _)| k.cmp(key))
@@ -172,7 +172,7 @@ impl Serializable for LeafNode {
     wt.write(&[self.keys.len() as u8])?;
     for (k, i) in &self.keys {
       wt.write(&[k.len() as u8])?;
-      wt.write(k.as_bytes())?;
+      wt.write(k.as_ref())?;
       wt.write(&i.to_be_bytes())?;
     }
     let prev = self.prev.unwrap_or(0);
@@ -189,7 +189,7 @@ impl Serializable for LeafNode {
     let kl = sc.read()?;
     for _ in 0..kl {
       let n = sc.read()?;
-      let k = String::from_utf8_lossy(sc.read_n(n as usize)?).to_string();
+      let k = sc.read_n(n as usize)?.to_vec();
       let i = sc.read_usize()?;
       keys.push((k, i));
     }

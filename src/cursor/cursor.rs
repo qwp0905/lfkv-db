@@ -45,7 +45,7 @@ impl Cursor {
     Ok(())
   }
 
-  pub fn get<T>(&self, key: &String) -> Result<T>
+  pub fn get<T>(&self, key: &Vec<u8>) -> Result<T>
   where
     T: Serializable,
   {
@@ -57,7 +57,7 @@ impl Cursor {
     self.writer.get(i)
   }
 
-  pub fn insert<T>(&self, key: String, value: T) -> Result
+  pub fn insert<T>(&self, key: Vec<u8>, value: T) -> Result
   where
     T: Serializable,
   {
@@ -104,7 +104,7 @@ impl Cursor {
   }
 }
 impl Cursor {
-  fn get_index(&self, key: &String) -> Result<usize> {
+  fn get_index(&self, key: &Vec<u8>) -> Result<usize> {
     let header: TreeHeader = self.writer.get(HEADER_INDEX)?;
     let mut index = header.get_root();
     loop {
@@ -122,9 +122,9 @@ impl Cursor {
   fn append_at<T>(
     &self,
     current: usize,
-    key: String,
+    key: Vec<u8>,
     value: T,
-  ) -> Result<core::result::Result<(String, usize), Option<String>>>
+  ) -> Result<core::result::Result<(Vec<u8>, usize), Option<Vec<u8>>>>
   where
     T: Serializable,
   {

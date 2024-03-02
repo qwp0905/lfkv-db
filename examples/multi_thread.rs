@@ -23,7 +23,7 @@ fn main() {
   );
 
   let cursor = engine.new_transaction().unwrap();
-  dbg!(cursor.insert(format!("sdfsdfs"), T { i: 1 })).unwrap();
+  dbg!(cursor.insert(b"sdfsdfs".to_vec(), T { i: 1 })).unwrap();
   dbg!(cursor.commit()).unwrap();
 }
 // fn main() -> no_db::Result<()> {
