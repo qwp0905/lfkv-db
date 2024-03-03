@@ -194,9 +194,9 @@ impl Serializable for LeafNode {
       keys.push((k, i));
     }
     let prev = sc.read_usize()?;
-    let prev = if prev == 0 { None } else { Some(prev) };
+    let prev = if prev.eq(&0) { None } else { Some(prev) };
     let next = sc.read_usize()?;
-    let next = if next == 0 { None } else { Some(next) };
+    let next = if next.eq(&0) { None } else { Some(next) };
     Ok(Self { keys, prev, next })
   }
 }

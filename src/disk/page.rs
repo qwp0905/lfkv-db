@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::ops::{Add, AddAssign};
 
 use crate::utils::size;
 
@@ -45,7 +45,7 @@ impl<const T: usize> Page<T> {
   }
 
   pub fn is_empty(&self) -> bool {
-    self.bytes[0] == 0
+    self.bytes[0].eq(&0)
   }
 
   pub fn set_empty(&mut self) {
@@ -111,17 +111,18 @@ impl<'a, const T: usize> PageScanner<'a, T> {
 
   pub fn read(&mut self) -> Result<u8> {
     if let Some(&i) = self.inner.get(self.offset) {
-      self.offset += 1;
+      self.offset.add_assign(1);
       return Ok(i);
     }
     Err(Error::EOF)
   }
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
-    if self.offset.add(n).gt(&self.inner.len()) {
+    let end = self.offset.add(n);
+    if end.ge(&self.inner.len()) {
       return Err(Error::EOF);
     }
-    let end = self.offset.add(n);
+
     let b = self.inner[self.offset..end].as_ref();
     self.offset = end;
     Ok(b)
@@ -134,7 +135,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
   }
 
   pub fn is_eof(&self) -> bool {
-    self.inner.len() <= self.offset
+    self.inner.len().le(&self.offset)
   }
 }
 
@@ -148,8 +149,8 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-    let end = bytes.len() + self.offset;
-    if end >= T {
+    let end = bytes.len().add(self.offset);
+    if end.ge(&T) {
       return Err(Error::EOF);
     };
     self.inner[self.offset..end].copy_from_slice(&bytes);
