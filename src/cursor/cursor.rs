@@ -9,7 +9,8 @@ use crate::{
 };
 
 use super::{
-  CursorEntry, CursorWriter, InternalNode, TreeHeader, HEADER_INDEX, MAX_NODE_LEN,
+  CursorEntry, CursorWriter, InternalNode, LeafNode, TreeHeader, HEADER_INDEX,
+  MAX_NODE_LEN,
 };
 
 pub struct Cursor {
@@ -39,7 +40,11 @@ impl Cursor {
     if let Err(Error::NotFound) = self.writer.get::<TreeHeader>(HEADER_INDEX) {
       logger::info(format!("there are no tree header and will be initialized"));
       let header = TreeHeader::initial_state();
+      let root = header.get_root();
       self.writer.insert(HEADER_INDEX, header)?;
+      self
+        .writer
+        .insert(root, CursorEntry::Leaf(LeafNode::empty()))?;
     };
     Ok(())
   }
@@ -134,7 +139,7 @@ impl Cursor {
         match self.append_at(i, key, value)? {
           Ok((s, ni)) => {
             node.add(s, ni);
-            if node.len() <= MAX_NODE_LEN {
+            if node.len().le(&MAX_NODE_LEN) {
               self.writer.insert(current, node)?;
               return Ok(Err(None));
             }

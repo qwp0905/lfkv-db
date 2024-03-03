@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::{
+  buffer::BufferPool,
   disk::{Finder, FinderConfig},
   size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
 };
@@ -32,7 +33,6 @@ pub struct WriteAheadLog {
   io_c: StoppableChannel<Vec<LogRecord>, Result>,
   checkpoint_c: StoppableChannel<()>,
   config: WriteAheadLogConfig,
-  flush_c: StoppableChannel<(), Option<usize>>,
   last_index: Arc<RwLock<usize>>,
 }
 impl WriteAheadLog {
@@ -40,6 +40,7 @@ impl WriteAheadLog {
     mut config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo, Result>,
     flush_c: StoppableChannel<(), Option<usize>>,
+    buffer_pool: Arc<BufferPool>,
   ) -> Result<Self> {
     config.max_file_size.div_assign(WAL_PAGE_SIZE);
 
@@ -61,14 +62,17 @@ impl WriteAheadLog {
       io_c,
       checkpoint_c,
       config,
-      flush_c,
       Default::default(),
     );
 
-    let (last_transaction, cursor) = core.replay()?;
+    let (last_transaction, cursor) = core.replay(buffer_pool)?;
 
     core.buffer.initial_state(last_transaction);
-    Ok(core.start_checkpoint(checkpoint_rx).start_io(io_rx, cursor))
+    Ok(
+      core
+        .start_checkpoint(checkpoint_rx, flush_c)
+        .start_io(io_rx, cursor),
+    )
   }
 
   fn new(
@@ -78,7 +82,6 @@ impl WriteAheadLog {
     io_c: StoppableChannel<Vec<LogRecord>, Result>,
     checkpoint_c: StoppableChannel<()>,
     config: WriteAheadLogConfig,
-    flush_c: StoppableChannel<(), Option<usize>>,
     last_index: Arc<RwLock<usize>>,
   ) -> Self {
     Self {
@@ -88,7 +91,6 @@ impl WriteAheadLog {
       io_c,
       checkpoint_c,
       config,
-      flush_c,
       last_index,
     }
   }
@@ -136,9 +138,12 @@ impl WriteAheadLog {
     self
   }
 
-  fn start_checkpoint(self, rx: ContextReceiver<()>) -> Self {
+  fn start_checkpoint(
+    self,
+    rx: ContextReceiver<()>,
+    flush_c: StoppableChannel<(), Option<usize>>,
+  ) -> Self {
     let timeout = self.config.checkpoint_interval;
-    let flush_c = self.flush_c.clone();
     let io_c = self.io_c.clone();
     rx.to_new_or_timeout("wal checkpoint", size::kb(2), timeout, move |_| {
       if let Some(to_be_apply) = flush_c.send_await(()) {
@@ -160,7 +165,7 @@ impl WriteAheadLog {
 
   pub fn new_transaction(&self) -> Result<(usize, usize)> {
     let tx_id = self.buffer.new_transaction();
-    if self.buffer.len() >= self.config.max_buffer_size {
+    if self.buffer.len().ge(&self.config.max_buffer_size) {
       self.io_c.send_await(self.buffer.flush())?;
     }
     Ok((tx_id, *self.last_index.rl()))
@@ -171,7 +176,15 @@ impl WriteAheadLog {
     self.io_c.send_await(records)
   }
 
-  fn replay(&self) -> Result<(usize, usize)> {
+  pub fn before_shutdown(&self) {
+    self.checkpoint_c.send(());
+    self.commit_c.terminate();
+    self.checkpoint_c.terminate();
+    self.io_c.terminate();
+    self.disk.close();
+  }
+
+  fn replay(&self, buffer_pool: Arc<BufferPool>) -> Result<(usize, usize)> {
     let mut cursor = 0;
     let mut records: BTreeMap<usize, LogRecord> = BTreeMap::new();
 
@@ -229,30 +242,19 @@ impl WriteAheadLog {
       }
     }
 
-    let mut to_be_flush = vec![];
     let mut to_be_rollback = vec![];
 
     for (tx_id, log) in inserts.into_values() {
       if committed.contains(&tx_id) {
-        to_be_flush.push((tx_id, log.page_index, log.data));
+        buffer_pool.insert(tx_id, log.page_index, log.data)?;
       } else {
         to_be_rollback.push((tx_id, log.page_index))
       }
     }
 
-    // self.flush_c.send_with_done(to_be_flush).drop_one();
+    self.checkpoint_c.send(());
     *self.last_index.wl() = last_index;
 
     Ok((last_transaction, cursor))
-  }
-}
-impl Drop for WriteAheadLog {
-  fn drop(&mut self) {
-    self.commit_c.terminate();
-    self.io_c.send_await(self.buffer.flush()).ok();
-    self.checkpoint_c.send_await(());
-    self.checkpoint_c.terminate();
-    self.io_c.terminate();
-    self.flush_c.terminate();
   }
 }

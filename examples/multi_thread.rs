@@ -21,16 +21,26 @@ fn main() {
     })
     .unwrap(),
   );
+  let mut v = vec![];
+  for i in 0..10 {
+    let e = engine.clone();
+    let (tx, rx) = crossbeam::channel::unbounded();
+    v.push(rx);
+    std::thread::spawn(move || {
+      let r = e.new_transaction().and_then(|t| {
+        t.insert(format!("000{i}",).as_bytes().to_vec(), T { i })?;
+        t.commit()?;
+        Ok(())
+      });
+      tx.send(r).unwrap();
+    });
+  }
 
-  let key = b"sdfsdfs".to_vec();
-
-  let cursor = engine.new_transaction().unwrap();
-  cursor.insert(key.clone(), T { i: 1 }).unwrap();
-  cursor.commit().unwrap();
-
-  let cursor = engine.new_transaction().unwrap();
-  let t: T = cursor.get(key.as_ref()).unwrap();
-  println!("{:?}", t);
+  for r in v {
+    if let Err(err) = r.recv().unwrap() {
+      println!("{:?}", err)
+    }
+  }
 }
 // fn main() -> no_db::Result<()> {
 //   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {

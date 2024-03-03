@@ -267,4 +267,8 @@ impl RollbackStorage {
       }
     }
   }
+
+  pub fn destroy(&self) {
+    self.disk.close();
+  }
 }

@@ -146,6 +146,11 @@ impl<const N: usize> Finder<N> {
     let r = self.io_c.send_await(Command::Metadata)?;
     Ok((r.1.unwrap().len() as usize).div_ceil(N))
   }
+
+  pub fn close(&self) {
+    self.batch_c.terminate();
+    self.io_c.terminate();
+  }
 }
 
 impl<const N: usize> Finder<N> {
@@ -171,12 +176,6 @@ impl<const N: usize> Finder<N> {
   {
     let page = v.serialize()?;
     self.batch_write(index, page)
-  }
-}
-impl<const N: usize> Drop for Finder<N> {
-  fn drop(&mut self) {
-    self.batch_c.terminate();
-    self.io_c.terminate();
   }
 }
 

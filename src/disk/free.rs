@@ -44,6 +44,11 @@ impl<const N: usize> FreeList<N> {
     self.list.l().insert(i);
   }
 
+  pub fn before_shutdown(&self) {
+    self.chan.terminate();
+    self.file.close();
+  }
+
   fn start_defragmentation(self, rx: ContextReceiver<(), Result>) -> Self {
     // let file = self.file.clone();
     // let list = self.list.clone();
@@ -57,10 +62,5 @@ impl<const N: usize> FreeList<N> {
       Ok(())
     });
     self
-  }
-}
-impl<const N: usize> Drop for FreeList<N> {
-  fn drop(&mut self) {
-    self.chan.terminate()
   }
 }

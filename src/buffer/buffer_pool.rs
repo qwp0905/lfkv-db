@@ -55,7 +55,7 @@ impl BufferPool {
     let disk = self.disk.clone();
     rx.to_done(
       "bufferpool write",
-      BLOCK_SIZE.mul(10),
+      BLOCK_SIZE.mul(20),
       move |(index, page)| disk.write(index, page),
     );
     self
@@ -88,7 +88,7 @@ impl BufferPool {
     let disk = self.disk.clone();
     let rollback = self.rollback.clone();
 
-    rx.to_new("bufferpool commit", BLOCK_SIZE.mul(10), move |commit| {
+    rx.to_new("bufferpool commit", BLOCK_SIZE.mul(100), move |commit| {
       let mut u = uncommitted.l();
       if let Some(v) = u.remove(&commit.tx_id) {
         for index in v {
@@ -169,5 +169,10 @@ impl BufferPool {
     self.cache.insert_new(index, new_block);
     self.uncommitted.l().entry(tx_id).or_default().push(index);
     Ok(())
+  }
+
+  pub fn before_shutdown(&self) {
+    self.cache.before_shutdown();
+    self.rollback.destroy();
   }
 }

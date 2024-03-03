@@ -1,4 +1,13 @@
-use std::{fs, ops::Mul, path::Path, sync::Arc, time::Duration};
+use std::{
+  fs,
+  ops::Mul,
+  path::Path,
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+  },
+  time::Duration,
+};
 
 use sysinfo::System;
 
@@ -36,6 +45,7 @@ pub struct Engine {
   wal: Arc<WriteAheadLog>,
   buffer_pool: Arc<BufferPool>,
   freelist: Arc<FreeList<BLOCK_SIZE>>,
+  available: AtomicBool,
 }
 impl Engine {
   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
@@ -81,12 +91,14 @@ impl Engine {
       },
       commit_c,
       flush_c,
+      buffer_pool.clone(),
     )?);
 
     let engine = Self {
       wal,
       buffer_pool,
       freelist,
+      available: AtomicBool::new(true),
     };
 
     let cursor = engine.new_transaction()?;
@@ -98,10 +110,23 @@ impl Engine {
   }
 
   pub fn new_transaction(&self) -> Result<Cursor> {
+    if !self.available.load(Ordering::SeqCst) {
+      return Err(Error::EngineUnavailable);
+    }
+
     Cursor::new(
       self.freelist.clone(),
       self.wal.clone(),
       self.buffer_pool.clone(),
     )
+  }
+}
+
+impl Drop for Engine {
+  fn drop(&mut self) {
+    self.available.store(false, Ordering::SeqCst);
+    self.wal.before_shutdown();
+    self.buffer_pool.before_shutdown();
+    self.freelist.before_shutdown();
   }
 }

@@ -128,9 +128,8 @@ impl CacheStorage {
 
     Ok(Some(max_index))
   }
-}
-impl Drop for CacheStorageCore {
-  fn drop(&mut self) {
-    self.write_c.terminate()
+
+  pub fn before_shutdown(&self) {
+    self.0.l().write_c.terminate();
   }
 }

@@ -118,13 +118,13 @@ pub struct LeafNode {
   pub prev: Option<usize>,
 }
 impl LeafNode {
-  // pub fn empty() -> Self {
-  //   Self {
-  //     keys: vec![],
-  //     prev: None,
-  //     next: None,
-  //   }
-  // }
+  pub fn empty() -> Self {
+    Self {
+      keys: vec![],
+      prev: None,
+      next: None,
+    }
+  }
 
   pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, Vec<u8>) {
     let c = self.keys.len() / 2;

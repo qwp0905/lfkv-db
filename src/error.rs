@@ -24,6 +24,9 @@ pub enum Error {
 
   #[error("transaction already closed")]
   TransactionClosed,
+
+  #[error("engine unavailable")]
+  EngineUnavailable,
 }
 impl Error {
   pub fn to_string(&self) -> String {
@@ -34,6 +37,7 @@ impl Error {
       Self::EOF => format!("end of file"),
       Self::IO(err) => err.to_string(),
       Self::TransactionClosed => format!("transaction already closed"),
+      Self::EngineUnavailable => format!("engine unavailable"),
     }
   }
 
