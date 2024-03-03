@@ -31,7 +31,7 @@ impl<const T: usize> Page<T> {
   }
 
   pub fn copy(&self) -> Self {
-    let mut p = Self::new();
+    let mut p = Self::new_empty();
     p.as_mut().copy_from_slice(self.as_ref());
     p
   }

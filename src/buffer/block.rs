@@ -6,16 +6,21 @@ pub const BLOCK_SIZE: usize = size::kb(4);
 pub struct DataBlock {
   pub commit_index: usize,
   pub tx_id: usize,
-  pub undo_index: usize,
+  pub undo_index: Option<usize>,
   pub data: Page,
 }
 
 impl DataBlock {
-  pub fn uncommitted(tx_id: usize, undo_index: usize, data: Page) -> Self {
+  pub fn uncommitted(tx_id: usize, undo_index: Option<usize>, data: Page) -> Self {
     Self::new(0, tx_id, undo_index, data)
   }
 
-  pub fn new(commit_index: usize, tx_id: usize, undo_index: usize, data: Page) -> Self {
+  pub fn new(
+    commit_index: usize,
+    tx_id: usize,
+    undo_index: Option<usize>,
+    data: Page,
+  ) -> Self {
     Self {
       commit_index,
       tx_id,
@@ -39,7 +44,10 @@ impl Serializable<Error, BLOCK_SIZE> for DataBlock {
     let mut wt = page.writer();
     wt.write(self.commit_index.to_be_bytes().as_ref())?;
     wt.write(self.tx_id.to_be_bytes().as_ref())?;
-    wt.write(self.undo_index.to_be_bytes().as_ref())?;
+    if let Some(i) = self.undo_index {
+      wt.write(&[1])?;
+      wt.write(i.to_be_bytes().as_ref())?;
+    }
     wt.write(self.data.as_ref())?;
     Ok(page)
   }
@@ -47,7 +55,11 @@ impl Serializable<Error, BLOCK_SIZE> for DataBlock {
     let mut sc = value.scanner();
     let commit_index = sc.read_usize()?;
     let tx_id = sc.read_usize()?;
-    let undo_index = sc.read_usize()?;
+    let undo_index = if sc.read()?.eq(&1) {
+      Some(sc.read_usize()?)
+    } else {
+      None
+    };
     let data = sc.read_n(PAGE_SIZE)?.into();
     Ok(Self::new(commit_index, tx_id, undo_index, data))
   }

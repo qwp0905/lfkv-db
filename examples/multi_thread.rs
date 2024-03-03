@@ -25,8 +25,8 @@ fn main() {
   let key = b"sdfsdfs".to_vec();
 
   let cursor = engine.new_transaction().unwrap();
-  dbg!(cursor.insert(key.clone(), T { i: 1 })).unwrap();
-  dbg!(cursor.commit()).unwrap();
+  cursor.insert(key.clone(), T { i: 1 }).unwrap();
+  cursor.commit().unwrap();
 
   let cursor = engine.new_transaction().unwrap();
   let t: T = cursor.get(key.as_ref()).unwrap();

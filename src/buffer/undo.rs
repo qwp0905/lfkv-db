@@ -20,7 +20,7 @@ pub struct UndoLog {
   commit_index: usize,
   tx_id: usize,
   data: Page,
-  undo_index: usize,
+  undo_index: Option<usize>,
 }
 
 impl UndoLog {
@@ -29,7 +29,7 @@ impl UndoLog {
     commit_index: usize,
     tx_id: usize,
     data: Page,
-    undo_index: usize,
+    undo_index: Option<usize>,
   ) -> Self {
     Self {
       index,
@@ -80,7 +80,10 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
     wt.write(&self.index.to_be_bytes())?;
     wt.write(&self.commit_index.to_be_bytes())?;
     wt.write(&self.tx_id.to_be_bytes())?;
-    wt.write(&self.undo_index.to_be_bytes())?;
+    if let Some(i) = self.undo_index {
+      wt.write(&[1])?;
+      wt.write(&i.to_be_bytes())?;
+    }
     wt.write(self.data.as_ref())?;
 
     Ok(page)
@@ -90,7 +93,11 @@ impl Serializable<Error, UNDO_PAGE_SIZE> for UndoLog {
     let index = sc.read_usize()?;
     let commit_index = sc.read_usize()?;
     let tx_id = sc.read_usize()?;
-    let undo_index = sc.read_usize()?;
+    let undo_index = if sc.read()?.eq(&1) {
+      Some(sc.read_usize()?)
+    } else {
+      None
+    };
     let data = sc.read_n(PAGE_SIZE)?.into();
 
     Ok(UndoLog::new(index, commit_index, tx_id, data, undo_index))
@@ -163,12 +170,16 @@ impl RollbackStorage {
     loop {
       let mut cache = self.cache.l();
       if let Some(log) = cache.get(&current) {
-        if commit_index.le(&log.commit_index) {
+        if commit_index.ge(&log.commit_index) {
           return Ok(log.data.copy());
         }
-
-        current = log.undo_index;
-        continue;
+        match log.undo_index {
+          Some(i) => {
+            current = i;
+            continue;
+          }
+          None => return Err(Error::NotFound),
+        }
       }
 
       let log: UndoLog = self
@@ -182,11 +193,17 @@ impl RollbackStorage {
       if cache.len().ge(&self.config.max_cache_size) {
         cache.pop_old();
       }
-      if commit_index.le(&log.commit_index) {
+      if commit_index.ge(&log.commit_index) {
         return Ok(log.data);
       }
 
-      current = log.undo_index
+      match log.undo_index {
+        Some(i) => {
+          current = i;
+          continue;
+        }
+        None => return Err(Error::NotFound),
+      }
     }
   }
 
@@ -210,10 +227,16 @@ impl RollbackStorage {
       if let Some(log) = cache.get_mut(&current) {
         if commit.tx_id.eq(&log.tx_id) {
           log.commit_index = commit.commit_index;
-          return Ok(());
+          return self.disk.batch_write_from(current, log);
         }
-        current = log.undo_index;
-        continue;
+
+        match log.undo_index {
+          Some(i) => {
+            current = i;
+            continue;
+          }
+          None => return Err(Error::NotFound),
+        }
       }
 
       let mut log: UndoLog = self
@@ -225,8 +248,9 @@ impl RollbackStorage {
 
       if commit.tx_id.eq(&log.tx_id) {
         log.commit_index = commit.commit_index;
+        self.disk.batch_write_from(current, &log)?;
 
-        cache.insert(undo_index, log);
+        cache.insert(undo_index, log.clone());
         if cache.len().ge(&self.config.max_cache_size) {
           cache.pop_old();
         }
@@ -234,7 +258,13 @@ impl RollbackStorage {
         return Ok(());
       }
 
-      current = log.undo_index
+      match log.undo_index {
+        Some(i) => {
+          current = i;
+          continue;
+        }
+        None => return Err(Error::NotFound),
+      }
     }
   }
 }

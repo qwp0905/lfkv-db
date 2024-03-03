@@ -88,7 +88,7 @@ impl BufferPool {
     let disk = self.disk.clone();
     let rollback = self.rollback.clone();
 
-    rx.to_new("bufferpool commit", BLOCK_SIZE.mul(3), move |commit| {
+    rx.to_new("bufferpool commit", BLOCK_SIZE.mul(10), move |commit| {
       let mut u = uncommitted.l();
       if let Some(v) = u.remove(&commit.tx_id) {
         for index in v {
@@ -111,7 +111,9 @@ impl BufferPool {
             }
             Err(undo_index) => undo_index,
           };
-          rollback.commit(undo_index, commit.as_ref())?;
+          if let Some(i) = undo_index {
+            rollback.commit(i, commit.as_ref())?;
+          }
         }
       };
       Ok(())
@@ -142,26 +144,27 @@ impl BufferPool {
       }
     };
 
-    if block.commit_index >= commit_index {
+    if block.commit_index.le(&commit_index) {
       return Ok(block.data.copy());
     }
-
-    self.rollback.get(commit_index, block.undo_index)
+    match block.undo_index {
+      Some(i) => self.rollback.get(commit_index, i),
+      None => Err(Error::NotFound),
+    }
   }
 
   pub fn insert(&self, tx_id: usize, index: usize, data: Page) -> Result<()> {
-    let block = {
+    let undo_index = {
       match self.cache.get(&index) {
-        Some(block) => block.copy(),
-        None => match self.disk.read(index) {
-          Ok(page) => page,
-          Err(Error::NotFound) => Page::new_empty(),
+        Some(block) => Some(self.rollback.append(block.copy())?),
+        None => match self.disk.read_to::<DataBlock>(index) {
+          Ok(block) => Some(self.rollback.append(block)?),
+          Err(Error::NotFound) => None,
           Err(err) => return Err(err),
-        }
-        .deserialize()?,
+        },
       }
     };
-    let undo_index = self.rollback.append(block.into())?;
+
     let new_block = DataBlock::uncommitted(tx_id, undo_index, data);
     self.cache.insert_new(index, new_block);
     self.uncommitted.l().entry(tx_id).or_default().push(index);

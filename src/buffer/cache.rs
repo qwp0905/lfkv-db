@@ -70,7 +70,7 @@ impl CacheStorage {
     &self,
     index: usize,
     commit: &CommitInfo,
-  ) -> core::result::Result<bool, usize> {
+  ) -> core::result::Result<bool, Option<usize>> {
     let mut core = self.0.l();
     if let Some(block) = core.cache.get_mut(&index) {
       if block.tx_id.eq(&commit.tx_id) {
