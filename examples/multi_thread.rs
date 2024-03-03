@@ -42,62 +42,6 @@ fn main() {
     }
   }
 }
-// fn main() -> no_db::Result<()> {
-//   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
-//     max_log_size: no_db::size::mb(16),
-//     max_wal_buffer_size: no_db::size::mb(2),
-//     checkpoint_interval: Duration::from_secs(10),
-//     max_cache_size: no_db::size::mb(512),
-//     base_dir: "./.local",
-//   })?;
-
-//   let a = Arc::new(engine);
-
-//   let t = no_db::ThreadPool::<no_db::Result<()>>::new(
-//     1000,
-//     1024 * 1024,
-//     "sdfsdf",
-//     None,
-//   );
-
-//   let s = std::time::SystemTime::now();
-//   let total = Arc::new(std::sync::Mutex::new(0f64));
-//   let c = 1000;
-//   for i in 0..c {
-//     let engine = a.clone();
-//     let ttt = total.clone();
-//     t.schedule(move || {
-//       let start = std::time::SystemTime::now();
-
-//       let mut cursor = engine.new_transaction()?;
-//       let tt = T { i };
-//       cursor.insert(format!("{:0>8}", i), tt)?;
-//       *ttt.lock().unwrap() += std::time::SystemTime::now()
-//         .duration_since(start)
-//         .unwrap()
-//         .as_millis() as f64;
-//       Ok(())
-//     });
-//   }
-//   drop(t);
-//   let end = std::time::SystemTime::now()
-//     .duration_since(s)
-//     .unwrap()
-//     .as_millis();
-//   drop(a);
-//   println!(
-//     "{} ms sldkfjlksdjflkjslkdjflks",
-//     *total.lock().unwrap() / (c as f64)
-//   );
-//   println!("{}", (end as f64) / 1000f64);
-
-//   // let mut cursor = engine.new_transaction()?;
-//   // for (i, t) in cursor.scan::<T>(format!(""))?.enumerate() {
-//   //   println!("{:?} {}", t, i);
-//   // }
-
-//   Ok(())
-// }
 
 #[derive(Debug)]
 struct T {
