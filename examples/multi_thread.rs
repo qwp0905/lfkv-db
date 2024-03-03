@@ -22,9 +22,15 @@ fn main() {
     .unwrap(),
   );
 
+  let key = b"sdfsdfs".to_vec();
+
   let cursor = engine.new_transaction().unwrap();
-  dbg!(cursor.insert(b"sdfsdfs".to_vec(), T { i: 1 })).unwrap();
+  dbg!(cursor.insert(key.clone(), T { i: 1 })).unwrap();
   dbg!(cursor.commit()).unwrap();
+
+  let cursor = engine.new_transaction().unwrap();
+  let t: T = cursor.get(key.as_ref()).unwrap();
+  println!("{:?}", t);
 }
 // fn main() -> no_db::Result<()> {
 //   let engine = no_db::Engine::bootstrap(no_db::EngineConfig {
