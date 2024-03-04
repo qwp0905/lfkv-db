@@ -123,13 +123,13 @@ where
           let e = i.as_mut();
           self.entries.move_back(e);
           let bucket = e.as_mut().as_mut();
-          return Some(replace(&mut bucket.value, v));
+          Some(replace(&mut bucket.value, v))
         }
         Err(slot) => {
           let pointer = DoubleLinkedListElement::new_ptr(Bucket::new(k, v));
           self.raw.insert_in_slot(h, slot, pointer.to_owned());
           self.entries.add(pointer);
-          return None;
+          None
         }
       }
     }
@@ -142,11 +142,11 @@ where
   {
     let h = hash(k, &self.hasher);
     let eq = equivalent(k);
-    return self.raw.remove_entry(h, eq).map(|ptr| {
+    self.raw.remove_entry(h, eq).map(|ptr| {
       self.entries.remove(ptr);
       let bucket = unsafe { Box::from_raw(ptr.as_ptr()) }.element;
-      return bucket.value;
-    });
+      bucket.value
+    })
   }
 
   pub fn len(&self) -> usize {
@@ -160,7 +160,7 @@ where
       return self.raw.remove_entry(dh, deq).map(|ptr| {
         self.entries.remove(ptr);
         let bucket = unsafe { Box::from_raw(ptr.as_ptr()) }.element;
-        return (bucket.key, bucket.value);
+        (bucket.key, bucket.value)
       });
     };
 
@@ -317,7 +317,7 @@ where
     let pointer = DoubleLinkedListElement::new_ptr(Bucket::new(k, v));
     let b = unsafe { self.inner.raw.insert_in_slot(h, slot, pointer.to_owned()) };
     self.inner.entries.add(pointer);
-    return unsafe { b.as_mut().as_mut() }.as_mut().as_mut();
+    unsafe { b.as_mut().as_mut() }.as_mut().as_mut()
   }
 }
 

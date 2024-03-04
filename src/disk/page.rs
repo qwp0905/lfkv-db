@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign};
+use std::ops::{Add, AddAssign, Index, IndexMut};
 
 use crate::utils::size;
 
@@ -27,7 +27,7 @@ impl<const T: usize> Page<T> {
 
   fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.bytes.len());
-    self.bytes[start..end].as_mut()
+    self.bytes.index_mut(start..end)
   }
 
   pub fn copy(&self) -> Self {
@@ -83,7 +83,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
   fn from(value: Vec<u8>) -> Self {
     let mut page = Self::new();
     let len = value.len().min(T);
-    page.range_mut(0, len).copy_from_slice(&value[0..len]);
+    page.range_mut(0, len).copy_from_slice(&value.index(0..len));
     page
   }
 }
@@ -123,9 +123,8 @@ impl<'a, const T: usize> PageScanner<'a, T> {
       return Err(Error::EOF);
     }
 
-    let b = self.inner[self.offset..end].as_ref();
     self.offset = end;
-    Ok(b)
+    Ok(self.inner.index(self.offset..end).as_ref())
   }
 
   pub fn read_usize(&mut self) -> Result<usize> {
