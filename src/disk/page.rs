@@ -152,7 +152,10 @@ impl<'a, const T: usize> PageWriter<'a, T> {
     if end.ge(&T) {
       return Err(Error::EOF);
     };
-    self.inner[self.offset..end].copy_from_slice(&bytes);
+    self
+      .inner
+      .index_mut(self.offset..end)
+      .copy_from_slice(&bytes);
     self.offset = end;
     Ok(())
   }
