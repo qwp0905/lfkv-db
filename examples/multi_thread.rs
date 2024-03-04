@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use lfkv_db::{size, Engine, EngineConfig};
 
-// use std::{sync::Arc, time::Duration};
 fn main() {
   let engine = Arc::new(
     Engine::bootstrap(EngineConfig {
