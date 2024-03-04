@@ -124,7 +124,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     }
 
     self.offset = end;
-    Ok(self.inner.index(self.offset..end).as_ref())
+    Ok(self.inner.index(self.offset..end))
   }
 
   pub fn read_usize(&mut self) -> Result<usize> {
