@@ -123,8 +123,9 @@ impl<'a, const T: usize> PageScanner<'a, T> {
       return Err(Error::EOF);
     }
 
+    let b = self.inner.index(self.offset..end);
     self.offset = end;
-    Ok(self.inner.index(self.offset..end))
+    Ok(b)
   }
 
   pub fn read_usize(&mut self) -> Result<usize> {
