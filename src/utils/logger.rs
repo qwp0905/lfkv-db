@@ -45,8 +45,25 @@ fn fmt(level: Level, message: String) -> String {
   .to_string()
 }
 
+fn format<T>(level: Level, message: T) -> String
+where
+  T: ToString,
+{
+  json!({
+    "level": match level {
+      Level::Info => "info",
+      Level::Error => "error",
+      Level::Warn => "warn",
+      Level::Debug => "debug",
+    },
+    "message":message.to_string(),
+    "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+  })
+  .to_string()
+}
+
 pub struct Logger {
-  channel: StoppableChannel<(Level, String)>,
+  channel: StoppableChannel<String>,
 }
 impl Logger {
   pub fn new() -> Self {
@@ -58,6 +75,6 @@ impl Logger {
   where
     T: ToString,
   {
-    self.channel.send((Level::Info, message.to_string()))
+    self.channel.send(format(Level::Info, message))
   }
 }
