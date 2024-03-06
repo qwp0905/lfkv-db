@@ -45,6 +45,7 @@ impl Cursor {
       self
         .writer
         .insert(root, CursorEntry::Leaf(LeafNode::empty()))?;
+      self.freelist.fetch(root + 1);
     };
     Ok(())
   }
@@ -168,7 +169,7 @@ impl Cursor {
         let pi = self.freelist.acquire();
         self.writer.insert(pi, value)?;
         let lk = node.add(key, pi);
-        if node.len() <= MAX_NODE_LEN {
+        if node.len().le(&MAX_NODE_LEN) {
           self.writer.insert(current, node)?;
           return Ok(Err(lk));
         }

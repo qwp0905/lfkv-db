@@ -61,11 +61,13 @@ impl Engine {
       batch_delay: config.disk_batch_delay,
       batch_size: config.disk_batch_size,
     })?);
+    logger::info(format!("disk created"));
 
     let freelist = Arc::new(FreeList::new(
       config.defragmentation_interval,
       disk.clone(),
     )?);
+    logger::info(format!("freelist created"));
 
     let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
       fsync_delay: config.undo_batch_delay,
@@ -74,10 +76,12 @@ impl Engine {
       max_file_size: config.undo_file_size,
       path: config.base_path.as_ref().join(UNDO_PATH),
     })?);
+    logger::info(format!("undo log created"));
 
     let (bp, flush_c, commit_c) =
       BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3));
     let buffer_pool = Arc::new(bp);
+    logger::info(format!("buffer pool created"));
 
     let wal = Arc::new(WriteAheadLog::open(
       WriteAheadLogConfig {
@@ -93,6 +97,7 @@ impl Engine {
       flush_c,
       buffer_pool.clone(),
     )?);
+    logger::info(format!("wal created"));
 
     let engine = Self {
       wal,

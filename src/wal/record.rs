@@ -46,6 +46,7 @@ impl Operation {
   }
 }
 
+#[derive(Debug)]
 pub struct LogRecord {
   pub index: usize,
   pub transaction_id: usize,
@@ -140,6 +141,7 @@ impl LogRecord {
   }
 }
 
+#[derive(Debug)]
 pub struct LogEntry {
   pub records: Vec<LogRecord>,
 }

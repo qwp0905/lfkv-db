@@ -32,12 +32,17 @@ impl<const N: usize> FreeList<N> {
     };
     Ok(f.start_defragmentation(rx))
   }
+
   pub fn acquire(&self) -> usize {
     if let Some(i) = self.list.l().pop_first() {
       return i;
     }
 
     self.last_index.fetch_add(1, Ordering::SeqCst)
+  }
+
+  pub fn fetch(&self, i: usize) {
+    self.last_index.store(i, Ordering::SeqCst)
   }
 
   pub fn insert(&self, i: usize) {

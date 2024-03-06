@@ -15,6 +15,7 @@ use super::{DataBlock, LRUCache};
 
 const UNDO_PAGE_SIZE: usize = PAGE_SIZE + 32;
 
+#[derive(Debug)]
 pub struct UndoLog {
   index: usize,
   commit_index: usize,

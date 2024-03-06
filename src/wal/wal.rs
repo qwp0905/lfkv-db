@@ -10,7 +10,7 @@ use std::{
 use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
-  size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
+  logger, size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -255,6 +255,9 @@ impl WriteAheadLog {
     self.checkpoint_c.send(());
     *self.last_index.wl() = last_index;
 
+    logger::info(format!(
+      "wal replay last tx {last_transaction}, cursor {cursor}"
+    ));
     Ok((last_transaction, cursor))
   }
 }
