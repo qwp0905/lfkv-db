@@ -20,8 +20,8 @@ impl Serializable for CursorEntry {
   fn deserialize(value: &Page) -> Result<Self, Error> {
     let mut sc = value.scanner();
     match sc.read()? {
-      0 => Ok(Self::Leaf(value.deserialize()?)),
-      1 => Ok(Self::Internal(value.deserialize()?)),
+      1 => Ok(Self::Leaf(value.deserialize()?)),
+      2 => Ok(Self::Internal(value.deserialize()?)),
       _ => Err(Error::Invalid),
     }
   }
@@ -81,7 +81,7 @@ impl Serializable for InternalNode {
   fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
-    wt.write(&[1])?;
+    wt.write(&[2])?;
     wt.write(&[self.keys.len() as u8])?;
     for k in &self.keys {
       wt.write(&[k.len() as u8])?;
@@ -168,7 +168,7 @@ impl Serializable for LeafNode {
   fn serialize(&self) -> Result<Page, Error> {
     let mut p = Page::new();
     let mut wt = p.writer();
-    wt.write(&[0])?;
+    wt.write(&[1])?;
     wt.write(&[self.keys.len() as u8])?;
     for (k, i) in &self.keys {
       wt.write(&[k.len() as u8])?;

@@ -1,6 +1,8 @@
 use chrono::Local;
 use serde_json::json;
 
+use crate::StoppableChannel;
+
 #[allow(unused)]
 enum Level {
   Info,
@@ -41,4 +43,21 @@ fn fmt(level: Level, message: String) -> String {
     "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
   })
   .to_string()
+}
+
+pub struct Logger {
+  channel: StoppableChannel<(Level, String)>,
+}
+impl Logger {
+  pub fn new() -> Self {
+    let (channel, rx) = StoppableChannel::new();
+    Self { channel }
+  }
+
+  pub fn info<T>(&self, message: T)
+  where
+    T: ToString,
+  {
+    self.channel.send((Level::Info, message.to_string()))
+  }
 }
