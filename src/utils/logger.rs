@@ -1,7 +1,9 @@
+use std::{io::Write, path::PathBuf};
+
 use chrono::Local;
 use serde_json::json;
 
-use crate::StoppableChannel;
+use crate::{size, StoppableChannel};
 
 #[allow(unused)]
 enum Level {
@@ -62,13 +64,27 @@ where
   .to_string()
 }
 
+pub struct LoggerConfig {
+  pub path: PathBuf,
+}
+
 pub struct Logger {
   channel: StoppableChannel<String>,
 }
 impl Logger {
-  pub fn new() -> Self {
+  pub fn new(config: LoggerConfig) -> std::io::Result<Self> {
     let (channel, rx) = StoppableChannel::new();
-    Self { channel }
+    let mut file = std::fs::OpenOptions::new()
+      .create(true)
+      .read(true)
+      .write(true)
+      .open(config.path)?;
+
+    rx.to_new("logger", size::mb(2), move |msg| {
+      writeln!(file, "{}", msg).ok();
+    });
+
+    Ok(Self { channel })
   }
 
   pub fn info<T>(&self, message: T)
