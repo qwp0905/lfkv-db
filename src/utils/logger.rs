@@ -3,7 +3,7 @@ use std::{io::Write, path::PathBuf};
 use chrono::Local;
 use serde_json::json;
 
-use crate::{size, StoppableChannel};
+use crate::{size, StoppableChannel, ThreadManager};
 
 #[allow(unused)]
 enum Level {
@@ -72,8 +72,8 @@ pub struct Logger {
   channel: StoppableChannel<String>,
 }
 impl Logger {
-  pub fn new(config: LoggerConfig) -> std::io::Result<Self> {
-    let (channel, rx) = StoppableChannel::new();
+  pub fn new(config: LoggerConfig, thread: &ThreadManager) -> std::io::Result<Self> {
+    let (channel, rx) = thread.generate();
     let mut file = std::fs::OpenOptions::new()
       .create(true)
       .read(true)

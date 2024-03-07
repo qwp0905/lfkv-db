@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvError, RecvTimeoutError, Sender};
 
-use crate::{logger, AsTimer, UnwrappedReceiver, UnwrappedSender};
+use crate::{logger, AsTimer, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl<T, R> StoppableContext<T, R> {
 pub struct StoppableChannel<T, R = ()>(Sender<StoppableContext<T, R>>);
 #[allow(unused)]
 impl<T, R> StoppableChannel<T, R> {
-  pub fn new(manager: ThreadManager) -> (Self, ContextReceiver<T, R>) {
+  fn new(manager: Arc<Spawner>) -> (Self, ContextReceiver<T, R>) {
     let (tx, rx) = unbounded();
     (Self(tx), ContextReceiver::new(rx, manager))
   }
@@ -64,12 +64,12 @@ impl<T, R> Clone for StoppableChannel<T, R> {
 #[allow(unused)]
 pub struct ContextReceiver<T, R = ()> {
   inner: Receiver<StoppableContext<T, R>>,
-  manager: ThreadManager,
+  spawner: Arc<Spawner>,
 }
 #[allow(unused)]
 impl<T, R> ContextReceiver<T, R> {
-  fn new(inner: Receiver<StoppableContext<T, R>>, manager: ThreadManager) -> Self {
-    Self { inner, manager }
+  fn new(inner: Receiver<StoppableContext<T, R>>, spawner: Arc<Spawner>) -> Self {
+    Self { inner, spawner }
   }
 
   pub fn recv_new(&self) -> Result<T, RecvError> {
@@ -141,7 +141,7 @@ impl<T, R> ContextReceiver<T, R> {
 }
 impl<T, R> Clone for ContextReceiver<T, R> {
   fn clone(&self) -> Self {
-    Self::new(self.inner.clone(), self.manager.clone())
+    Self::new(self.inner.clone(), self.spawner.clone())
   }
 }
 impl<T, R> ContextReceiver<T, R>
@@ -149,12 +149,13 @@ where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn to_new<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
+  pub fn to_new<F>(self, name: &str, stack_size: usize, mut f: F)
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    spawn(name, stack_size, move || {
-      while let Ok(v) = self.recv_new() {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
+      while let Ok(v) = rx.recv_new() {
         f.call(v);
       }
     })
@@ -166,23 +167,24 @@ where
     stack_size: usize,
     timeout: Duration,
     mut f: F,
-  ) -> JoinHandle<()>
-  where
+  ) where
     F: FnMut(Option<T>) -> R + Send + 'static,
   {
-    spawn(name, stack_size, move || {
-      while let Ok(v) = self.recv_new_or_timeout(timeout) {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
+      while let Ok(v) = rx.recv_new_or_timeout(timeout) {
         f.call(v);
       }
     })
   }
 
-  pub fn to_done<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
+  pub fn to_done<F>(self, name: &str, stack_size: usize, mut f: F)
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    spawn(name, stack_size, move || {
-      while let Ok((v, done)) = self.recv_done() {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
+      while let Ok((v, done)) = rx.recv_done() {
         let r = f.call(v);
         done.must_send(r);
       }
@@ -195,30 +197,32 @@ where
     stack_size: usize,
     timeout: Duration,
     mut f: F,
-  ) -> JoinHandle<()>
-  where
+  ) where
     F: FnMut(Option<(T, Sender<R>)>) -> R + Send + 'static,
   {
-    spawn(name, stack_size, move || {
-      while let Ok(v) = self.recv_done_or_timeout(timeout) {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
+      while let Ok(v) = rx.recv_done_or_timeout(timeout) {
         f.call(v);
       }
     })
   }
 
-  pub fn to_thread<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
+  pub fn to_thread<F>(self, name: &str, stack_size: usize, mut f: F)
   where
     F: FnMut(ContextReceiver<T, R>) + Send + 'static,
   {
-    spawn(name, stack_size, move || f.call(self))
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || f.call(rx))
   }
 
-  pub fn to_all<F>(self, name: &str, stack_size: usize, mut f: F) -> JoinHandle<()>
+  pub fn to_all<F>(self, name: &str, stack_size: usize, mut f: F)
   where
     F: FnMut(T) -> R + Send + 'static,
   {
-    spawn(name, stack_size, move || {
-      while let Ok((v, done)) = self.recv_all() {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
+      while let Ok((v, done)) = rx.recv_all() {
         let r = f.call(v);
         done.map(|t| t.must_send(r));
       }
@@ -231,21 +235,21 @@ where
     stack_size: usize,
     timeout: Duration,
     mut f: F,
-  ) -> JoinHandle<()>
-  where
+  ) where
     F: FnMut(&mut D, Option<(T, Sender<R>)>) -> bool + Send + 'static,
     D: Default,
   {
-    spawn(name, stack_size, move || {
+    let rx = self.clone();
+    self.spawner.spawn(name, stack_size, move || {
       let mut timer = timeout.as_timer();
       let mut d = Default::default();
-      while let Ok(v) = self.recv_done_or_timeout(timer.get_remain()) {
+      while let Ok(v) = rx.recv_done_or_timeout(timer.get_remain()) {
         match f(&mut d, v) {
           true => timer.reset(),
           false => timer.check(),
         }
       }
-    })
+    });
   }
 }
 
@@ -258,79 +262,54 @@ impl<T, R, F: FnMut(T) -> R> Callable<T, R> for F {
   }
 }
 
-fn spawn<F, R>(name: &str, size: usize, f: F) -> JoinHandle<R>
-where
-  R: Send + 'static,
-  F: FnOnce() -> R + Send + 'static,
-{
-  let s = name.to_string();
-  Builder::new()
-    .name(s.clone())
-    .stack_size(size)
-    .spawn(move || {
-      let r = f();
-      logger::info(format!("{} thread done", s));
-      r
-    })
-    .unwrap()
-}
-
-// pub struct ThreadManager {
-//   back: Option<JoinHandle<()>>,
-//   channel: StoppableChannel<Option<JoinHandle<()>>>,
-// }
-// impl ThreadManager {
-//   pub fn new() -> Self {
-//     let (channel, rx) = StoppableChannel::new();
-//     let mut v = vec![];
-//     let back = rx.to_all("threads", 10, move |t| match t {
-//       Some(t) => v.push(t),
-//       None => v.drain(..).for_each(|th: JoinHandle<()>| {
-//         if th.is_finished() {
-//           return;
-//         }
-//         if let Err(err) = th.join() {
-//           logger::error(format!("{:?}", err))
-//         }
-//       }),
-//     });
-
-//     Self {
-//       back: Some(back),
-//       channel,
-//     }
-//   }
-// }
-// impl Drop for ThreadManager {
-//   fn drop(&mut self) {
-//     self.channel.send_await(None);
-//     if let Some(t) = self.back.take() {
-//       if t.is_finished() {
-//         return;
-//       }
-
-//       self.channel.terminate();
-//       if let Err(err) = t.join() {
-//         logger::error(format!("{:?}", err))
-//       }
-//     }
-//   }
-// }
-
 pub struct ThreadManager {
-  threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
+  spawner: Arc<Spawner>,
 }
 impl ThreadManager {
-  pub fn generate<T, R>(&self) -> (StoppableChannel<T, R>, ContextReceiver<T, R>) {
-    StoppableChannel::new(self.clone())
+  pub fn new() -> Self {
+    Self {
+      spawner: Arc::new(Spawner::new()),
+    }
   }
 
-  pub fn push(&self) {}
+  pub fn generate<T, R>(&self) -> (StoppableChannel<T, R>, ContextReceiver<T, R>) {
+    StoppableChannel::new(self.spawner.clone())
+  }
+
+  pub fn flush(&self) {
+    self.spawner.flush()
+  }
 }
-impl Clone for ThreadManager {
-  fn clone(&self) -> Self {
-    Self {
-      threads: self.threads,
+
+struct Spawner(Mutex<Vec<JoinHandle<()>>>);
+impl Spawner {
+  fn new() -> Self {
+    Self(Default::default())
+  }
+
+  fn spawn<F>(&self, name: &str, size: usize, f: F)
+  where
+    F: FnOnce() + Send + 'static,
+  {
+    let s = name.to_string();
+    let t = Builder::new()
+      .name(s.clone())
+      .stack_size(size)
+      .spawn(move || {
+        let r = f();
+        logger::info(format!("{} thread done", s));
+        r
+      })
+      .unwrap();
+
+    self.0.l().push(t)
+  }
+
+  fn flush(&self) {
+    for t in self.0.l().drain(..) {
+      if let Err(err) = t.join() {
+        eprintln!("{err:?}");
+      };
     }
   }
 }

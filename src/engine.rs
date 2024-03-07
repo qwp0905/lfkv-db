@@ -16,7 +16,7 @@ use crate::{
   disk::{Finder, FinderConfig, FreeList},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
-  Cursor, Error, Result,
+  Cursor, Error, Result, ThreadManager,
 };
 
 pub struct EngineConfig<T>
@@ -46,6 +46,7 @@ pub struct Engine {
   buffer_pool: Arc<BufferPool>,
   freelist: Arc<FreeList<BLOCK_SIZE>>,
   available: AtomicBool,
+  manager: ThreadManager,
 }
 impl Engine {
   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
@@ -56,30 +57,39 @@ impl Engine {
     logger::info(format!("{} system memory", mem_size));
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
-    let disk = Arc::new(Finder::open(FinderConfig {
-      path: config.base_path.as_ref().join(DISK_PATH),
-      batch_delay: config.disk_batch_delay,
-      batch_size: config.disk_batch_size,
-    })?);
+    let manager = ThreadManager::new();
+
+    let disk = Arc::new(Finder::open(
+      FinderConfig {
+        path: config.base_path.as_ref().join(DISK_PATH),
+        batch_delay: config.disk_batch_delay,
+        batch_size: config.disk_batch_size,
+      },
+      &manager,
+    )?);
     logger::info(format!("disk created"));
 
     let freelist = Arc::new(FreeList::new(
       config.defragmentation_interval,
       disk.clone(),
+      &manager,
     )?);
     logger::info(format!("freelist created"));
 
-    let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
-      fsync_delay: config.undo_batch_delay,
-      fsync_count: config.undo_batch_size,
-      max_cache_size: mem_size.div_ceil(10),
-      max_file_size: config.undo_file_size,
-      path: config.base_path.as_ref().join(UNDO_PATH),
-    })?);
+    let rollback = Arc::new(RollbackStorage::open(
+      RollbackStorageConfig {
+        fsync_delay: config.undo_batch_delay,
+        fsync_count: config.undo_batch_size,
+        max_cache_size: mem_size.div_ceil(10),
+        max_file_size: config.undo_file_size,
+        path: config.base_path.as_ref().join(UNDO_PATH),
+      },
+      &manager,
+    )?);
     logger::info(format!("undo log created"));
 
     let (bp, flush_c, commit_c) =
-      BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3));
+      BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3), &manager);
     let buffer_pool = Arc::new(bp);
     logger::info(format!("buffer pool created"));
 
@@ -95,7 +105,8 @@ impl Engine {
       },
       commit_c,
       flush_c,
-      buffer_pool.clone(),
+      &buffer_pool,
+      &manager,
     )?);
     logger::info(format!("wal created"));
 
@@ -104,6 +115,7 @@ impl Engine {
       buffer_pool,
       freelist,
       available: AtomicBool::new(true),
+      manager,
     };
 
     let cursor = engine.new_transaction()?;
@@ -133,5 +145,6 @@ impl Drop for Engine {
     self.wal.before_shutdown();
     self.buffer_pool.before_shutdown();
     self.freelist.before_shutdown();
+    self.manager.flush();
   }
 }

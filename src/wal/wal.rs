@@ -11,6 +11,7 @@ use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
   logger, size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
+  ThreadManager,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -40,7 +41,8 @@ impl WriteAheadLog {
     mut config: WriteAheadLogConfig,
     commit_c: StoppableChannel<CommitInfo, Result>,
     flush_c: StoppableChannel<(), Option<usize>>,
-    buffer_pool: Arc<BufferPool>,
+    buffer_pool: &Arc<BufferPool>,
+    thread: &ThreadManager,
   ) -> Result<Self> {
     config.max_file_size.div_assign(WAL_PAGE_SIZE);
 
@@ -49,11 +51,11 @@ impl WriteAheadLog {
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
     };
-    let disk = Arc::new(Finder::open(disk_config)?);
+    let disk = Arc::new(Finder::open(disk_config, thread)?);
     let buffer = Arc::new(LogBuffer::new());
 
-    let (io_c, io_rx) = StoppableChannel::new();
-    let (checkpoint_c, checkpoint_rx) = StoppableChannel::new();
+    let (io_c, io_rx) = thread.generate();
+    let (checkpoint_c, checkpoint_rx) = thread.generate();
 
     let core = Self::new(
       buffer,
@@ -184,7 +186,7 @@ impl WriteAheadLog {
     self.disk.close();
   }
 
-  fn replay(&self, buffer_pool: Arc<BufferPool>) -> Result<(usize, usize)> {
+  fn replay(&self, buffer_pool: &Arc<BufferPool>) -> Result<(usize, usize)> {
     let mut cursor = 0;
     let mut records: BTreeMap<usize, LogRecord> = BTreeMap::new();
 

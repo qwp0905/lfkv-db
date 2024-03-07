@@ -9,7 +9,8 @@ use std::{
 use crossbeam::channel::Sender;
 
 use crate::{
-  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, UnwrappedSender,
+  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, ThreadManager,
+  UnwrappedSender,
 };
 
 enum Command<const N: usize> {
@@ -62,15 +63,25 @@ pub struct Finder<const N: usize> {
   config: FinderConfig,
 }
 impl<const N: usize> Finder<N> {
-  pub fn open(config: FinderConfig) -> Result<Self> {
-    let (io_c, io_rx) = StoppableChannel::new();
-    let (batch_c, batch_rx) = StoppableChannel::new();
+  pub fn open(config: FinderConfig, thread: &ThreadManager) -> Result<Self> {
+    let (io_c, io_rx) = thread.generate();
+    let (batch_c, batch_rx) = thread.generate();
     let finder = Self {
       io_c,
       config,
       batch_c,
     };
     finder.start_batch(batch_rx).start_io(io_rx)
+  }
+
+  fn name(&self) -> String {
+    self
+      .config
+      .path
+      .file_name()
+      .unwrap_or(self.config.path.as_os_str())
+      .to_string_lossy()
+      .to_string()
   }
 
   fn start_io(
@@ -83,7 +94,7 @@ impl<const N: usize> Finder<N> {
       .write(true)
       .open(&self.config.path)
       .map_err(Error::IO)?;
-    let name = format!("{} finder io", self.config.path.to_string_lossy());
+    let name = format!("{} finder io", self.name());
     rx.to_done(&name, N.mul(1000), move |cmd: Command<N>| {
       cmd.exec(&mut file)
     });
@@ -94,8 +105,9 @@ impl<const N: usize> Finder<N> {
     let delay = self.config.batch_delay;
     let count = self.config.batch_size;
     let c = self.io_c.clone();
+    let name = format!("{} finder batch", self.name());
     rx.with_timer(
-      "finder batch",
+      &name,
       N.mul(2).mul(count),
       delay,
       move |v: &mut Vec<Sender<Result>>,

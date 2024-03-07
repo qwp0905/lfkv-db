@@ -8,7 +8,7 @@ use std::{
   time::Duration,
 };
 
-use crate::{ContextReceiver, Result, ShortenedMutex, StoppableChannel};
+use crate::{ContextReceiver, Result, ShortenedMutex, StoppableChannel, ThreadManager};
 
 use super::Finder;
 
@@ -20,8 +20,12 @@ pub struct FreeList<const N: usize> {
   last_index: AtomicUsize,
 }
 impl<const N: usize> FreeList<N> {
-  pub fn new(interval: Duration, file: Arc<Finder<N>>) -> Result<Self> {
-    let (chan, rx) = StoppableChannel::new();
+  pub fn new(
+    interval: Duration,
+    file: Arc<Finder<N>>,
+    thread: &ThreadManager,
+  ) -> Result<Self> {
+    let (chan, rx) = thread.generate();
     let last_index = file.len()?;
     let f = Self {
       list: Default::default(),

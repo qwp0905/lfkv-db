@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
   disk::Finder, wal::CommitInfo, ContextReceiver, Error, Page, Result, ShortenedMutex,
-  StoppableChannel,
+  StoppableChannel, ThreadManager,
 };
 
 use super::{CacheStorage, DataBlock, RollbackStorage, BLOCK_SIZE};
@@ -23,14 +23,15 @@ impl BufferPool {
     rollback: Arc<RollbackStorage>,
     disk: Arc<Finder<BLOCK_SIZE>>,
     max_cache_size: usize,
+    thread: &ThreadManager,
   ) -> (
     Self,
     StoppableChannel<(), Option<usize>>,
     StoppableChannel<CommitInfo, Result>,
   ) {
-    let (write_c, write_rx) = StoppableChannel::new();
-    let (flush_c, flush_rx) = StoppableChannel::new();
-    let (commit_c, commit_rx) = StoppableChannel::new();
+    let (write_c, write_rx) = thread.generate();
+    let (flush_c, flush_rx) = thread.generate();
+    let (commit_c, commit_rx) = thread.generate();
     let bp = Self {
       cache: Arc::new(CacheStorage::new(
         max_cache_size.div_ceil(BLOCK_SIZE),
