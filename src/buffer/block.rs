@@ -45,7 +45,7 @@ impl Serializable<Error, BLOCK_SIZE> for DataBlock {
     wt.write(self.commit_index.to_be_bytes().as_ref())?;
     wt.write(self.tx_id.to_be_bytes().as_ref())?;
     if let Some(i) = self.undo_index {
-      wt.write(&[1])?;
+      wt.write(&[1u8])?;
       wt.write(i.to_be_bytes().as_ref())?;
     }
     wt.write(self.data.as_ref())?;

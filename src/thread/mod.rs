@@ -1,4 +1,5 @@
 use std::{
+  sync::{Arc, Mutex},
   thread::{Builder, JoinHandle},
   time::Duration,
 };
@@ -31,9 +32,9 @@ impl<T, R> StoppableContext<T, R> {
 pub struct StoppableChannel<T, R = ()>(Sender<StoppableContext<T, R>>);
 #[allow(unused)]
 impl<T, R> StoppableChannel<T, R> {
-  pub fn new() -> (Self, ContextReceiver<T, R>) {
+  pub fn new(manager: ThreadManager) -> (Self, ContextReceiver<T, R>) {
     let (tx, rx) = unbounded();
-    (Self(tx), ContextReceiver::new(rx))
+    (Self(tx), ContextReceiver::new(rx, manager))
   }
 
   pub fn terminate(&self) {
@@ -61,11 +62,14 @@ impl<T, R> Clone for StoppableChannel<T, R> {
 }
 
 #[allow(unused)]
-pub struct ContextReceiver<T, R = ()>(Receiver<StoppableContext<T, R>>);
+pub struct ContextReceiver<T, R = ()> {
+  inner: Receiver<StoppableContext<T, R>>,
+  manager: ThreadManager,
+}
 #[allow(unused)]
 impl<T, R> ContextReceiver<T, R> {
-  fn new(recv: Receiver<StoppableContext<T, R>>) -> Self {
-    Self(recv)
+  fn new(inner: Receiver<StoppableContext<T, R>>, manager: ThreadManager) -> Self {
+    Self { inner, manager }
   }
 
   pub fn recv_new(&self) -> Result<T, RecvError> {
@@ -76,7 +80,7 @@ impl<T, R> ContextReceiver<T, R> {
   }
 
   pub fn recv_new_or_timeout(&self, timeout: Duration) -> Result<Option<T>, RecvError> {
-    match self.0.recv_timeout(timeout) {
+    match self.inner.recv_timeout(timeout) {
       Ok(c) => {
         if let StoppableContext::New(v) = c {
           return Ok(Some(v));
@@ -92,7 +96,7 @@ impl<T, R> ContextReceiver<T, R> {
     &self,
     timeout: Duration,
   ) -> Result<Option<(T, Sender<R>)>, RecvError> {
-    match self.0.recv_timeout(timeout) {
+    match self.inner.recv_timeout(timeout) {
       Ok(c) => {
         if let StoppableContext::WithDone(v) = c {
           return Ok(Some(v));
@@ -112,11 +116,11 @@ impl<T, R> ContextReceiver<T, R> {
   }
 
   pub fn recv(&self) -> Result<StoppableContext<T, R>, RecvError> {
-    self.0.recv()
+    self.inner.recv()
   }
 
   pub fn recv_all(&self) -> Result<(T, Option<Sender<R>>), RecvError> {
-    match self.0.recv()? {
+    match self.inner.recv()? {
       StoppableContext::Term => Err(RecvError),
       StoppableContext::WithDone((r, t)) => Ok((r, Some(t))),
       StoppableContext::New(r) => Ok((r, None)),
@@ -127,14 +131,17 @@ impl<T, R> ContextReceiver<T, R> {
     &self,
     timeout: Option<Duration>,
   ) -> Result<StoppableContext<T, R>, RecvTimeoutError> {
-    timeout
-      .map(|to| self.0.recv_timeout(to))
-      .unwrap_or(self.0.recv().map_err(|_| RecvTimeoutError::Disconnected))
+    timeout.map(|to| self.inner.recv_timeout(to)).unwrap_or(
+      self
+        .inner
+        .recv()
+        .map_err(|_| RecvTimeoutError::Disconnected),
+    )
   }
 }
 impl<T, R> Clone for ContextReceiver<T, R> {
   fn clone(&self) -> Self {
-    Self(self.0.clone())
+    Self::new(self.inner.clone(), self.manager.clone())
   }
 }
 impl<T, R> ContextReceiver<T, R>
@@ -309,3 +316,21 @@ where
 //     }
 //   }
 // }
+
+pub struct ThreadManager {
+  threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
+}
+impl ThreadManager {
+  pub fn generate<T, R>(&self) -> (StoppableChannel<T, R>, ContextReceiver<T, R>) {
+    StoppableChannel::new(self.clone())
+  }
+
+  pub fn push(&self) {}
+}
+impl Clone for ThreadManager {
+  fn clone(&self) -> Self {
+    Self {
+      threads: self.threads,
+    }
+  }
+}
