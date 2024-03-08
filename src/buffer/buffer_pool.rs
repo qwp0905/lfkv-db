@@ -56,8 +56,8 @@ impl BufferPool {
     let disk = self.disk.clone();
     rx.to_done(
       "bufferpool write",
-      BLOCK_SIZE.mul(100),
-      move |(index, page)| disk.write(index, page),
+      BLOCK_SIZE.mul(1000),
+      move |(index, page)| disk.batch_write(index, page),
     );
     self
   }

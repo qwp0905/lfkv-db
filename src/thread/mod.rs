@@ -308,7 +308,7 @@ impl Spawner {
   fn flush(&self) {
     for t in self.0.l().drain(..) {
       if let Err(err) = t.join() {
-        eprintln!("{err:?}");
+        eprintln!("{:?}", err.downcast::<String>());
       };
     }
   }
