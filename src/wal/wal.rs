@@ -248,6 +248,7 @@ impl WriteAheadLog {
 
     for (tx_id, log) in inserts.into_values() {
       if committed.contains(&tx_id) {
+        //TODO error occurs in here
         buffer_pool.insert(tx_id, log.page_index, log.data)?;
       } else {
         to_be_rollback.push((tx_id, log.page_index))
