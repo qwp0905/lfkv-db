@@ -98,12 +98,15 @@ where
 
   fn checked_send(&self, v: T) -> Receiver<R> {
     let mut inner = self.inner.l();
-    if let Some((t, tx)) = inner.as_ref() {
+    if let Some((t, tx)) = inner.take() {
       if !t.is_finished() {
         let (done_t, done_r) = unbounded();
         tx.must_send((v, done_t));
+        *inner = Some((t, tx));
         return done_r;
       }
+      drop(tx);
+      t.join().ok();
     }
 
     let func = self.func.clone();
