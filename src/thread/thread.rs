@@ -6,6 +6,8 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
+use crate::{UnwrappedReceiver, UnwrappedSender};
+
 pub enum Job<T, R> {
   NoTimeout(Box<dyn FnMut(T) -> R + Send>),
   WithTimeout(Duration, Box<dyn FnMut(Option<T>) -> R + Send>),
@@ -58,7 +60,15 @@ where
     }
   }
 
-  fn run(&mut self) {
+  fn checked_send(&mut self, v: T) -> Receiver<R> {
+    if let Some((t, tx)) = &self.inner {
+      if !t.is_finished() {
+        let (done_t, done_r) = unbounded();
+        tx.must_send((v, done_t));
+        return done_r;
+      }
+    }
+
     let func = self.func.clone();
     let (tx, rx) = unbounded::<(T, Sender<R>)>();
     let t = std::thread::Builder::new()
@@ -69,7 +79,18 @@ where
         f.run(rx);
       })
       .unwrap();
-    self.inner = Some((t, tx))
+    let (done_t, done_r) = unbounded();
+    tx.must_send((v, done_t));
+    self.inner = Some((t, tx));
+    return done_r;
+  }
+
+  pub fn send(&mut self, v: T) {
+    self.checked_send(v);
+  }
+
+  pub fn send_await(&mut self, v: T) -> R {
+    self.checked_send(v).must_recv()
   }
 
   pub fn close(&mut self) {
