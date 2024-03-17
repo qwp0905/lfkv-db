@@ -3,14 +3,15 @@ use std::{
   io::{self, Read, Seek, SeekFrom, Write},
   ops::Mul,
   path::PathBuf,
+  sync::Arc,
   time::Duration,
 };
 
 use crossbeam::channel::Sender;
 
 use crate::{
-  ContextReceiver, Error, Page, Result, Serializable, StoppableChannel, ThreadManager,
-  UnwrappedSender,
+  BackgroundThread, BackgroundWork, ContextReceiver, Error, Page, Result, Serializable,
+  StoppableChannel, ThreadManager, UnwrappedSender,
 };
 
 enum Command<const N: usize> {
@@ -200,5 +201,64 @@ impl<const N: usize> IndexedFile<N> for File {
       .seek(SeekFrom::Start(i.mul(N) as u64))
       .map_err(Error::IO)?;
     Ok(r as usize)
+  }
+}
+
+pub struct F<const N: usize> {
+  io_c: Arc<BackgroundThread<Command<N>, Result<(Option<Page<N>>, Option<Metadata>)>>>,
+  batch_c: BackgroundThread<(usize, Page<N>), Result>,
+}
+impl<const N: usize> F<N> {
+  pub fn open(config: FinderConfig) -> Result<Self> {
+    let mut file = OpenOptions::new()
+      .create(true)
+      .read(true)
+      .write(true)
+      .open(&config.path)
+      .map_err(Error::IO)?;
+
+    let file_name = config
+      .path
+      .file_name()
+      .unwrap_or(config.path.as_os_str())
+      .to_string_lossy()
+      .to_string();
+
+    let io_name = format!("{} finder io", file_name);
+    let io_c = Arc::new(BackgroundThread::new(
+      &io_name,
+      N.mul(1000),
+      BackgroundWork::no_timeout(move |cmd: Command<N>| cmd.exec(&mut file)),
+    ));
+
+    let cloned_c = io_c.clone();
+    let mut wait = vec![];
+
+    let batch_name = format!("{} finder batch", file_name);
+    let batch_c = BackgroundThread::new(
+      &batch_name,
+      N.mul(2).mul(config.batch_size),
+      BackgroundWork::with_timer(config.batch_delay, move |v| {
+        if let Some(((index, page), done)) = v {
+          if let Err(err) = cloned_c.send_await(Command::Write(index, page)) {
+            done.must_send(Err(err));
+            return false;
+          }
+
+          wait.push(done);
+          if wait.len().lt(&config.batch_size) {
+            return false;
+          }
+        }
+
+        if let Err(_) = cloned_c.send_await(Command::Flush) {
+          return false;
+        }
+        wait.drain(..).for_each(|done| done.must_send(Ok(())));
+        true
+      }),
+    );
+
+    Ok(Self { io_c, batch_c })
   }
 }

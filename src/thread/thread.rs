@@ -6,62 +6,99 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use crate::{UnwrappedReceiver, UnwrappedSender};
+use crate::{AsTimer, Callable, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
 
-pub enum Job<T, R> {
+pub enum BackgroundWork<T, R> {
   NoTimeout(Box<dyn FnMut(T) -> R + Send>),
   WithTimeout(Duration, Box<dyn FnMut(Option<T>) -> R + Send>),
+  WithTimer(
+    Duration,
+    Box<dyn FnMut(Option<(T, Sender<R>)>) -> bool + Send>,
+  ),
 }
-impl<T, R> Job<T, R> {
+impl<T, R> BackgroundWork<T, R> {
+  pub fn no_timeout<F>(f: F) -> Self
+  where
+    F: FnMut(T) -> R + Send + 'static,
+  {
+    BackgroundWork::NoTimeout(Box::new(f))
+  }
+
+  pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
+  where
+    F: FnMut(Option<T>) -> R + Send + 'static,
+  {
+    BackgroundWork::WithTimeout(timeout, Box::new(f))
+  }
+
+  pub fn with_timer<F>(timeout: Duration, f: F) -> Self
+  where
+    F: FnMut(Option<(T, Sender<R>)>) -> bool + Send + 'static,
+  {
+    BackgroundWork::WithTimer(timeout, Box::new(f))
+  }
+
   fn run(&mut self, rx: Receiver<(T, Sender<R>)>) {
     match self {
-      Job::NoTimeout(job) => {
+      BackgroundWork::NoTimeout(job) => {
         while let Ok((v, done)) = rx.recv() {
-          let r = job(v);
+          let r = job.call(v);
           done.send(r).ok();
         }
       }
-      Job::WithTimeout(timeout, job) => loop {
+      BackgroundWork::WithTimeout(timeout, job) => loop {
         match rx.recv_timeout(*timeout) {
           Ok((v, done)) => {
-            let r = job(Some(v));
+            let r = job.call(Some(v));
             done.send(r).ok();
           }
           Err(RecvTimeoutError::Timeout) => {
-            job(None);
+            job.call(None);
           }
           Err(RecvTimeoutError::Disconnected) => break,
         }
       },
+      BackgroundWork::WithTimer(timeout, job) => {
+        let mut timer = timeout.as_timer();
+        loop {
+          let arg = match rx.recv_timeout(timer.get_remain()) {
+            Ok((v, done)) => Some((v, done)),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
+          };
+          match job.call(arg) {
+            true => timer.reset(),
+            false => timer.check(),
+          }
+        }
+      }
     }
   }
 }
 
-pub struct Thread<T, R> {
-  inner: Option<(JoinHandle<()>, Sender<(T, Sender<R>)>)>,
-  func: Arc<Mutex<Job<T, R>>>,
+pub struct BackgroundThread<T, R> {
+  inner: Mutex<Option<(JoinHandle<()>, Sender<(T, Sender<R>)>)>>,
+  func: Arc<Mutex<BackgroundWork<T, R>>>,
   name: String,
   size: usize,
 }
-impl<T, R> Thread<T, R>
+impl<T, R> BackgroundThread<T, R>
 where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new<F>(name: &str, size: usize, f: F) -> Self
-  where
-    F: FnMut(T) -> R + Send + Sync + 'static,
-  {
+  pub fn new(name: &str, size: usize, job: BackgroundWork<T, R>) -> Self {
     Self {
-      inner: None,
-      func: Arc::new(Mutex::new(Job::NoTimeout(Box::new(f)))),
+      inner: Mutex::new(None),
+      func: Arc::new(Mutex::new(job)),
       name: name.to_string(),
       size,
     }
   }
 
-  fn checked_send(&mut self, v: T) -> Receiver<R> {
-    if let Some((t, tx)) = &self.inner {
+  fn checked_send(&self, v: T) -> Receiver<R> {
+    let mut inner = self.inner.l();
+    if let Some((t, tx)) = inner.as_ref() {
       if !t.is_finished() {
         let (done_t, done_r) = unbounded();
         tx.must_send((v, done_t));
@@ -81,20 +118,20 @@ where
       .unwrap();
     let (done_t, done_r) = unbounded();
     tx.must_send((v, done_t));
-    self.inner = Some((t, tx));
+    *inner = Some((t, tx));
     return done_r;
   }
 
-  pub fn send(&mut self, v: T) {
+  pub fn send(&self, v: T) {
     self.checked_send(v);
   }
 
-  pub fn send_await(&mut self, v: T) -> R {
+  pub fn send_await(&self, v: T) -> R {
     self.checked_send(v).must_recv()
   }
 
-  pub fn close(&mut self) {
-    self.inner.take().map(|(t, tx)| {
+  pub fn close(&self) {
+    self.inner.l().take().map(|(t, tx)| {
       if !t.is_finished() {
         drop(tx);
       }
