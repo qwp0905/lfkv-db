@@ -172,7 +172,9 @@ where
       if !t.is_finished() {
         drop(tx);
       }
-      t.join().ok();
+      if let Err(err) = t.join() {
+        logger::error(format!("{:?}", err));
+      };
     });
     logger::info(format!("{} thread done", inner.name))
   }
