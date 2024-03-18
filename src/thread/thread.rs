@@ -15,6 +15,7 @@ pub enum BackgroundWork<T, R> {
     Duration,
     Box<dyn FnMut(Option<(T, Sender<R>)>) -> bool + Send>,
   ),
+  Empty,
 }
 impl<T, R> BackgroundWork<T, R> {
   pub fn no_timeout<F>(f: F) -> Self
@@ -72,12 +73,15 @@ impl<T, R> BackgroundWork<T, R> {
           }
         }
       }
+      BackgroundWork::Empty => {}
     }
   }
 }
 
-pub struct BackgroundThread<T, R> {
-  inner: Mutex<Option<(JoinHandle<()>, Sender<(T, Sender<R>)>)>>,
+pub struct BackgroundThread<T, R = ()>(Mutex<BackgroundThreadInner<T, R>>);
+
+pub struct BackgroundThreadInner<T, R> {
+  thread: Option<(JoinHandle<()>, Sender<(T, Sender<R>)>)>,
   func: Arc<Mutex<BackgroundWork<T, R>>>,
   name: String,
   size: usize,
@@ -87,41 +91,61 @@ where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new(name: &str, size: usize, job: BackgroundWork<T, R>) -> Self {
-    Self {
-      inner: Mutex::new(None),
-      func: Arc::new(Mutex::new(job)),
+  pub fn new<S>(name: S, size: usize, work: BackgroundWork<T, R>) -> Self
+  where
+    S: ToString,
+  {
+    Self(Mutex::new(BackgroundThreadInner {
+      thread: None,
+      func: Arc::new(Mutex::new(work)),
       name: name.to_string(),
       size,
-    }
+    }))
+  }
+
+  pub fn empty<S>(name: S, size: usize) -> Self
+  where
+    S: ToString,
+  {
+    Self(Mutex::new(BackgroundThreadInner {
+      thread: None,
+      func: Arc::new(Mutex::new(BackgroundWork::Empty)),
+      name: name.to_string(),
+      size,
+    }))
+  }
+
+  pub fn set_work(&self, work: BackgroundWork<T, R>) {
+    let mut inner = self.0.l();
+    inner.func = Arc::new(Mutex::new(work));
   }
 
   fn checked_send(&self, v: T) -> Receiver<R> {
-    let mut inner = self.inner.l();
-    if let Some((t, tx)) = inner.take() {
+    let mut inner = self.0.l();
+    if let Some((t, tx)) = inner.thread.take() {
       if !t.is_finished() {
         let (done_t, done_r) = unbounded();
         tx.must_send((v, done_t));
-        *inner = Some((t, tx));
+        inner.thread = Some((t, tx));
         return done_r;
       }
       drop(tx);
       t.join().ok();
     }
 
-    let func = self.func.clone();
+    let func = inner.func.clone();
     let (tx, rx) = unbounded::<(T, Sender<R>)>();
     let t = std::thread::Builder::new()
-      .name(self.name.clone())
-      .stack_size(self.size)
+      .name(inner.name.clone())
+      .stack_size(inner.size)
       .spawn(move || {
-        let mut f = func.lock().unwrap();
+        let mut f = func.l();
         f.run(rx);
       })
       .unwrap();
     let (done_t, done_r) = unbounded();
     tx.must_send((v, done_t));
-    *inner = Some((t, tx));
+    inner.thread = Some((t, tx));
     return done_r;
   }
 
@@ -134,7 +158,8 @@ where
   }
 
   pub fn close(&self) {
-    self.inner.l().take().map(|(t, tx)| {
+    let mut inner = self.0.l();
+    inner.thread.take().map(|(t, tx)| {
       if !t.is_finished() {
         drop(tx);
       }

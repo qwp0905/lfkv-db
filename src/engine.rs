@@ -59,14 +59,11 @@ impl Engine {
 
     let manager = ThreadManager::new();
 
-    let disk = Arc::new(Finder::open(
-      FinderConfig {
-        path: config.base_path.as_ref().join(DISK_PATH),
-        batch_delay: config.disk_batch_delay,
-        batch_size: config.disk_batch_size,
-      },
-      &manager,
-    )?);
+    let disk = Arc::new(Finder::open(FinderConfig {
+      path: config.base_path.as_ref().join(DISK_PATH),
+      batch_delay: config.disk_batch_delay,
+      batch_size: config.disk_batch_size,
+    })?);
     logger::info(format!("disk created"));
 
     let freelist = Arc::new(FreeList::new(
@@ -76,16 +73,13 @@ impl Engine {
     )?);
     logger::info(format!("freelist created"));
 
-    let rollback = Arc::new(RollbackStorage::open(
-      RollbackStorageConfig {
-        fsync_delay: config.undo_batch_delay,
-        fsync_count: config.undo_batch_size,
-        max_cache_size: mem_size.div_ceil(10),
-        max_file_size: config.undo_file_size,
-        path: config.base_path.as_ref().join(UNDO_PATH),
-      },
-      &manager,
-    )?);
+    let rollback = Arc::new(RollbackStorage::open(RollbackStorageConfig {
+      fsync_delay: config.undo_batch_delay,
+      fsync_count: config.undo_batch_size,
+      max_cache_size: mem_size.div_ceil(10),
+      max_file_size: config.undo_file_size,
+      path: config.base_path.as_ref().join(UNDO_PATH),
+    })?);
     logger::info(format!("undo log created"));
 
     let (bp, flush_c, commit_c) =
@@ -106,7 +100,6 @@ impl Engine {
       commit_c,
       flush_c,
       &buffer_pool,
-      &manager,
     )?);
     logger::info(format!("wal created"));
 

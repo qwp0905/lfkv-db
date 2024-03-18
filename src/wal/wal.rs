@@ -10,8 +10,8 @@ use std::{
 use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
-  logger, size, ContextReceiver, Page, Result, ShortenedRwLock, StoppableChannel,
-  ThreadManager,
+  logger, size, BackgroundThread, BackgroundWork, Page, Result, ShortenedRwLock,
+  StoppableChannel,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -31,8 +31,8 @@ pub struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: StoppableChannel<CommitInfo, Result>,
   disk: Arc<Finder<WAL_PAGE_SIZE>>,
-  io_c: StoppableChannel<Vec<LogRecord>, Result>,
-  checkpoint_c: StoppableChannel<()>,
+  io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
+  checkpoint_c: Arc<BackgroundThread<()>>,
   config: WriteAheadLogConfig,
   last_index: Arc<RwLock<usize>>,
 }
@@ -42,7 +42,6 @@ impl WriteAheadLog {
     commit_c: StoppableChannel<CommitInfo, Result>,
     flush_c: StoppableChannel<(), Option<usize>>,
     buffer_pool: &Arc<BufferPool>,
-    thread: &ThreadManager,
   ) -> Result<Self> {
     config.max_file_size.div_assign(WAL_PAGE_SIZE);
 
@@ -51,11 +50,13 @@ impl WriteAheadLog {
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
     };
-    let disk = Arc::new(Finder::open(disk_config, thread)?);
+    let disk = Arc::new(Finder::open(disk_config)?);
     let buffer = Arc::new(LogBuffer::new());
 
-    let (io_c, io_rx) = thread.generate();
-    let (checkpoint_c, checkpoint_rx) = thread.generate();
+    let last_index = Arc::new(RwLock::new(0));
+
+    let io_c = Arc::new(BackgroundThread::empty("wal io", WAL_PAGE_SIZE.mul(1000)));
+    let checkpoint_c = Arc::new(BackgroundThread::empty("wal checkpoint", size::kb(2)));
 
     let core = Self::new(
       buffer,
@@ -64,25 +65,21 @@ impl WriteAheadLog {
       io_c,
       checkpoint_c,
       config,
-      Default::default(),
+      last_index,
     );
 
     let (last_transaction, cursor) = core.replay(buffer_pool)?;
 
     core.buffer.initial_state(last_transaction);
-    Ok(
-      core
-        .start_checkpoint(checkpoint_rx, flush_c)
-        .start_io(io_rx, cursor),
-    )
+    Ok(core.start_checkpoint(flush_c).start_io(cursor))
   }
 
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: StoppableChannel<CommitInfo, Result>,
     disk: Arc<Finder<WAL_PAGE_SIZE>>,
-    io_c: StoppableChannel<Vec<LogRecord>, Result>,
-    checkpoint_c: StoppableChannel<()>,
+    io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
+    checkpoint_c: Arc<BackgroundThread<()>>,
     config: WriteAheadLogConfig,
     last_index: Arc<RwLock<usize>>,
   ) -> Self {
@@ -97,11 +94,7 @@ impl WriteAheadLog {
     }
   }
 
-  fn start_io(
-    self,
-    rx: ContextReceiver<Vec<LogRecord>, Result>,
-    mut cursor: usize,
-  ) -> Self {
+  fn start_io(self, mut cursor: usize) -> Self {
     let max_file_size = self.config.max_file_size;
     let checkpoint_count = self.config.checkpoint_count;
     let disk = self.disk.clone();
@@ -111,49 +104,49 @@ impl WriteAheadLog {
     let mut current = LogEntry::new();
     let mut counter = 0;
 
-    rx.to_done("wal io", WAL_PAGE_SIZE.mul(1000), move |records| {
-      counter += records.len();
-      for mut record in records {
-        let mut l = last_index.wl();
-        record.assign_id(l.add(1));
-        if let Operation::Commit = record.operation {
-          commit_c.send(CommitInfo::new(record.transaction_id, record.index));
+    self.io_c.set_work(BackgroundWork::no_timeout(
+      move |records: Vec<LogRecord>| {
+        counter += records.len();
+        for mut record in records {
+          let mut l = last_index.wl();
+          record.assign_id(l.add(1));
+          if let Operation::Commit = record.operation {
+            commit_c.send(CommitInfo::new(record.transaction_id, record.index));
+          }
+
+          if !current.is_available(&record) {
+            let entry = take(&mut current);
+            disk.batch_write_from(cursor, &entry)?;
+            cursor = cursor.add(1).rem_euclid(max_file_size);
+          }
+          current.append(record);
+          l.add_assign(1);
         }
 
-        if !current.is_available(&record) {
-          let entry = take(&mut current);
-          disk.batch_write_from(cursor, &entry)?;
-          cursor = cursor.add(1).rem_euclid(max_file_size);
+        disk.batch_write_from(cursor, &current)?;
+
+        if checkpoint_count.lt(&counter) {
+          checkpoint_c.send(());
+          counter = 0;
         }
-        current.append(record);
-        l.add_assign(1);
-      }
-
-      disk.batch_write_from(cursor, &current)?;
-
-      if checkpoint_count.lt(&counter) {
-        checkpoint_c.send(());
-        counter = 0;
-      }
-      Ok(())
-    });
+        Ok(())
+      },
+    ));
     self
   }
 
-  fn start_checkpoint(
-    self,
-    rx: ContextReceiver<()>,
-    flush_c: StoppableChannel<(), Option<usize>>,
-  ) -> Self {
-    let timeout = self.config.checkpoint_interval;
+  fn start_checkpoint(self, flush_c: StoppableChannel<(), Option<usize>>) -> Self {
     let io_c = self.io_c.clone();
-    rx.to_new_or_timeout("wal checkpoint", size::kb(2), timeout, move |_| {
-      if let Some(to_be_apply) = flush_c.send_await(()) {
-        io_c
-          .send_await(vec![LogRecord::new_checkpoint(to_be_apply)])
-          .ok();
-      }
-    });
+    self.checkpoint_c.set_work(BackgroundWork::with_timeout(
+      self.config.checkpoint_interval,
+      move |_| {
+        if let Some(to_be_apply) = flush_c.send_await(()) {
+          io_c
+            .send_await(vec![LogRecord::new_checkpoint(to_be_apply)])
+            .ok();
+        }
+      },
+    ));
     self
   }
 
@@ -181,8 +174,8 @@ impl WriteAheadLog {
   pub fn before_shutdown(&self) {
     self.checkpoint_c.send(());
     self.commit_c.terminate();
-    self.checkpoint_c.terminate();
-    self.io_c.terminate();
+    self.checkpoint_c.close();
+    self.io_c.close();
     self.disk.close();
   }
 

@@ -8,7 +8,7 @@ use std::{
 use crate::{
   disk::{Finder, FinderConfig},
   wal::CommitInfo,
-  Error, Page, Result, Serializable, ShortenedMutex, ThreadManager, PAGE_SIZE,
+  Error, Page, Result, Serializable, ShortenedMutex, PAGE_SIZE,
 };
 
 use super::{DataBlock, LRUCache};
@@ -120,18 +120,15 @@ pub struct RollbackStorage {
   cursor: Mutex<usize>,
 }
 impl RollbackStorage {
-  pub fn open(mut config: RollbackStorageConfig, thread: &ThreadManager) -> Result<Self> {
+  pub fn open(mut config: RollbackStorageConfig) -> Result<Self> {
     config.max_file_size.div_assign(UNDO_PAGE_SIZE);
     config.max_cache_size.div_assign(UNDO_PAGE_SIZE);
 
-    let disk = Finder::open(
-      FinderConfig {
-        path: config.path.clone(),
-        batch_delay: config.fsync_delay,
-        batch_size: config.fsync_count,
-      },
-      thread,
-    )?;
+    let disk = Finder::open(FinderConfig {
+      path: config.path.clone(),
+      batch_delay: config.fsync_delay,
+      batch_size: config.fsync_count,
+    })?;
     let cache = Default::default();
     let cursor = Default::default();
 
