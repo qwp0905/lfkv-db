@@ -14,26 +14,26 @@ enum Level {
 }
 
 #[allow(unused)]
-pub fn info(message: String) {
+pub fn info<T: ToString>(message: T) {
   println!("{}", fmt(Level::Info, message))
 }
 
 #[allow(unused)]
-pub fn warn(message: String) {
+pub fn warn<T: ToString>(message: T) {
   println!("{}", fmt(Level::Warn, message));
 }
 
 #[allow(unused)]
-pub fn error(message: String) {
+pub fn error<T: ToString>(message: T) {
   eprintln!("{}", fmt(Level::Error, message));
 }
 
 #[allow(unused)]
-pub fn debug(message: String) {
+pub fn debug<T: ToString>(message: T) {
   println!("{}", fmt(Level::Debug, message))
 }
 
-fn fmt(level: Level, message: String) -> String {
+fn fmt<T: ToString>(level: Level, message: T) -> String {
   json!({
     "level": match level {
       Level::Info => "info",
@@ -41,7 +41,7 @@ fn fmt(level: Level, message: String) -> String {
       Level::Warn => "warn",
       Level::Debug => "debug",
     },
-    "message":message,
+    "message":message.to_string(),
     "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
   })
   .to_string()

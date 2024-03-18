@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use crate::{AsTimer, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
+use crate::{logger, AsTimer, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
 
 pub trait Callable<T, R> {
   fn call(&mut self, v: T) -> R;
@@ -174,5 +174,6 @@ where
       }
       t.join().ok();
     });
+    logger::info(format!("{} thread done", inner.name))
   }
 }
