@@ -3,7 +3,7 @@ use std::{io::Write, path::PathBuf};
 use chrono::Local;
 use serde_json::json;
 
-use crate::{size, StoppableChannel, ThreadManager};
+use crate::{size, BackgroundThread, BackgroundWork};
 
 #[allow(unused)]
 enum Level {
@@ -69,20 +69,23 @@ pub struct LoggerConfig {
 }
 
 pub struct Logger {
-  channel: StoppableChannel<String>,
+  channel: BackgroundThread<String>,
 }
 impl Logger {
-  pub fn new(config: LoggerConfig, thread: &ThreadManager) -> std::io::Result<Self> {
-    let (channel, rx) = thread.generate();
+  pub fn new(config: LoggerConfig) -> std::io::Result<Self> {
     let mut file = std::fs::OpenOptions::new()
       .create(true)
       .read(true)
       .write(true)
       .open(config.path)?;
 
-    rx.to_new("logger", size::mb(2), move |msg| {
-      writeln!(file, "{}", msg).ok();
-    });
+    let channel = BackgroundThread::new(
+      "logger",
+      size::mb(2),
+      BackgroundWork::no_timeout(move |msg| {
+        writeln!(file, "{msg}").ok();
+      }),
+    );
 
     Ok(Self { channel })
   }
@@ -91,6 +94,6 @@ impl Logger {
   where
     T: ToString,
   {
-    self.channel.send(format(Level::Info, message))
+    self.channel.send(format(Level::Info, message));
   }
 }

@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-  wal::CommitInfo, Drain, DroppableReceiver, Page, Result, Serializable, ShortenedMutex,
-  StoppableChannel,
+  wal::CommitInfo, BackgroundThread, Drain, DroppableReceiver, Page, Result,
+  Serializable, ShortenedMutex,
 };
 
 use super::{DataBlock, LRUCache, BLOCK_SIZE};
@@ -16,12 +16,12 @@ struct CacheStorageCore {
   evicted: BTreeMap<usize, DataBlock>,
   max_cache_size: usize,
   dirty: BTreeSet<usize>,
-  write_c: StoppableChannel<(usize, Page<BLOCK_SIZE>), Result>,
+  write_c: BackgroundThread<(usize, Page<BLOCK_SIZE>), Result>,
 }
 impl CacheStorage {
   pub fn new(
     max_cache_size: usize,
-    write_c: StoppableChannel<(usize, Page<BLOCK_SIZE>), Result>,
+    write_c: BackgroundThread<(usize, Page<BLOCK_SIZE>), Result>,
   ) -> Self {
     Self(Mutex::new(CacheStorageCore {
       cache: Default::default(),
@@ -108,14 +108,14 @@ impl CacheStorage {
         if let Some(block) = core.cache.get_mut(&i) {
           max = block.commit_index.max(max);
           let page = block.serialize()?;
-          l.push(core.write_c.send_with_done((i, page)));
+          l.push(core.write_c.send((i, page)));
           continue;
         }
 
         if let Some(block) = core.evicted.remove(&i) {
           max = block.commit_index.max(max);
           let page = block.serialize()?;
-          l.push(core.write_c.send_with_done((i, page)));
+          l.push(core.write_c.send((i, page)));
         }
       }
       core.evicted.clear();
@@ -130,6 +130,6 @@ impl CacheStorage {
   }
 
   pub fn before_shutdown(&self) {
-    self.0.l().write_c.terminate();
+    self.0.l().write_c.close();
   }
 }

@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-  disk::Finder, wal::CommitInfo, ContextReceiver, Error, Page, Result, ShortenedMutex,
-  StoppableChannel, ThreadManager,
+  disk::Finder, wal::CommitInfo, BackgroundThread, BackgroundWork, Error, Page, Result,
+  ShortenedMutex,
 };
 
 use super::{CacheStorage, DataBlock, RollbackStorage, BLOCK_SIZE};
@@ -16,110 +16,98 @@ pub struct BufferPool {
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
   disk: Arc<Finder<BLOCK_SIZE>>,
-  max_cache_size: usize,
 }
 impl BufferPool {
   pub fn generate(
     rollback: Arc<RollbackStorage>,
     disk: Arc<Finder<BLOCK_SIZE>>,
     max_cache_size: usize,
-    thread: &ThreadManager,
   ) -> (
     Self,
-    StoppableChannel<(), Option<usize>>,
-    StoppableChannel<CommitInfo, Result>,
+    BackgroundThread<(), Option<usize>>,
+    BackgroundThread<CommitInfo, Result>,
   ) {
-    let (write_c, write_rx) = thread.generate();
-    let (flush_c, flush_rx) = thread.generate();
-    let (commit_c, commit_rx) = thread.generate();
-    let bp = Self {
-      cache: Arc::new(CacheStorage::new(
-        max_cache_size.div_ceil(BLOCK_SIZE),
-        write_c,
-      )),
-      rollback,
-      uncommitted: Default::default(),
-      disk,
-      max_cache_size,
-    };
-
-    (
-      bp.start_write(write_rx)
-        .start_flush(flush_rx)
-        .start_commit(commit_rx),
-      flush_c,
-      commit_c,
-    )
-  }
-
-  fn start_write(self, rx: ContextReceiver<(usize, Page<BLOCK_SIZE>), Result>) -> Self {
-    let disk = self.disk.clone();
-    rx.to_done(
+    let disk_cloned = disk.clone();
+    let write_c = BackgroundThread::new(
       "bufferpool write",
-      BLOCK_SIZE.mul(1000),
-      move |(index, page)| disk.batch_write(index, page),
+      max_cache_size.div_ceil(3),
+      BackgroundWork::no_timeout(move |(index, page)| {
+        disk_cloned.batch_write(index, page)
+      }),
     );
-    self
-  }
 
-  fn start_flush(self, rx: ContextReceiver<(), Option<usize>>) -> Self {
-    let cache = self.cache.clone();
-    let disk = self.disk.clone();
-    rx.to_all(
+    let cache = Arc::new(CacheStorage::new(
+      max_cache_size.div_ceil(BLOCK_SIZE),
+      write_c,
+    ));
+
+    let uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>> = Default::default();
+
+    let disk_cloned = disk.clone();
+    let cache_cloned = cache.clone();
+    let flush_c = BackgroundThread::new(
       "bufferpool flush",
-      self.max_cache_size.div_ceil(3),
-      move |_| {
-        let max_index = match cache.flush_all() {
+      max_cache_size.div_ceil(3),
+      BackgroundWork::no_timeout(move |_| {
+        let max_index = match cache_cloned.flush_all() {
           Ok(o) => o,
           Err(_) => return None,
         };
-        if let Err(_) = disk.fsync() {
+        if let Err(_) = disk_cloned.fsync() {
           return None;
         }
 
         max_index
-      },
+      }),
     );
-    self
-  }
 
-  fn start_commit(self, rx: ContextReceiver<CommitInfo, Result>) -> Self {
-    let uncommitted = self.uncommitted.clone();
-    let cache = self.cache.clone();
-    let disk = self.disk.clone();
-    let rollback = self.rollback.clone();
+    let uncommitted_cloned = uncommitted.clone();
+    let disk_cloned = disk.clone();
+    let cache_cloned = cache.clone();
+    let rollback_cloned = rollback.clone();
+    let commit_c = BackgroundThread::new(
+      "bufferpool commit",
+      BLOCK_SIZE.mul(100),
+      BackgroundWork::no_timeout(move |commit: CommitInfo| {
+        let mut u = uncommitted_cloned.l();
+        if let Some(v) = u.remove(&commit.tx_id) {
+          for index in v {
+            let undo_index = match cache_cloned.commit(index, commit.as_ref()) {
+              Ok(applied) => {
+                if applied {
+                  continue;
+                }
 
-    rx.to_new("bufferpool commit", BLOCK_SIZE.mul(100), move |commit| {
-      let mut u = uncommitted.l();
-      if let Some(v) = u.remove(&commit.tx_id) {
-        for index in v {
-          let undo_index = match cache.commit(index, commit.as_ref()) {
-            Ok(applied) => {
-              if applied {
-                continue;
+                let mut block: DataBlock = disk_cloned.read_to(index)?;
+                if block.tx_id.eq(&commit.tx_id) {
+                  block.commit_index = commit.commit_index;
+                  cache_cloned.insert(index, block);
+                  continue;
+                }
+
+                let undo_index = block.undo_index;
+                cache_cloned.insert(index, block);
+                undo_index
               }
-
-              let mut block: DataBlock = disk.read_to(index)?;
-              if block.tx_id.eq(&commit.tx_id) {
-                block.commit_index = commit.commit_index;
-                cache.insert(index, block);
-                continue;
-              }
-
-              let undo_index = block.undo_index;
-              cache.insert(index, block);
-              undo_index
+              Err(undo_index) => undo_index,
+            };
+            if let Some(i) = undo_index {
+              rollback_cloned.commit(i, commit.as_ref())?;
             }
-            Err(undo_index) => undo_index,
-          };
-          if let Some(i) = undo_index {
-            rollback.commit(i, commit.as_ref())?;
           }
-        }
-      };
-      Ok(())
-    });
-    self
+        };
+        Ok(())
+      }),
+    );
+
+    let bp = Self {
+      cache,
+      rollback,
+      uncommitted,
+      disk,
+    };
+
+    (bp, flush_c, commit_c)
   }
 
   // fn start_rollback(&self, rx: ContextReceiver<usize>) {

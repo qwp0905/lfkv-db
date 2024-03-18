@@ -11,7 +11,6 @@ use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
   logger, size, BackgroundThread, BackgroundWork, Page, Result, ShortenedRwLock,
-  StoppableChannel,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -29,7 +28,7 @@ pub struct WriteAheadLogConfig {
 
 pub struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
-  commit_c: StoppableChannel<CommitInfo, Result>,
+  commit_c: Arc<BackgroundThread<CommitInfo, Result>>,
   disk: Arc<Finder<WAL_PAGE_SIZE>>,
   io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
   checkpoint_c: Arc<BackgroundThread<()>>,
@@ -39,8 +38,8 @@ pub struct WriteAheadLog {
 impl WriteAheadLog {
   pub fn open(
     mut config: WriteAheadLogConfig,
-    commit_c: StoppableChannel<CommitInfo, Result>,
-    flush_c: StoppableChannel<(), Option<usize>>,
+    commit_c: Arc<BackgroundThread<CommitInfo, Result>>,
+    flush_c: BackgroundThread<(), Option<usize>>,
     buffer_pool: &Arc<BufferPool>,
   ) -> Result<Self> {
     config.max_file_size.div_assign(WAL_PAGE_SIZE);
@@ -76,7 +75,7 @@ impl WriteAheadLog {
 
   fn new(
     buffer: Arc<LogBuffer>,
-    commit_c: StoppableChannel<CommitInfo, Result>,
+    commit_c: Arc<BackgroundThread<CommitInfo, Result>>,
     disk: Arc<Finder<WAL_PAGE_SIZE>>,
     io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
     checkpoint_c: Arc<BackgroundThread<()>>,
@@ -135,7 +134,7 @@ impl WriteAheadLog {
     self
   }
 
-  fn start_checkpoint(self, flush_c: StoppableChannel<(), Option<usize>>) -> Self {
+  fn start_checkpoint(self, flush_c: BackgroundThread<(), Option<usize>>) -> Self {
     let io_c = self.io_c.clone();
     self.checkpoint_c.set_work(BackgroundWork::with_timeout(
       self.config.checkpoint_interval,
@@ -173,7 +172,7 @@ impl WriteAheadLog {
 
   pub fn before_shutdown(&self) {
     self.checkpoint_c.send(());
-    self.commit_c.terminate();
+    self.commit_c.close();
     self.checkpoint_c.close();
     self.io_c.close();
     self.disk.close();

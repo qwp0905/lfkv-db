@@ -6,7 +6,16 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use crate::{AsTimer, Callable, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
+use crate::{AsTimer, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
+
+pub trait Callable<T, R> {
+  fn call(&mut self, v: T) -> R;
+}
+impl<T, R, F: FnMut(T) -> R> Callable<T, R> for F {
+  fn call(&mut self, v: T) -> R {
+    self(v)
+  }
+}
 
 pub enum BackgroundWork<T, R> {
   NoTimeout(Box<dyn FnMut(T) -> R + Send>),
@@ -80,7 +89,7 @@ impl<T, R> BackgroundWork<T, R> {
 
 pub struct BackgroundThread<T, R = ()>(Mutex<BackgroundThreadInner<T, R>>);
 
-pub struct BackgroundThreadInner<T, R> {
+struct BackgroundThreadInner<T, R> {
   thread: Option<(JoinHandle<()>, Sender<(T, Sender<R>)>)>,
   func: Arc<Mutex<BackgroundWork<T, R>>>,
   name: String,
@@ -149,8 +158,8 @@ where
     return done_r;
   }
 
-  pub fn send(&self, v: T) {
-    self.checked_send(v);
+  pub fn send(&self, v: T) -> Receiver<R> {
+    self.checked_send(v)
   }
 
   pub fn send_await(&self, v: T) -> R {

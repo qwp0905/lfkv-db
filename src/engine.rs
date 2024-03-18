@@ -16,7 +16,7 @@ use crate::{
   disk::{Finder, FinderConfig, FreeList},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
-  Cursor, Error, Result, ThreadManager,
+  Cursor, Error, Result,
 };
 
 pub struct EngineConfig<T>
@@ -46,7 +46,6 @@ pub struct Engine {
   buffer_pool: Arc<BufferPool>,
   freelist: Arc<FreeList<BLOCK_SIZE>>,
   available: AtomicBool,
-  manager: ThreadManager,
 }
 impl Engine {
   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
@@ -56,8 +55,6 @@ impl Engine {
     let mem_size = System::new_all().total_memory() as usize;
     logger::info(format!("{} system memory", mem_size));
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
-
-    let manager = ThreadManager::new();
 
     let disk = Arc::new(Finder::open(FinderConfig {
       path: config.base_path.as_ref().join(DISK_PATH),
@@ -69,7 +66,6 @@ impl Engine {
     let freelist = Arc::new(FreeList::new(
       config.defragmentation_interval,
       disk.clone(),
-      &manager,
     )?);
     logger::info(format!("freelist created"));
 
@@ -83,7 +79,7 @@ impl Engine {
     logger::info(format!("undo log created"));
 
     let (bp, flush_c, commit_c) =
-      BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3), &manager);
+      BufferPool::generate(rollback, disk, mem_size.div_ceil(10).mul(3));
     let buffer_pool = Arc::new(bp);
     logger::info(format!("buffer pool created"));
 
@@ -97,7 +93,7 @@ impl Engine {
         group_commit_count: config.group_commit_count,
         max_file_size: config.wal_file_size,
       },
-      commit_c,
+      Arc::new(commit_c),
       flush_c,
       &buffer_pool,
     )?);
@@ -108,7 +104,6 @@ impl Engine {
       buffer_pool,
       freelist,
       available: AtomicBool::new(true),
-      manager,
     };
 
     let cursor = engine.new_transaction()?;
@@ -138,6 +133,5 @@ impl Drop for Engine {
     self.wal.before_shutdown();
     self.buffer_pool.before_shutdown();
     self.freelist.before_shutdown();
-    self.manager.flush();
   }
 }

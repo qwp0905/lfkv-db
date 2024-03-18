@@ -8,7 +8,7 @@ use std::{
   time::Duration,
 };
 
-use crate::{ContextReceiver, Result, ShortenedMutex, StoppableChannel, ThreadManager};
+use crate::{BackgroundThread, BackgroundWork, Result, ShortenedMutex};
 
 use super::Finder;
 
@@ -16,25 +16,32 @@ pub struct FreeList<const N: usize> {
   list: Arc<Mutex<BTreeSet<usize>>>,
   file: Arc<Finder<N>>,
   interval: Duration,
-  chan: StoppableChannel<(), Result>,
+  chan: BackgroundThread<(), Result>,
   last_index: AtomicUsize,
 }
 impl<const N: usize> FreeList<N> {
-  pub fn new(
-    interval: Duration,
-    file: Arc<Finder<N>>,
-    thread: &ThreadManager,
-  ) -> Result<Self> {
-    let (chan, rx) = thread.generate();
+  pub fn new(interval: Duration, file: Arc<Finder<N>>) -> Result<Self> {
+    let chan = BackgroundThread::new(
+      "defragmentation",
+      N.mul(2),
+      BackgroundWork::with_timeout(interval, move |_| {
+        // let len = file.len()?;
+        // for i in 0..len {
+        //   if let Err(Error::NotFound) = file.read(i) {
+        //     list.l().insert(i);
+        //   };
+        // }
+        Ok(())
+      }),
+    );
     let last_index = file.len()?;
-    let f = Self {
+    Ok(Self {
       list: Default::default(),
       file,
       interval,
       chan,
       last_index: AtomicUsize::new(last_index),
-    };
-    Ok(f.start_defragmentation(rx))
+    })
   }
 
   pub fn acquire(&self) -> usize {
@@ -54,22 +61,7 @@ impl<const N: usize> FreeList<N> {
   }
 
   pub fn before_shutdown(&self) {
-    self.chan.terminate();
+    self.chan.close();
     self.file.close();
-  }
-
-  fn start_defragmentation(self, rx: ContextReceiver<(), Result>) -> Self {
-    // let file = self.file.clone();
-    // let list = self.list.clone();
-    rx.to_new_or_timeout("defragmentation", N.mul(2), self.interval, move |_| {
-      // let len = file.len()?;
-      // for i in 0..len {
-      //   if let Err(Error::NotFound) = file.read(i) {
-      //     list.l().insert(i);
-      //   };
-      // }
-      Ok(())
-    });
-    self
   }
 }
