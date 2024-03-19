@@ -149,7 +149,7 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-    let end = bytes.len().add(self.offset);
+    let end = self.offset.add(bytes.len());
     if end.ge(&T) {
       return Err(Error::EOF);
     };

@@ -169,9 +169,7 @@ where
   pub fn close(&self) {
     let mut inner = self.0.l();
     inner.thread.take().map(|(t, tx)| {
-      if !t.is_finished() {
-        drop(tx);
-      }
+      drop(tx);
       if let Err(err) = t.join() {
         logger::error(format!("{:?}", err));
       };
