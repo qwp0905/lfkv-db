@@ -7,3 +7,7 @@ pub fn second_of_two<T, R>(v: (T, R)) -> R {
 pub fn plus_pipe(i: usize) -> impl Fn(usize) -> usize {
   move |v| v + i
 }
+
+pub fn deref<T: Copy>(v: &T) -> T {
+  *v
+}

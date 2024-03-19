@@ -10,9 +10,6 @@ pub use channel::*;
 mod closure;
 pub use closure::*;
 
-mod default;
-pub use default::*;
-
 mod drain;
 pub use drain::*;
 
