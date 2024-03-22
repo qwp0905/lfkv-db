@@ -1,6 +1,6 @@
 use std::{io::Write, path::PathBuf};
 
-use chrono::Local;
+use chrono::{Local, SecondsFormat};
 use serde_json::json;
 
 use crate::{size, BackgroundThread, BackgroundWork};
@@ -41,25 +41,8 @@ fn fmt<T: ToString>(level: Level, message: T) -> String {
       Level::Warn => "warn",
       Level::Debug => "debug",
     },
-    "message":message.to_string(),
-    "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-  })
-  .to_string()
-}
-
-fn format<T>(level: Level, message: T) -> String
-where
-  T: ToString,
-{
-  json!({
-    "level": match level {
-      Level::Info => "info",
-      Level::Error => "error",
-      Level::Warn => "warn",
-      Level::Debug => "debug",
-    },
-    "message":message.to_string(),
-    "at":Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+    "message": message.to_string(),
+    "at": Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
   })
   .to_string()
 }
@@ -94,6 +77,6 @@ impl Logger {
   where
     T: ToString,
   {
-    self.channel.send(format(Level::Info, message));
+    self.channel.send(fmt(Level::Info, message));
   }
 }
