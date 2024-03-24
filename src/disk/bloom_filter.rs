@@ -15,11 +15,10 @@ struct BloomFilterInner {
 
 impl BloomFilter {
   pub fn new(size: usize, hash_func: usize) -> Self {
-    let mut bit = Vec::with_capacity(size);
-    bit.fill(false);
-    let mut hasher = Vec::with_capacity(hash_func);
-    hasher.fill_with(|| RandomState::new());
-    Self(RwLock::new(BloomFilterInner { bit, hasher }))
+    Self(RwLock::new(BloomFilterInner {
+      bit: (0..size).map(|_| false).collect(),
+      hasher: (0..hash_func).map(|_| RandomState::new()).collect(),
+    }))
   }
 
   pub fn set<K: Hash>(&mut self, k: K) {
