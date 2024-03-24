@@ -9,3 +9,6 @@ pub use finder::*;
 
 mod free;
 pub use free::*;
+
+mod bloom_filter;
+pub use bloom_filter::*;

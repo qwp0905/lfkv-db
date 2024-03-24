@@ -138,8 +138,7 @@ where
         inner.thread = Some((t, tx));
         return done_r;
       }
-      drop(tx);
-      t.join().ok();
+      close_thread(t, tx);
     }
 
     let func = inner.func.clone();
@@ -168,12 +167,14 @@ where
 
   pub fn close(&self) {
     let mut inner = self.0.l();
-    inner.thread.take().map(|(t, tx)| {
-      drop(tx);
-      if let Err(err) = t.join() {
-        logger::error(format!("{:?}", err));
-      };
-    });
+    inner.thread.take().map(|(t, tx)| close_thread(t, tx));
     logger::info(format!("{} thread done", inner.name))
   }
+}
+
+fn close_thread<T>(t: JoinHandle<()>, tx: Sender<T>) {
+  drop(tx);
+  if let Err(err) = t.join() {
+    logger::error(format!("{:?}", err));
+  };
 }

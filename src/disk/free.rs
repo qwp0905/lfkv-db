@@ -15,7 +15,6 @@ use super::Finder;
 pub struct FreeList<const N: usize> {
   list: Arc<Mutex<BTreeSet<usize>>>,
   file: Arc<Finder<N>>,
-  interval: Duration,
   chan: BackgroundThread<(), Result>,
   last_index: AtomicUsize,
 }
@@ -38,7 +37,6 @@ impl<const N: usize> FreeList<N> {
     Ok(Self {
       list: Default::default(),
       file,
-      interval,
       chan,
       last_index: AtomicUsize::new(last_index),
     })

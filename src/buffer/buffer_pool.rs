@@ -100,14 +100,16 @@ impl BufferPool {
       }),
     );
 
-    let bp = Self {
-      cache,
-      rollback,
-      uncommitted,
-      disk,
-    };
-
-    (bp, flush_c, commit_c)
+    (
+      Self {
+        cache,
+        rollback,
+        uncommitted,
+        disk,
+      },
+      flush_c,
+      commit_c,
+    )
   }
 
   // fn start_rollback(&self, rx: ContextReceiver<usize>) {
