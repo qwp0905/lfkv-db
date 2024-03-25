@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use crate::{
   disk::{Page, Serializable},
   error::Error,
@@ -45,10 +47,10 @@ pub struct InternalNode {
 }
 impl InternalNode {
   pub fn split(&mut self) -> (CursorEntry, Vec<u8>) {
-    let c = self.keys.len() / 2;
+    let c = self.keys.len().div_ceil(2);
     let mut keys = self.keys.split_off(c);
     let m = keys.remove(0);
-    let children = self.children.split_off(c + 1);
+    let children = self.children.split_off(c.add(1));
     (CursorEntry::Internal(InternalNode { keys, children }), m)
   }
 
@@ -57,7 +59,7 @@ impl InternalNode {
       let mut keys = self.keys.split_off(i);
       self.keys.push(key);
       self.keys.append(keys.as_mut());
-      let mut c = self.children.split_off(i + 1);
+      let mut c = self.children.split_off(i.add(1));
       self.children.push(index);
       self.children.append(c.as_mut());
     };
@@ -71,7 +73,7 @@ impl InternalNode {
     let i = self
       .keys
       .binary_search_by(|k| k.cmp(key))
-      .map(|i| i + 1)
+      .map(|i| i.add(1))
       .unwrap_or_else(|i| i);
     self.children[i]
   }
@@ -127,7 +129,7 @@ impl LeafNode {
   }
 
   pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, Vec<u8>) {
-    let c = self.keys.len() / 2;
+    let c = self.keys.len().div_ceil(2);
     let keys = self.keys.split_off(c);
     let m = keys[0].0.clone();
     let next = self.next.take();
