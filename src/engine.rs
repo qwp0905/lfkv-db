@@ -97,7 +97,7 @@ impl Engine {
       flush_c,
       &buffer_pool,
     )?);
-    logger::info(format!("wal created"));
+    logger::info("wal created");
 
     let engine = Self {
       wal,
@@ -110,7 +110,7 @@ impl Engine {
     cursor.initialize()?;
     cursor.commit()?;
 
-    logger::info(format!("engine initialized"));
+    logger::info("engine initialized");
     Ok(engine)
   }
 

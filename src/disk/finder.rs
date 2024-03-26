@@ -60,10 +60,10 @@ trait IndexedFile<const N: usize> {
 }
 impl<const N: usize> IndexedFile<N> for File {
   fn seek_index(&mut self, i: usize) -> Result<usize> {
-    let r = self
+    self
       .seek(SeekFrom::Start(i.mul(N) as u64))
-      .map_err(Error::IO)?;
-    Ok(r as usize)
+      .map_err(Error::IO)
+      .map(|c| c as usize)
   }
 }
 

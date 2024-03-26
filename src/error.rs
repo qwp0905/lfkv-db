@@ -1,10 +1,5 @@
 use thiserror::Error;
 
-#[derive(Debug)]
-pub struct Unknown {
-  error: Box<dyn std::error::Error + Send + Sync>,
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
   #[error("not found")]
@@ -14,7 +9,7 @@ pub enum Error {
   Invalid,
 
   #[error("unknown")]
-  Unknown(Unknown),
+  Unknown(Box<dyn std::error::Error + Send + Sync>),
 
   #[error("io error")]
   IO(std::io::Error),
@@ -29,23 +24,11 @@ pub enum Error {
   EngineUnavailable,
 }
 impl Error {
-  pub fn to_string(&self) -> String {
-    match self {
-      Self::NotFound => format!("not found"),
-      Self::Invalid => format!("invalid"),
-      Self::Unknown(err) => format!("unknown error {}", err.error),
-      Self::EOF => format!("end of file"),
-      Self::IO(err) => err.to_string(),
-      Self::TransactionClosed => format!("transaction already closed"),
-      Self::EngineUnavailable => format!("engine unavailable"),
-    }
-  }
-
   pub fn unknown<E>(e: E) -> Error
   where
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
   {
-    Error::Unknown(Unknown { error: e.into() })
+    Error::Unknown(e.into())
   }
 }
 

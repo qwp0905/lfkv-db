@@ -38,7 +38,7 @@ impl Cursor {
 
   pub fn initialize(&self) -> Result {
     if let Err(Error::NotFound) = self.writer.get::<TreeHeader>(HEADER_INDEX) {
-      logger::info(format!("there are no tree header and will be initialized"));
+      logger::info("there are no tree header and will be initialized");
       let header = TreeHeader::initial_state();
       let root = header.get_root();
       self.writer.insert(HEADER_INDEX, header)?;
