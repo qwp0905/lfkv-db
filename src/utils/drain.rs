@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, mem::take};
+use std::mem::take;
 
-pub trait Drain<T> {
+pub trait Drain {
   fn drain(&mut self) -> Self;
 }
 
-impl<T> Drain<T> for BTreeSet<T> {
+impl<T: Default> Drain for T {
   fn drain(&mut self) -> Self {
     take(self)
   }

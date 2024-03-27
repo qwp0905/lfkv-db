@@ -1,6 +1,5 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
-  mem::take,
   ops::{Add, AddAssign, DivAssign, Mul},
   path::PathBuf,
   sync::{Arc, RwLock},
@@ -10,7 +9,7 @@ use std::{
 use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
-  logger, size, BackgroundThread, BackgroundWork, Page, Result, ShortenedRwLock,
+  logger, size, BackgroundThread, BackgroundWork, Drain, Page, Result, ShortenedRwLock,
 };
 
 use super::{CommitInfo, LogBuffer, LogEntry, LogRecord, Operation, WAL_PAGE_SIZE};
@@ -114,7 +113,7 @@ impl WriteAheadLog {
           }
 
           if !current.is_available(&record) {
-            let entry = take(&mut current);
+            let entry = current.drain();
             disk.batch_write_from(cursor, &entry)?;
             cursor = cursor.add(1).rem_euclid(max_file_size);
           }

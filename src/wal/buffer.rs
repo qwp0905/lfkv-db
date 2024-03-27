@@ -1,11 +1,10 @@
 use std::{
   collections::BTreeMap,
-  mem::take,
   ops::{Add, AddAssign, SubAssign},
   sync::Mutex,
 };
 
-use crate::{Page, ShortenedMutex};
+use crate::{Drain, Page, ShortenedMutex};
 
 use super::LogRecord;
 
@@ -26,7 +25,8 @@ impl LogBuffer {
   }
 
   pub fn initial_state(&self, last_transaction: usize) {
-    self.0.l().last_transaction = last_transaction
+    let mut core = self.0.l();
+    core.last_transaction = last_transaction
   }
 
   pub fn new_transaction(&self) -> usize {
@@ -72,6 +72,6 @@ impl LogBuffer {
   pub fn flush(&self) -> Vec<LogRecord> {
     let mut core = self.0.l();
     core.size = 0;
-    take(&mut core.map).into_values().flatten().collect()
+    core.map.drain().into_values().flatten().collect()
   }
 }

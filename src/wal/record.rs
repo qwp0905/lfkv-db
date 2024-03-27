@@ -162,12 +162,14 @@ impl LogEntry {
   pub fn append(&mut self, record: LogRecord) {
     self.records.push(record)
   }
+
+  fn iter(&self) -> impl Iterator<Item = &LogRecord> {
+    self.records.iter()
+  }
 }
 impl Default for LogEntry {
   fn default() -> Self {
-    Self {
-      records: Default::default(),
-    }
+    Self::new()
   }
 }
 
@@ -176,7 +178,7 @@ impl Serializable<Error, WAL_PAGE_SIZE> for LogEntry {
     let mut page = Page::new();
     let mut wt = page.writer();
     wt.write(&self.records.len().to_be_bytes())?;
-    for record in &self.records {
+    for record in self.iter() {
       record.write_to(&mut wt)?;
     }
     Ok(page)
