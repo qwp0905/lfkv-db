@@ -67,7 +67,7 @@ impl BufferPool {
     let rollback_cloned = rollback.clone();
     let commit_c = BackgroundThread::new(
       "bufferpool commit",
-      BLOCK_SIZE.mul(100),
+      BLOCK_SIZE.mul(1000),
       BackgroundWork::no_timeout(move |commit: CommitInfo| {
         let mut u = uncommitted_cloned.l();
         if let Some(v) = u.remove(&commit.tx_id) {
