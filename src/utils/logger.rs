@@ -54,7 +54,7 @@ pub struct LoggerConfig {
 }
 
 pub struct Logger {
-  channel: BackgroundThread<String>,
+  channel: BackgroundThread<String, std::io::Result<()>>,
 }
 impl Logger {
   pub fn new(config: LoggerConfig) -> std::io::Result<Self> {
@@ -73,12 +73,13 @@ impl Logger {
           writeln!(&mut file, "{m}").ok();
           count.add_assign(1);
           if count.lt(&config.count) {
-            return;
+            return Ok(());
           }
         }
 
-        file.sync_all().ok();
+        file.sync_all()?;
         count = 0;
+        Ok(())
       }),
     );
 
