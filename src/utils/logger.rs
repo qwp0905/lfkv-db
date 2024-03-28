@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, ops::AddAssign, path::PathBuf, time::Duration};
 
 use chrono::{Local, SecondsFormat};
 use serde_json::json;
@@ -49,6 +49,8 @@ fn fmt<T: ToString>(level: Level, message: T) -> String {
 
 pub struct LoggerConfig {
   pub path: PathBuf,
+  pub interval: Duration,
+  pub count: usize,
 }
 
 pub struct Logger {
@@ -62,11 +64,21 @@ impl Logger {
       .write(true)
       .open(config.path)?;
 
+    let mut count = 0usize;
     let channel = BackgroundThread::new(
       "logger",
       size::mb(2),
-      BackgroundWork::no_timeout(move |msg| {
-        writeln!(file, "{msg}").ok();
+      BackgroundWork::with_timeout(config.interval, move |msg| {
+        if let Some(m) = msg {
+          writeln!(&mut file, "{m}").ok();
+          count.add_assign(1);
+          if count.lt(&config.count) {
+            return;
+          }
+        }
+
+        file.sync_all().ok();
+        count = 0;
       }),
     );
 
