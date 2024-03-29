@@ -47,17 +47,24 @@ fn fmt<T: ToString>(level: Level, message: T) -> String {
   .to_string()
 }
 
-pub struct LoggerConfig {
+pub trait Logger {
+  fn info<T: ToString>(&self, message: T);
+  fn warn<T: ToString>(&self, message: T);
+  fn error<T: ToString>(&self, message: T);
+  fn debug<T: ToString>(&self, message: T);
+}
+
+pub struct StandardLoggerConfig {
   pub path: PathBuf,
   pub interval: Duration,
   pub count: usize,
 }
 
-pub struct Logger {
+pub struct FileLogger {
   channel: BackgroundThread<String, std::io::Result<()>>,
 }
-impl Logger {
-  pub fn new(config: LoggerConfig) -> std::io::Result<Self> {
+impl FileLogger {
+  pub fn new(config: StandardLoggerConfig) -> std::io::Result<Self> {
     let mut file = std::fs::OpenOptions::new()
       .create(true)
       .read(true)
@@ -85,11 +92,21 @@ impl Logger {
 
     Ok(Self { channel })
   }
-
-  pub fn info<T>(&self, message: T)
-  where
-    T: ToString,
-  {
+}
+impl Logger for FileLogger {
+  fn info<T: ToString>(&self, message: T) {
     self.channel.send(fmt(Level::Info, message));
+  }
+
+  fn warn<T: ToString>(&self, message: T) {
+    self.channel.send(fmt(Level::Warn, message));
+  }
+
+  fn error<T: ToString>(&self, message: T) {
+    self.channel.send(fmt(Level::Error, message));
+  }
+
+  fn debug<T: ToString>(&self, message: T) {
+    self.channel.send(fmt(Level::Debug, message));
   }
 }
