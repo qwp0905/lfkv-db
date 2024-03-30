@@ -4,7 +4,7 @@ use std::{
   sync::Mutex,
 };
 
-use crate::{Drain, Page, ShortenedMutex};
+use crate::{DrainAll, Page, ShortenedMutex};
 
 use super::LogRecord;
 
@@ -72,6 +72,6 @@ impl LogBuffer {
   pub fn flush(&self) -> Vec<LogRecord> {
     let mut core = self.0.l();
     core.size = 0;
-    core.map.drain().into_values().flatten().collect()
+    core.map.drain_all().into_values().flatten().collect()
   }
 }

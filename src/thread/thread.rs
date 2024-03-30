@@ -100,10 +100,7 @@ where
   T: Send + 'static,
   R: Send + 'static,
 {
-  pub fn new<S>(name: S, size: usize, work: BackgroundWork<T, R>) -> Self
-  where
-    S: ToString,
-  {
+  pub fn new<S: ToString>(name: S, size: usize, work: BackgroundWork<T, R>) -> Self {
     Self(Mutex::new(BackgroundThreadInner {
       thread: None,
       func: Arc::new(Mutex::new(work)),
@@ -112,10 +109,7 @@ where
     }))
   }
 
-  pub fn empty<S>(name: S, size: usize) -> Self
-  where
-    S: ToString,
-  {
+  pub fn empty<S: ToString>(name: S, size: usize) -> Self {
     Self(Mutex::new(BackgroundThreadInner {
       thread: None,
       func: Arc::new(Mutex::new(BackgroundWork::Empty)),

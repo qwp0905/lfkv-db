@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-  wal::CommitInfo, BackgroundThread, Drain, DroppableReceiver, Page, Result,
+  wal::CommitInfo, BackgroundThread, DrainAll, DroppableReceiver, Page, Result,
   Serializable, ShortenedMutex,
 };
 
@@ -102,7 +102,7 @@ impl CacheStorage {
         return Ok(None);
       }
 
-      let indexes = core.dirty.drain();
+      let indexes = core.dirty.drain_all();
       let mut max = 0;
       for i in indexes {
         if let Some(block) = core.cache.get_mut(&i) {
