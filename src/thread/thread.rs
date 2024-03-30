@@ -147,8 +147,7 @@ where
       .name(inner.name.clone())
       .stack_size(inner.size)
       .spawn(move || {
-        let mut f = func.l();
-        f.run(rx);
+        func.l().run(rx);
       })
       .unwrap();
     let (done_t, done_r) = unbounded();
