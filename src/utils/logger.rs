@@ -122,8 +122,8 @@ pub struct StandardLoggerConfig {
 }
 
 pub struct StandardLogger {
-  stdout: BackgroundThread<String, ()>,
-  stderr: BackgroundThread<String, ()>,
+  stdout: BackgroundThread<String>,
+  stderr: BackgroundThread<String>,
 }
 impl StandardLogger {
   pub fn new(config: StandardLoggerConfig) -> Self {
