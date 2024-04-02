@@ -1,4 +1,5 @@
 mod buffer;
+mod memtable;
 mod wal;
 
 mod thread;
