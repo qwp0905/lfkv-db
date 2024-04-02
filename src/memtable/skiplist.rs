@@ -1,5 +1,7 @@
 use std::{borrow::Borrow, ptr::NonNull};
 
+use crate::unsafe_ref;
+
 pub struct SkipList<K, V> {
   head: Option<NonNull<Entry<K, V>>>,
   tail: Option<NonNull<Entry<K, V>>>,
@@ -18,14 +20,12 @@ impl<K, V> SkipList<K, V> {
     K: Borrow<Q>,
     Q: Eq + Ord,
   {
-    match self.head.map(|h| unsafe { h.as_ref() }) {
-      Some(head) => {
-        if head.key.borrow().lt(k) {
-          return None;
-        };
-        return head.get(k);
-      }
-      None => None,
+    self.head.map(unsafe_ref).and_then(|head| head.get(k))
+  }
+
+  pub fn iter(&self) -> SkipListIter<'_, K, V> {
+    SkipListIter {
+      current: self.head.map(unsafe_ref),
     }
   }
 }
@@ -43,13 +43,7 @@ impl<K, V> Entry<K, V> {
     K: Borrow<Q>,
     Q: Eq + Ord,
   {
-    match unsafe { self.node.as_ref() }.get(k) {
-      Ok(v) => return Some(v),
-      Err(o) => match o {
-        Some(node) => todo!(),
-        None => todo!(),
-      },
-    }
+    unsafe { self.node.as_ref() }.get(k)
   }
 }
 
@@ -60,16 +54,37 @@ struct Node<K, V> {
   entry: NonNull<Entry<K, V>>,
 }
 impl<K, V> Node<K, V> {
-  fn get<Q: ?Sized>(&self, k: &Q) -> Result<&V, Option<NonNull<Node<K, V>>>>
+  fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
   where
     K: Borrow<Q>,
     Q: Eq + Ord,
   {
     let entry = unsafe { self.entry.as_ref() };
-    match entry.key.borrow().cmp(k) {
-      std::cmp::Ordering::Less => Err(self.bottom),
-      std::cmp::Ordering::Equal => Ok(entry.value.borrow()),
-      std::cmp::Ordering::Greater => Err(self.tail),
-    }
+    let next = match entry.key.borrow().cmp(k) {
+      std::cmp::Ordering::Less => self.bottom,
+      std::cmp::Ordering::Equal => return Some(entry.value.borrow()),
+      std::cmp::Ordering::Greater => self.tail,
+    };
+    next.and_then(|e| unsafe { e.as_ref() }.get(k))
+  }
+}
+
+impl<K, V> Default for SkipList<K, V> {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+pub struct SkipListIter<'a, K, V> {
+  current: Option<&'a Entry<K, V>>,
+}
+impl<'a, K, V> Iterator for SkipListIter<'a, K, V> {
+  type Item = &'a V;
+  fn next(&mut self) -> Option<Self::Item> {
+    self.current.map(|current| {
+      let next = current.value.borrow();
+      self.current = current.tail.map(unsafe_ref);
+      next
+    })
   }
 }
