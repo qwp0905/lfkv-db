@@ -15,3 +15,6 @@ pub use drain::*;
 
 mod timer;
 pub use timer::*;
+
+mod pointer;
+pub use pointer::*;
