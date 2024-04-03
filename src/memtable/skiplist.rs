@@ -4,11 +4,15 @@ use crate::{unsafe_ref, Pointer};
 
 pub struct SkipList<K, V> {
   head: Option<NonNull<Entry<K, V>>>,
+  height: usize,
 }
 
 impl<K, V> SkipList<K, V> {
   pub fn new() -> Self {
-    Self { head: None }
+    Self {
+      head: None,
+      height: Default::default(),
+    }
   }
 
   pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
@@ -26,21 +30,7 @@ impl<K, V> SkipList<K, V> {
     match self.head {
       Some(mut entry) => {}
       None => {
-        let mut ptr = NonNull::from_box(Entry {
-          key,
-          value,
-          head: None,
-          tail: None,
-          node: NonNull::dangling(),
-        });
-
-        ptr.muts().node = NonNull::from_box(Node {
-          head: None,
-          tail: None,
-          bottom: None,
-          entry: ptr,
-        });
-        self.head = Some(ptr);
+        self.head = Some(Entry::new_ptr(key, value));
       }
     }
   }
@@ -60,12 +50,38 @@ struct Entry<K, V> {
   node: NonNull<Node<K, V>>,
 }
 impl<K, V> Entry<K, V> {
+  fn new_ptr(key: K, value: V) -> NonNull<Self> {
+    let mut ptr = NonNull::from_box(Entry {
+      key,
+      value,
+      head: None,
+      tail: None,
+      node: NonNull::dangling(),
+    });
+
+    ptr.muts().node = NonNull::from_box(Node {
+      head: None,
+      tail: None,
+      bottom: None,
+      entry: ptr,
+    });
+    ptr
+  }
+
   fn get<Q: ?Sized>(&self, k: &Q) -> Option<&Entry<K, V>>
   where
     K: Borrow<Q>,
     Q: Eq + Ord,
   {
     self.node.refs().get(k)
+  }
+
+  fn find_slot<Q: ?Sized>(&self, k: &Q)
+  where
+    K: Borrow<Q>,
+    Q: Eq + Ord,
+  {
+    if self.key.borrow().eq(k) {}
   }
 }
 
