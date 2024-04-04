@@ -1,10 +1,8 @@
 use std::{
   borrow::Borrow,
   collections::VecDeque,
-  mem::replace,
   ops::Add,
   ptr::NonNull,
-  sync::atomic::AtomicUsize,
   time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -40,26 +38,9 @@ impl<K, V> SkipListL<K, V> {
     K: Eq + Ord,
   {
     let height = self.random_height();
-    let entry = Entry::new(k, v);
-    let node = self.head.pointers.get_mut(height);
-    loop {
-      if let Some(n) = node {
-        let ce = n.muts().entry.muts();
-        match ce.key.cmp(entry.key.borrow()) {
-          std::cmp::Ordering::Less => break,
-          std::cmp::Ordering::Equal => {
-            replace(&mut ce.value, entry.value);
-            return;
-          }
-          std::cmp::Ordering::Greater => {
-            if let Some(nn) = n.muts().next {
-              *n = nn;
-              continue;
-            };
-            break;
-          }
-        }
-      }
+    let entry = Entry::new(k, v, height);
+    if height.gt(&self.head.len()) {
+      self.head.pointers.push_front(entry.nodes[0].clone());
     }
   }
 
@@ -100,9 +81,9 @@ struct Entry<K, V> {
 }
 
 impl<K, V> Entry<K, V> {
-  fn new(key: K, value: V) -> Self {
+  fn new(key: K, value: V, height: usize) -> Self {
     Self {
-      nodes: Default::default(),
+      nodes: VecDeque::with_capacity(height),
       key,
       value,
       next: None,
