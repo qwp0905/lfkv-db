@@ -39,9 +39,6 @@ impl<K, V> SkipListL<K, V> {
   {
     let height = self.random_height();
     let entry = Entry::new(k, v, height);
-    if height.gt(&self.head.len()) {
-      self.head.pointers.push_front(entry.nodes[0].clone());
-    }
   }
 
   fn random_height(&mut self) -> usize {
@@ -70,6 +67,8 @@ impl<K, V> Head<K, V> {
   fn len(&self) -> usize {
     self.pointers.len()
   }
+
+  fn insert(&mut self, entry: NonNull<Entry<K, V>>) {}
 }
 
 struct Entry<K, V> {
@@ -81,14 +80,26 @@ struct Entry<K, V> {
 }
 
 impl<K, V> Entry<K, V> {
-  fn new(key: K, value: V, height: usize) -> Self {
-    Self {
-      nodes: VecDeque::with_capacity(height),
+  fn new(key: K, value: V, height: usize) -> NonNull<Self> {
+    let mut entry = NonNull::from_box(Self {
+      nodes: VecDeque::new(),
       key,
       value,
       next: None,
       prev: None,
+    });
+    for _ in 0..height {
+      let mut node = Node::new(entry);
+      if let Some(prev) = entry.refs().nodes.back() {
+        node.bottom = Some(prev.clone());
+      }
+      entry.muts().nodes.push_back(NonNull::from_box(node));
     }
+    entry
+  }
+
+  fn height(&self) -> usize {
+    self.nodes.len()
   }
 }
 struct Node<K, V> {
@@ -98,6 +109,15 @@ struct Node<K, V> {
   entry: NonNull<Entry<K, V>>,
 }
 impl<K, V> Node<K, V> {
+  fn new(entry: NonNull<Entry<K, V>>) -> Self {
+    Self {
+      next: None,
+      prev: None,
+      bottom: None,
+      entry,
+    }
+  }
+
   fn find<Q: ?Sized>(&self, k: &Q) -> Option<&Entry<K, V>>
   where
     K: Borrow<Q>,
@@ -110,6 +130,14 @@ impl<K, V> Node<K, V> {
       std::cmp::Ordering::Greater => self.next,
     };
     next.map(unsafe_ref).and_then(|e| e.find(k))
+  }
+
+  fn insert<Q: ?Sized>(&mut self, k: &Q)
+  where
+    K: Borrow<Q>,
+    Q: Eq + Ord,
+  {
+    let entry = self.entry.refs();
   }
 }
 
