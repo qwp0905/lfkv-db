@@ -1,7 +1,7 @@
 use std::{
   borrow::Borrow,
   collections::hash_map::RandomState,
-  hash::{BuildHasher, Hash, Hasher},
+  hash::{BuildHasher, Hash},
   mem::replace,
   ptr::NonNull,
 };
@@ -79,7 +79,7 @@ where
     K: Borrow<Q>,
     Q: Hash + Eq,
   {
-    let h = hash(k, &self.hasher);
+    let h = self.hasher.hash_one(k);
     let eq = equivalent(k);
     self.raw.get_mut(h, eq).map(|e| {
       self.entries.move_back(e);
@@ -92,7 +92,7 @@ where
     K: Borrow<Q>,
     Q: Hash + Eq,
   {
-    let h = hash(k, &self.hasher);
+    let h = self.hasher.hash_one(k);
     let eq = equivalent(k);
     self
       .raw
@@ -105,7 +105,7 @@ where
     K: Borrow<Q>,
     Q: Hash + Eq,
   {
-    let h = hash(k, &self.hasher);
+    let h = self.hasher.hash_one(k);
     let eq = equivalent(k);
     self
       .raw
@@ -114,7 +114,7 @@ where
   }
 
   pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-    let h = hash(&k, &self.hasher);
+    let h = self.hasher.hash_one(&k);
     let eq = equivalent(&k);
     let hasher = make_hasher(&self.hasher);
     unsafe {
@@ -140,7 +140,7 @@ where
     K: Borrow<Q>,
     Q: Hash + Eq,
   {
-    let h = hash(k, &self.hasher);
+    let h = self.hasher.hash_one(k);
     let eq = equivalent(k);
     self.raw.remove_entry(h, eq).map(|ptr| {
       self.entries.remove(ptr);
@@ -155,7 +155,7 @@ where
 
   pub fn pop_old(&mut self) -> Option<(K, V)> {
     if let Some(b) = self.entries.oldest() {
-      let dh = hash(&b.key, &self.hasher);
+      let dh = self.hasher.hash_one(&b.key);
       let deq = equivalent(&b.key);
       return self.raw.remove_entry(dh, deq).map(|ptr| {
         self.entries.remove(ptr);
@@ -168,7 +168,7 @@ where
   }
 
   pub fn entry(&mut self, k: K) -> CacheEntry<'_, K, V, S> {
-    let h = hash(&k, &self.hasher);
+    let h = self.hasher.hash_one(&k);
     let eq = equivalent(&k);
     let hasher = make_hasher(&self.hasher);
 
@@ -198,17 +198,6 @@ where
 {
 }
 
-#[inline]
-fn hash<Q, S>(val: &Q, hasher: &S) -> u64
-where
-  Q: Hash + ?Sized,
-  S: BuildHasher,
-{
-  let mut state = hasher.build_hasher();
-  val.hash(&mut state);
-  state.finish()
-}
-
 #[allow(unused)]
 fn equivalent<'a, K, V, Q: ?Sized + Equivalent<K>>(
   key: &'a Q,
@@ -228,7 +217,7 @@ where
 {
   move |&ptr| {
     let bucket = unsafe { ptr.as_ref() }.element();
-    hash(&bucket.key, hash_builder)
+    hash_builder.hash_one(&bucket.key)
   }
 }
 
