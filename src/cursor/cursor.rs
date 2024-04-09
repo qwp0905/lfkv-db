@@ -185,13 +185,15 @@ impl Cursor {
 }
 impl Drop for Cursor {
   fn drop(&mut self) {
-    if self.committed.rl().eq(&false) {
-      logger::warn(format!(
-        "cursor id {} which is uncommitted will be abort",
-        self.writer.get_id(),
-      ));
-      self.abort().ok();
+    if self.committed.rl().eq(&true) {
+      return;
     }
+
+    logger::warn(format!(
+      "cursor id {} which is uncommitted will be abort",
+      self.writer.get_id(),
+    ));
+    self.abort().ok();
   }
 }
 
