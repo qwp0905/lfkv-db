@@ -1,4 +1,5 @@
 mod file;
+mod std;
 use chrono::{Local, SecondsFormat};
 pub use file::*;
 use serde_json::json;
@@ -9,6 +10,11 @@ pub enum Level {
   Error,
   Warn,
   Debug,
+}
+
+pub enum LoggerType {
+  File,
+  Std,
 }
 
 pub trait Logger {
@@ -31,3 +37,5 @@ pub fn json_fmt<T: ToString>(level: Level, message: T) -> String {
   })
   .to_string()
 }
+
+pub struct LoggerBuilder {}

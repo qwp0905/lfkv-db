@@ -1,23 +1,64 @@
-use std::{io::Write, ops::AddAssign, path::Path, time::Duration};
+use std::{
+  io::Write,
+  ops::AddAssign,
+  path::{Path, PathBuf},
+  time::Duration,
+};
 
 use crate::{
   json_fmt, size, BackgroundThread, BackgroundWork, Error, Level, Logger, Result,
 };
 
-pub struct FileLoggerConfig<T: AsRef<Path>> {
-  pub stdout: T,
-  pub stderr: T,
+pub struct FileLoggerConfig {
+  pub stdout: PathBuf,
+  pub stderr: PathBuf,
   pub interval: Duration,
   pub count: usize,
   pub err_level: Vec<Level>,
 }
+impl FileLoggerConfig {
+  pub fn new() -> Self {
+    Self {
+      stdout: PathBuf::from("out.log"),
+      stderr: PathBuf::from("error.log"),
+      interval: Duration::from_millis(100),
+      count: 100,
+      err_level: vec![Level::Error],
+    }
+  }
+
+  pub fn stdout<T: ToString>(mut self, path: T) -> Self {
+    self.stdout = PathBuf::from(path.to_string());
+    self
+  }
+
+  pub fn stderr<T: ToString>(mut self, path: T) -> Self {
+    self.stderr = PathBuf::from(path.to_string());
+    self
+  }
+
+  pub fn interval(mut self, interval: Duration) -> Self {
+    self.interval = interval;
+    self
+  }
+
+  pub fn err_level(mut self, err_level: Vec<Level>) -> Self {
+    self.err_level = err_level;
+    self
+  }
+
+  pub fn build(self) -> Result<FileLogger> {
+    FileLogger::open(self)
+  }
+}
+
 pub struct FileLogger {
   stdout: BackgroundThread<String, std::io::Result<()>>,
   stderr: BackgroundThread<String, std::io::Result<()>>,
   err_level: Vec<Level>,
 }
 impl FileLogger {
-  pub fn open<T: AsRef<Path>>(config: FileLoggerConfig<T>) -> Result<Self> {
+  fn open(config: FileLoggerConfig) -> Result<Self> {
     let stdout = open_logger(
       "stdout",
       config.stdout,
