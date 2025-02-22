@@ -31,9 +31,7 @@ impl BufferPool {
     let write_c = BackgroundThread::new(
       "bufferpool write",
       max_cache_size.div_ceil(3),
-      BackgroundWork::no_timeout(move |(index, page)| {
-        disk_cloned.batch_write(index, page)
-      }),
+      BackgroundWork::no_timeout(move |(index, page)| disk_cloned.write(index, page)),
     );
 
     let cache = Arc::new(CacheStorage::new(
@@ -78,7 +76,7 @@ impl BufferPool {
                   continue;
                 }
 
-                let mut block: DataBlock = disk_cloned.read_to(index)?;
+                let mut block: DataBlock = disk_cloned.read(index)?.deserialize()?;
                 if block.tx_id.eq(&commit.tx_id) {
                   block.commit_index = commit.commit_index;
                   cache_cloned.insert(index, block);
@@ -128,7 +126,7 @@ impl BufferPool {
       match self.cache.get(&index) {
         Some(block) => block.copy(),
         None => {
-          let block: DataBlock = self.disk.read_to(index)?;
+          let block: DataBlock = self.disk.read(index)?.deserialize()?;
           self.cache.insert(index, block.copy());
           block
         }
@@ -148,7 +146,7 @@ impl BufferPool {
     let undo_index = {
       match self.cache.get(&index) {
         Some(block) => Some(self.rollback.append(block.copy())?),
-        None => match self.disk.read_to::<DataBlock>(index) {
+        None => match self.disk.read(index)?.deserialize::<DataBlock, Error>() {
           Ok(block) => Some(self.rollback.append(block)?),
           Err(Error::NotFound) => None,
           Err(err) => return Err(err),

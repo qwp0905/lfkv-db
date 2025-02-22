@@ -128,6 +128,8 @@ impl RollbackStorage {
       path: config.path.clone(),
       batch_delay: config.fsync_delay,
       batch_size: config.fsync_count,
+      read_threads: None,
+      write_threads: None,
     })?;
     let cache = Default::default();
     let cursor = Default::default();
@@ -185,7 +187,8 @@ impl RollbackStorage {
 
       let log: UndoLog = self
         .disk
-        .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
+        .read(undo_index.rem_euclid(self.config.max_file_size))?
+        .deserialize()?;
       if log.index.ne(&undo_index) {
         return Err(Error::NotFound);
       }
@@ -217,7 +220,7 @@ impl RollbackStorage {
     };
     self
       .disk
-      .batch_write_from(index, &UndoLog::from_data(index, data))?;
+      .write(index, UndoLog::from_data(index, data).serialize()?)?;
     Ok(index)
   }
 
@@ -228,7 +231,7 @@ impl RollbackStorage {
       if let Some(log) = cache.get_mut(&current) {
         if commit.tx_id.eq(&log.tx_id) {
           log.commit_index = commit.commit_index;
-          return self.disk.batch_write_from(current, log);
+          return self.disk.write(current, log.serialize()?);
         }
 
         match log.undo_index {
@@ -242,14 +245,15 @@ impl RollbackStorage {
 
       let mut log: UndoLog = self
         .disk
-        .read_to(undo_index.rem_euclid(self.config.max_file_size))?;
+        .read(undo_index.rem_euclid(self.config.max_file_size))?
+        .deserialize()?;
       if log.index.ne(&undo_index) {
         return Err(Error::NotFound);
       }
 
       if commit.tx_id.eq(&log.tx_id) {
         log.commit_index = commit.commit_index;
-        self.disk.batch_write_from(current, &log)?;
+        self.disk.write(current, log.serialize()?)?;
 
         cache.insert(undo_index, log.clone());
         if cache.len().ge(&self.config.max_cache_size) {

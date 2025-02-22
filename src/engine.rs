@@ -60,6 +60,8 @@ impl Engine {
       path: config.base_path.as_ref().join(DISK_PATH),
       batch_delay: config.disk_batch_delay,
       batch_size: config.disk_batch_size,
+      read_threads: None,
+      write_threads: None,
     })?);
     logger::info(format!("disk created"));
 

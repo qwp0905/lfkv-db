@@ -9,7 +9,7 @@ use std::{
 use crate::{
   buffer::BufferPool,
   disk::{Finder, FinderConfig},
-  logger, size, BackgroundThread, BackgroundWork, DrainAll, Page, Result,
+  logger, size, BackgroundThread, BackgroundWork, DrainAll, Page, Result, Serializable,
   ShortenedRwLock,
 };
 
@@ -48,6 +48,8 @@ impl WriteAheadLog {
       path: config.path.clone(),
       batch_delay: config.group_commit_delay,
       batch_size: config.group_commit_count,
+      read_threads: None,
+      write_threads: None,
     };
     let disk = Arc::new(Finder::open(disk_config)?);
     let buffer = Arc::new(LogBuffer::new());
@@ -115,14 +117,14 @@ impl WriteAheadLog {
 
           if !current.is_available(&record) {
             let entry = current.drain_all();
-            disk.batch_write_from(cursor, &entry)?;
+            disk.write(cursor, entry.serialize()?)?;
             cursor = cursor.add(1).rem_euclid(max_file_size);
           }
           current.append(record);
           l.add_assign(1);
         }
 
-        disk.batch_write_from(cursor, &current)?;
+        disk.write(cursor, current.serialize()?)?;
 
         if checkpoint_count.lt(&counter) {
           checkpoint_c.send(());

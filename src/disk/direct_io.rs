@@ -1,5 +1,9 @@
 use std::fs::{File, OpenOptions};
 use std::io::Result;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::os::unix::fs::FileExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::FileExt;
 use std::path::Path;
 
 pub trait DirectIO {
@@ -30,5 +34,39 @@ impl DirectIO for OpenOptions {
     self
       .custom_flags(winapi::um::winbase::FILE_FLAG_NO_BUFFERING)
       .open(path)
+  }
+}
+
+pub trait PRead {
+  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl PRead for File {
+  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    self.read_at(buf, offset)
+  }
+}
+#[cfg(target_os = "windows")]
+impl PRead for File {
+  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    self.seek_read(buf, offset)
+  }
+}
+
+pub trait PWrite {
+  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize>;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl PWrite for File {
+  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize> {
+    self.write_at(buf, offset)
+  }
+}
+#[cfg(target_os = "windows")]
+impl PWrite for File {
+  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize> {
+    self.seek_write(buf, offset)
   }
 }
