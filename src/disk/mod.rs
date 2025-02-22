@@ -12,3 +12,6 @@ pub use free::*;
 
 mod bloom_filter;
 pub use bloom_filter::*;
+
+mod direct_io;
+pub use direct_io::*;

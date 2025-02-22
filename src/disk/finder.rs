@@ -1,6 +1,6 @@
 use std::{
-  fs::{File, Metadata, OpenOptions},
-  io::{self, Read, Seek, SeekFrom, Write},
+  fs::{File, Metadata},
+  io::{Read, Seek, SeekFrom, Write},
   ops::Mul,
   path::PathBuf,
   sync::Arc,
@@ -10,6 +10,8 @@ use std::{
 use crate::{
   BackgroundThread, BackgroundWork, Error, Page, Result, Serializable, UnwrappedSender,
 };
+
+use super::direct_io;
 
 enum Command<const N: usize> {
   Read(usize),
@@ -28,7 +30,7 @@ impl<const N: usize> Command<N> {
         let mut page = Page::new_empty();
         if let Err(err) = file.read_exact(page.as_mut()) {
           match err.kind() {
-            io::ErrorKind::UnexpectedEof => return Err(Error::NotFound),
+            std::io::ErrorKind::UnexpectedEof => return Err(Error::NotFound),
             _ => return Err(Error::IO(err)),
           }
         };
@@ -73,12 +75,7 @@ pub struct Finder<const N: usize> {
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
-    let mut file = OpenOptions::new()
-      .create(true)
-      .read(true)
-      .write(true)
-      .open(&config.path)
-      .map_err(Error::IO)?;
+    let mut file = direct_io::open(&config.path).map_err(Error::IO)?;
 
     let file_name = config
       .path
