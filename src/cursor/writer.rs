@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-  buffer::BufferPool, wal::WriteAheadLog, Error, Result, Serializable, PAGE_SIZE,
+  buffer::{BufferPool, BLOCK_SIZE},
+  disk::FreeList,
+  wal::WriteAheadLog,
+  Page, Result,
 };
 
 pub struct CursorWriter {
@@ -9,6 +12,7 @@ pub struct CursorWriter {
   last_commit_index: usize,
   wal: Arc<WriteAheadLog>,
   buffer: Arc<BufferPool>,
+  freelist: Arc<FreeList<BLOCK_SIZE>>,
 }
 impl CursorWriter {
   pub fn new(
@@ -16,12 +20,14 @@ impl CursorWriter {
     last_commit_index: usize,
     wal: Arc<WriteAheadLog>,
     buffer: Arc<BufferPool>,
+    freelist: Arc<FreeList<BLOCK_SIZE>>,
   ) -> Self {
     Self {
       tx_id,
       last_commit_index,
       wal,
       buffer,
+      freelist,
     }
   }
 
@@ -29,24 +35,27 @@ impl CursorWriter {
     self.tx_id
   }
 
-  pub fn get<T>(&self, index: usize) -> Result<T>
-  where
-    T: Serializable<Error, PAGE_SIZE>,
-  {
-    let page = self.buffer.get(self.last_commit_index, index)?;
-    page.deserialize()
+  pub fn get(&self, index: usize) -> Result<Page> {
+    self.buffer.get(self.last_commit_index, index)
   }
 
-  pub fn insert<T>(&self, index: usize, value: T) -> Result
-  where
-    T: Serializable<Error, PAGE_SIZE>,
-  {
-    let page = value.serialize()?;
+  pub fn update(&self, index: usize, page: Page) -> Result {
     self.buffer.insert(self.tx_id, index, page.copy())?;
     self.wal.append(self.tx_id, index, page)
   }
 
+  pub fn insert(&self, page: Page) -> Result<usize> {
+    let index = self.freelist.acquire();
+    self.buffer.insert(self.tx_id, index, page.copy())?;
+    self.wal.append(self.tx_id, index, page)?;
+    Ok(index)
+  }
+
   pub fn commit(&self) -> Result {
     self.wal.commit(self.tx_id)
+  }
+
+  pub fn release(&self, index: usize) -> Result {
+    unimplemented!()
   }
 }

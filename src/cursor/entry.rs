@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::ops::{Add, Sub};
 
 use crate::{
   disk::{Page, Serializable},
@@ -6,6 +6,7 @@ use crate::{
 };
 
 pub static MAX_NODE_LEN: usize = 12;
+pub static MIN_NODE_LEN: usize = 6;
 
 #[derive(Debug)]
 pub enum CursorEntry {
@@ -38,6 +39,27 @@ impl CursorEntry {
       },
     }
   }
+
+  pub fn as_leaf(&mut self) -> &mut LeafNode {
+    match self {
+      Self::Leaf(node) => node,
+      _ => unreachable!(),
+    }
+  }
+
+  pub fn as_internal(&mut self) -> &mut InternalNode {
+    match self {
+      Self::Internal(node) => node,
+      _ => unreachable!(),
+    }
+  }
+
+  pub fn top(&self) -> Vec<u8> {
+    match self {
+      Self::Leaf(node) => node.keys[0].0.clone(),
+      Self::Internal(node) => node.keys[0].clone(),
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -54,15 +76,28 @@ impl InternalNode {
     (CursorEntry::Internal(InternalNode { keys, children }), m)
   }
 
-  pub fn add(&mut self, key: Vec<u8>, index: usize) {
-    if let Err(i) = self.keys.binary_search_by(|k| k.cmp(&key)) {
-      let mut keys = self.keys.split_off(i);
-      self.keys.push(key);
-      self.keys.append(keys.as_mut());
-      let mut c = self.children.split_off(i.add(1));
-      self.children.push(index);
-      self.children.append(c.as_mut());
-    };
+  pub fn pop_back(&mut self) -> Option<(Vec<u8>, usize)> {
+    Some((self.keys.pop()?, self.children.pop()?))
+  }
+  pub fn pop_front(&mut self) -> Option<(Vec<u8>, usize)> {
+    if self.len().eq(&0) {
+      return None;
+    }
+    Some((self.keys.remove(0), self.children.remove(0)))
+  }
+  pub fn push_back(&mut self, key: Vec<u8>, child: usize) {
+    self.keys.push(key);
+    self.children.push(child);
+  }
+  pub fn push_front(&mut self, key: Vec<u8>, child: usize) {
+    self.keys.insert(0, key);
+    self.children.insert(0, child);
+  }
+
+  pub fn merge(&mut self, key: Vec<u8>, node: &mut InternalNode) {
+    self.keys.push(key);
+    self.keys.append(node.keys.as_mut());
+    self.children.append(node.children.as_mut());
   }
 
   pub fn len(&self) -> usize {
@@ -76,6 +111,24 @@ impl InternalNode {
       .map(|i| i.add(1))
       .unwrap_or_else(|i| i);
     self.children[i]
+  }
+
+  pub fn find_family(
+    &self,
+    key: &Vec<u8>,
+  ) -> ((usize, usize), Option<usize>, Option<usize>) {
+    match self.keys.binary_search_by(|k| k.cmp(key)) {
+      Ok(i) => (
+        (i, self.children[i.add(1)]),
+        self.children.get(i).copied(),
+        self.children.get(i.add(2)).copied(),
+      ),
+      Err(i) => (
+        (i.sub(1), self.children[i]),
+        self.children.get(i.sub(1)).copied(),
+        self.children.get(i.add(1)).copied(),
+      ),
+    }
   }
 }
 
@@ -128,12 +181,15 @@ impl LeafNode {
     }
   }
 
-  pub fn split(&mut self, current: usize, added: usize) -> (CursorEntry, Vec<u8>) {
+  pub fn top(&self) -> Vec<u8> {
+    self.keys[0].0.clone()
+  }
+
+  pub fn split(&mut self, current: usize) -> (CursorEntry, Vec<u8>) {
     let c = self.keys.len().div_ceil(2);
     let keys = self.keys.split_off(c);
     let m = keys[0].0.clone();
     let next = self.next.take();
-    self.next = Some(added);
     (
       CursorEntry::Leaf(LeafNode {
         keys,
@@ -144,14 +200,20 @@ impl LeafNode {
     )
   }
 
-  pub fn add(&mut self, key: Vec<u8>, index: usize) -> Option<Vec<u8>> {
-    if let Err(i) = self.keys.binary_search_by(|(k, _)| k.cmp(&key)) {
-      let mut keys = self.keys.split_off(i);
-      self.keys.push((key.to_owned(), index));
-      self.keys.append(keys.as_mut());
-      return i.eq(&0).then(|| key);
-    };
+  pub fn set_next(&mut self, next: usize) {
+    self.next = Some(next);
+  }
+
+  pub fn delete(&mut self, key: &Vec<u8>) -> Option<usize> {
+    if let Ok(i) = self.keys.binary_search_by(|(k, _)| k.cmp(key)) {
+      return Some(self.keys.remove(i).1);
+    }
     None
+  }
+
+  pub fn merge(&mut self, node: &mut LeafNode) {
+    self.keys.append(node.keys.as_mut());
+    self.next = node.next;
   }
 
   pub fn len(&self) -> usize {
@@ -164,6 +226,22 @@ impl LeafNode {
       .binary_search_by(|(k, _)| k.cmp(key))
       .ok()
       .map(|i| self.keys[i].1)
+  }
+
+  pub fn pop_front(&mut self) -> Option<(Vec<u8>, usize)> {
+    if self.len().eq(&0) {
+      return None;
+    }
+    Some(self.keys.remove(0))
+  }
+  pub fn pop_back(&mut self) -> Option<(Vec<u8>, usize)> {
+    self.keys.pop()
+  }
+  pub fn push_front(&mut self, key: Vec<u8>, index: usize) {
+    self.keys.insert(0, (key, index));
+  }
+  pub fn push_back(&mut self, key: Vec<u8>, index: usize) {
+    self.keys.push((key, index));
   }
 }
 impl Serializable for LeafNode {

@@ -27,7 +27,8 @@ fn main() {
     v.push(rx);
     std::thread::spawn(move || {
       let r = e.new_transaction().and_then(|t| {
-        t.insert(format!("123{}", i).as_bytes().to_vec(), T { i })?;
+        let vec = format!("123{}", i).as_bytes().to_vec();
+        t.insert(vec.to_vec(), vec)?;
         t.commit()?;
         Ok(())
       });
@@ -44,29 +45,8 @@ fn main() {
   engine
     .new_transaction()
     .and_then(|c| {
-      println!("{:?}", c.get::<T>(b"1230".to_vec().as_ref()).unwrap());
+      println!("{:?}", c.get(b"1230".to_vec().as_ref()).unwrap());
       c.commit()
     })
     .unwrap();
-}
-
-#[derive(Debug)]
-struct T {
-  i: usize,
-}
-
-impl lfkv_db::Serializable for T {
-  fn deserialize(
-    value: &lfkv_db::Page,
-  ) -> std::prelude::v1::Result<Self, lfkv_db::Error> {
-    let i = value.scanner().read_usize()?;
-    Ok(T { i })
-  }
-
-  fn serialize(&self) -> std::prelude::v1::Result<lfkv_db::Page, lfkv_db::Error> {
-    let mut p = lfkv_db::Page::new();
-    let mut wt = p.writer();
-    wt.write(&self.i.to_be_bytes())?;
-    Ok(p)
-  }
 }
