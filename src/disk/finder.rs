@@ -1,5 +1,5 @@
 use std::{
-  fs::{File, Metadata},
+  fs::{File, Metadata, OpenOptions},
   io::{Read, Seek, SeekFrom, Write},
   ops::Mul,
   path::PathBuf,
@@ -11,7 +11,7 @@ use crate::{
   BackgroundThread, BackgroundWork, Error, Page, Result, Serializable, UnwrappedSender,
 };
 
-use super::direct_io;
+use super::DirectIO;
 
 enum Command<const N: usize> {
   Read(usize),
@@ -75,7 +75,12 @@ pub struct Finder<const N: usize> {
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
-    let mut file = direct_io::open(&config.path).map_err(Error::IO)?;
+    let mut file = OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .direct_io(&config.path)
+      .map_err(Error::IO)?;
 
     let file_name = config
       .path
