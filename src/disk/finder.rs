@@ -10,7 +10,7 @@ use crate::{
   BackgroundThread, BackgroundWork, Error, Page, Result, ShortenedMutex, UnwrappedSender,
 };
 
-use super::{DirectIO, PRead, PWrite};
+use super::{DirectIO, OffsetRead, OffsetWrite};
 
 const DEFAULT_READ_THREADS: usize = 1;
 const DEFAULT_WRITE_THREADS: usize = 1;
@@ -56,7 +56,7 @@ impl<const N: usize> Finder<N> {
         N,
         BackgroundWork::no_timeout(move |index: usize| {
           let mut page = Page::new_empty();
-          rf.p_read(page.as_mut(), index.mul(N) as u64)?;
+          rf.pread(page.as_mut(), index.mul(N) as u64)?;
           Ok(page)
         }),
       );
@@ -75,7 +75,7 @@ impl<const N: usize> Finder<N> {
           config.batch_delay,
           move |v| {
             if let Some(((index, page), done)) = v {
-              if let Err(err) = wf.p_write(page.as_ref(), index.mul(N) as u64) {
+              if let Err(err) = wf.pwrite(page.as_ref(), index.mul(N) as u64) {
                 done.must_send(Err(err));
                 return false;
               }

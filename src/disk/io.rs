@@ -37,36 +37,36 @@ impl DirectIO for OpenOptions {
   }
 }
 
-pub trait PRead {
-  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
+pub trait OffsetRead {
+  fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-impl PRead for File {
-  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+impl OffsetRead for File {
+  fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
     self.read_at(buf, offset)
   }
 }
 #[cfg(target_os = "windows")]
-impl PRead for File {
-  fn p_read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+impl OffsetRead for File {
+  fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
     self.seek_read(buf, offset)
   }
 }
 
-pub trait PWrite {
-  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize>;
+pub trait OffsetWrite {
+  fn pwrite(&self, buf: &[u8], offset: u64) -> Result<usize>;
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-impl PWrite for File {
-  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize> {
+impl OffsetWrite for File {
+  fn pwrite(&self, buf: &[u8], offset: u64) -> Result<usize> {
     self.write_at(buf, offset)
   }
 }
 #[cfg(target_os = "windows")]
-impl PWrite for File {
-  fn p_write(&self, buf: &[u8], offset: u64) -> Result<usize> {
+impl OffsetWrite for File {
+  fn pwrite(&self, buf: &[u8], offset: u64) -> Result<usize> {
     self.seek_write(buf, offset)
   }
 }
