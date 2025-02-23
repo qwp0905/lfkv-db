@@ -126,6 +126,7 @@ impl CopyableFile {
     self.0.metadata()
   }
 
+  #[allow(unused)]
   pub fn append(&self, buf: &[u8]) -> Result<usize> {
     let _ = FLock::new(&self.0)?;
     let len = self.0.metadata()?.len();
