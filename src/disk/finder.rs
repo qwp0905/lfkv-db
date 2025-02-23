@@ -10,7 +10,7 @@ use crate::{
   BackgroundThread, BackgroundWork, Error, Page, Result, ShortenedMutex, UnwrappedSender,
 };
 
-use super::{DirectIO, OffsetRead, OffsetWrite};
+use super::DirectIO;
 
 const DEFAULT_READ_THREADS: usize = 1;
 const DEFAULT_WRITE_THREADS: usize = 1;
@@ -38,19 +38,18 @@ impl<const N: usize> Finder<N> {
       .write(true)
       .create(true)
       .direct_io(&config.path)
-      .map(Arc::new)
       .map_err(Error::IO)?;
 
-    let ff = file.clone();
+    let ff = file.copy().map_err(Error::IO)?;
     let flush_th = Arc::new(BackgroundThread::new(
       format!("flush {}", config.path.to_string_lossy()),
       N,
-      BackgroundWork::no_timeout(move |_| ff.sync_all()),
+      BackgroundWork::no_timeout(move |_| ff.fsync()),
     ));
 
     let mut read_ths = vec![];
     for i in 0..config.read_threads.unwrap_or(DEFAULT_READ_THREADS) {
-      let rf = file.clone();
+      let rf = file.copy().map_err(Error::IO)?;
       let th = BackgroundThread::new(
         format!("read {} {}", config.path.to_string_lossy(), i),
         N,
@@ -66,7 +65,7 @@ impl<const N: usize> Finder<N> {
     let mut write_ths = vec![];
     for i in 0..config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS) {
       let fc = flush_th.clone();
-      let wf = file.clone();
+      let wf = file.copy().map_err(Error::IO)?;
       let mut wait = Vec::with_capacity(config.batch_size);
       let th = BackgroundThread::new(
         format!("write {} {}", config.path.to_string_lossy(), i),
@@ -98,7 +97,7 @@ impl<const N: usize> Finder<N> {
       write_ths.push(th);
     }
 
-    let mf = file.clone();
+    let mf = file.copy().map_err(Error::IO)?;
     let meta_th = BackgroundThread::new(
       format!("meta {}", config.path.to_string_lossy()),
       1,

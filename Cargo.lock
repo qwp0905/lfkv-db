@@ -190,6 +190,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "thiserror",
+ "winapi",
 ]
 
 [[package]]
