@@ -2,13 +2,14 @@ use std::{
   fs::{Metadata, OpenOptions},
   ops::{Add, Mul},
   path::PathBuf,
-  sync::{Arc, Mutex},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
   time::Duration,
 };
 
-use crate::{
-  BackgroundThread, BackgroundWork, Error, Page, Result, ShortenedMutex, UnwrappedSender,
-};
+use crate::{BackgroundThread, BackgroundWork, Error, Page, Result, UnwrappedSender};
 
 use super::DirectIO;
 
@@ -25,9 +26,9 @@ pub struct FinderConfig {
 
 pub struct Finder<const N: usize> {
   read_ths: Vec<BackgroundThread<usize, std::io::Result<Page<N>>>>,
-  read_c: Mutex<usize>,
+  read_c: AtomicUsize,
   write_ths: Vec<BackgroundThread<(usize, Page<N>), std::io::Result<()>>>,
-  write_c: Mutex<usize>,
+  write_c: AtomicUsize,
   flush_th: Arc<BackgroundThread<(), std::io::Result<()>>>,
   meta_th: BackgroundThread<(), std::io::Result<Metadata>>,
 }
@@ -106,31 +107,31 @@ impl<const N: usize> Finder<N> {
 
     Ok(Self {
       read_ths,
-      read_c: Mutex::new(0),
+      read_c: AtomicUsize::new(0),
       write_ths,
-      write_c: Mutex::new(0),
+      write_c: AtomicUsize::new(0),
       flush_th,
       meta_th,
     })
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {
-    let i = {
-      let mut c = self.read_c.l();
-      let i = *c;
-      *c = i.add(1).rem_euclid(self.read_ths.len());
-      i
-    };
+    let i = self
+      .read_c
+      .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+        Some(v.add(1).rem_euclid(self.read_ths.len()))
+      })
+      .unwrap();
     self.read_ths[i].send_await(index).map_err(Error::IO)
   }
 
   pub fn write(&self, index: usize, page: Page<N>) -> Result {
-    let i = {
-      let mut c = self.write_c.l();
-      let i = *c;
-      *c = i.add(1).rem_euclid(self.write_ths.len());
-      i
-    };
+    let i = self
+      .write_c
+      .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+        Some(v.add(1).rem_euclid(self.write_ths.len()))
+      })
+      .unwrap();
     self.write_ths[i]
       .send_await((index, page))
       .map_err(Error::IO)
