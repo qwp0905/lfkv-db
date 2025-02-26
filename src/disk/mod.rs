@@ -15,3 +15,6 @@ pub use bloom_filter::*;
 
 mod io;
 pub use io::*;
+
+mod append;
+pub use append::*;

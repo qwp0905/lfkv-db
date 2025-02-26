@@ -22,6 +22,9 @@ pub enum Error {
 
   #[error("engine unavailable")]
   EngineUnavailable,
+
+  #[error("memory pool empty")]
+  MemoryPoolEmpty,
 }
 impl Error {
   pub fn unknown<E>(e: E) -> Error
