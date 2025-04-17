@@ -1,15 +1,16 @@
 use std::{
   fs::{Metadata, OpenOptions},
-  ops::{Add, Mul},
+  ops::Mul,
   path::PathBuf,
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::Arc,
   time::Duration,
 };
 
-use crate::{BackgroundThread, BackgroundWork, Error, Page, Result, UnwrappedSender};
+use crossbeam::queue::ArrayQueue;
+
+use crate::{
+  Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, UnwrappedSender,
+};
 
 use super::DirectIO;
 
@@ -25,12 +26,11 @@ pub struct FinderConfig {
 }
 
 pub struct Finder<const N: usize> {
-  read_ths: Vec<BackgroundThread<usize, std::io::Result<Page<N>>>>,
-  read_c: AtomicUsize,
-  write_ths: Vec<BackgroundThread<(usize, Page<N>), std::io::Result<()>>>,
-  write_c: AtomicUsize,
-  flush_th: Arc<BackgroundThread<(), std::io::Result<()>>>,
-  meta_th: BackgroundThread<(), std::io::Result<Metadata>>,
+  read_ths: Arc<SharedWorkThread<usize, std::io::Result<Page<N>>>>,
+  write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
+  batch_th: Arc<SafeWorkThread<(usize, Page<N>), std::io::Result<()>>>,
+  flush_th: Arc<SafeWorkThread<(), std::io::Result<()>>>,
+  meta_th: SafeWorkThread<(), std::io::Result<Metadata>>,
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
@@ -42,99 +42,101 @@ impl<const N: usize> Finder<N> {
       .map_err(Error::IO)?;
 
     let ff = file.copy().map_err(Error::IO)?;
-    let flush_th = Arc::new(BackgroundThread::new(
+    let flush_th = Arc::new(SafeWorkThread::new(
       format!("flush {}", config.path.to_string_lossy()),
       N,
-      BackgroundWork::no_timeout(move |_| ff.fsync()),
+      SafeWork::no_timeout(move |_| ff.fsync()),
     ));
 
-    let mut read_ths = vec![];
-    for i in 0..config.read_threads.unwrap_or(DEFAULT_READ_THREADS) {
-      let rf = file.copy().map_err(Error::IO)?;
-      let th = BackgroundThread::new(
-        format!("read {} {}", config.path.to_string_lossy(), i),
-        N,
-        BackgroundWork::no_timeout(move |index: usize| {
-          let mut page = Page::new_empty();
-          rf.pread(page.as_mut(), index.mul(N) as u64)?;
-          Ok(page)
-        }),
-      );
-      read_ths.push(th);
-    }
+    let read_ths = SharedWorkThread::build(
+      format!("read {}", config.path.to_string_lossy()),
+      N,
+      config.read_threads.unwrap_or(DEFAULT_READ_THREADS),
+      |_| {
+        file
+          .copy()
+          .map(|rf| {
+            SafeWork::no_timeout(move |index: usize| {
+              let mut page = Page::new_empty();
+              rf.pread(page.as_mut(), index.mul(N) as u64)?;
+              Ok(page)
+            })
+          })
+          .map_err(Error::IO)
+      },
+    )?;
 
-    let mut write_ths = vec![];
-    for i in 0..config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS) {
-      let fc = flush_th.clone();
-      let wf = file.copy().map_err(Error::IO)?;
-      let mut wait = Vec::with_capacity(config.batch_size);
-      let th = BackgroundThread::new(
-        format!("write {} {}", config.path.to_string_lossy(), i),
-        N,
-        BackgroundWork::<(usize, Page<N>), std::io::Result<()>>::with_timer(
-          config.batch_delay,
-          move |v| {
-            if let Some(((index, page), done)) = v {
-              if let Err(err) = wf.pwrite(page.as_ref(), index.mul(N) as u64) {
-                done.must_send(Err(err));
-                return false;
-              }
+    let write_ths = SharedWorkThread::build(
+      format!("read {}", config.path.to_string_lossy()),
+      N,
+      config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS),
+      |_| {
+        file
+          .copy()
+          .map(|wf| {
+            SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
+              wf.pwrite(page.as_ref(), index.mul(N) as u64)?;
+              Ok(())
+            })
+          })
+          .map_err(Error::IO)
+      },
+    )?;
 
-              wait.push(done);
-              if wait.len().lt(&config.batch_size) {
-                return false;
-              }
-            }
+    let write_ths = Arc::new(write_ths);
+    let wc = write_ths.clone();
+    let fc = flush_th.clone();
+    let wait = ArrayQueue::new(config.batch_size);
 
-            if let Err(_) = fc.send_await(()) {
-              return false;
-            }
+    let batch_th = Arc::new(SafeWorkThread::new(
+      format!("batch {}", config.path.to_string_lossy()),
+      N,
+      SafeWork::with_timer(config.batch_delay, move |v| {
+        if let Some(((index, page), done)) = v {
+          if let Err(err) = wc.send_await((index, page)) {
+            done.must_send(Err(err));
+            return false;
+          }
 
-            wait.drain(..).for_each(|done| done.must_send(Ok(())));
-            true
-          },
-        ),
-      );
-      write_ths.push(th);
-    }
+          let _ = wait.push(done);
+          if !wait.is_full() {
+            return false;
+          }
+
+          if let Err(_) = fc.send_await(()) {
+            return false;
+          }
+
+          while let Some(done) = wait.pop() {
+            done.must_send(Ok(()));
+          }
+        }
+        true
+      }),
+    ));
 
     let mf = file.copy().map_err(Error::IO)?;
-    let meta_th = BackgroundThread::new(
+    let meta_th = SafeWorkThread::new(
       format!("meta {}", config.path.to_string_lossy()),
       1,
-      BackgroundWork::no_timeout(move |_| mf.metadata()),
+      SafeWork::no_timeout(move |_| mf.metadata()),
     );
 
     Ok(Self {
-      read_ths,
-      read_c: AtomicUsize::new(0),
+      read_ths: Arc::new(read_ths),
       write_ths,
-      write_c: AtomicUsize::new(0),
+      batch_th,
       flush_th,
       meta_th,
     })
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {
-    let i = self
-      .read_c
-      .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-        Some(v.add(1).rem_euclid(self.read_ths.len()))
-      })
-      .unwrap();
-    self.read_ths[i].send_await(index).map_err(Error::IO)
+    self.read_ths.send_await(index).map_err(Error::IO)
   }
 
   pub fn write(&self, index: usize, page: Page<N>) -> Result {
-    let i = self
-      .write_c
-      .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-        Some(v.add(1).rem_euclid(self.write_ths.len()))
-      })
-      .unwrap();
-    self.write_ths[i]
-      .send_await((index, page))
-      .map_err(Error::IO)
+    self.batch_th.send_await((index, page)).map_err(Error::IO)
   }
 
   pub fn fsync(&self) -> Result {
@@ -142,13 +144,7 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn close(&self) {
-    for th in self.read_ths.iter() {
-      th.close();
-    }
-    for th in self.write_ths.iter() {
-      th.close();
-    }
-    self.flush_th.close();
+    todo!("as immutable")
   }
 
   pub fn len(&self) -> Result<usize> {
