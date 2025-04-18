@@ -1,6 +1,6 @@
 use std::{
   fs::{Metadata, OpenOptions},
-  ops::Mul,
+  ops::{Div, Mul},
   path::PathBuf,
   sync::Arc,
   time::Duration,
@@ -53,33 +53,28 @@ impl<const N: usize> Finder<N> {
       N,
       config.read_threads.unwrap_or(DEFAULT_READ_THREADS),
       |_| {
-        file
-          .copy()
-          .map(|rf| {
-            SafeWork::no_timeout(move |index: usize| {
-              let mut page = Page::new_empty();
-              rf.pread(page.as_mut(), index.mul(N) as u64)?;
-              Ok(page)
-            })
-          })
-          .map_err(Error::IO)
+        let fd = file.copy().map_err(Error::IO)?;
+        let work = SafeWork::no_timeout(move |index: usize| {
+          let mut page = Page::new_empty();
+          fd.pread(page.as_mut(), index.mul(N) as u64)?;
+          Ok(page)
+        });
+        Ok(work)
       },
     )?;
+    let read_ths = Arc::new(read_ths);
 
     let write_ths = SharedWorkThread::build(
       format!("read {}", config.path.to_string_lossy()),
       N,
       config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS),
       |_| {
-        file
-          .copy()
-          .map(|wf| {
-            SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
-              wf.pwrite(page.as_ref(), index.mul(N) as u64)?;
-              Ok(())
-            })
-          })
-          .map_err(Error::IO)
+        let fd = file.copy().map_err(Error::IO)?;
+        let work = SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
+          fd.pwrite(page.as_ref(), index.mul(N) as u64)?;
+          Ok(())
+        });
+        Ok(work)
       },
     )?;
 
@@ -123,7 +118,7 @@ impl<const N: usize> Finder<N> {
     );
 
     Ok(Self {
-      read_ths: Arc::new(read_ths),
+      read_ths,
       write_ths,
       batch_th,
       flush_th,
@@ -144,11 +139,14 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn close(&self) {
-    todo!("as immutable")
+    self.batch_th.finalize();
+    self.write_ths.close();
+    self.read_ths.close();
+    self.flush_th.close();
   }
 
   pub fn len(&self) -> Result<usize> {
     let meta = self.meta_th.send_await(()).map_err(Error::IO)?;
-    Ok(meta.len() as usize / N)
+    Ok((meta.len() as usize).div(N))
   }
 }

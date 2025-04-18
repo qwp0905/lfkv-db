@@ -29,6 +29,12 @@ where
   }
 }
 
+pub enum Context<T, R> {
+  Work((T, Sender<R>)),
+  Finalize,
+  Term,
+}
+
 pub enum SafeWork<T, R> {
   NoTimeout(Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>),
   WithTimeout(
@@ -72,10 +78,10 @@ where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
-  pub fn run(&self, rx: Receiver<(T, Sender<R>)>) {
+  pub fn run(&self, rx: Receiver<Context<T, R>>) {
     match self {
       SafeWork::NoTimeout(work) => {
-        while let Ok((v, done)) = rx.recv() {
+        while let Ok(Context::Work((v, done))) = rx.recv() {
           work
             .as_ref()
             .safe_call(v)
@@ -85,13 +91,22 @@ where
       }
       SafeWork::WithTimeout(timeout, work) => loop {
         match rx.recv_timeout(*timeout) {
-          Ok((v, done)) => {
+          Ok(Context::Work((v, done))) => {
             work
               .as_ref()
               .safe_call(Some(v))
               .map(|r| done.must_send(r))
               .unwrap_or_else(handle_panic);
           }
+          Ok(Context::Finalize) => {
+            work
+              .as_ref()
+              .safe_call(None)
+              .map(|_| ())
+              .unwrap_or_else(handle_panic);
+            break;
+          }
+          Ok(Context::Term) => break,
           Err(RecvTimeoutError::Timeout) => {
             work
               .as_ref()
@@ -106,7 +121,16 @@ where
         let mut timer = duration.as_timer();
         loop {
           let arg = match rx.recv_timeout(timer.get_remain()) {
-            Ok(v) => Some(v),
+            Ok(Context::Work((v, done))) => Some((v, done)),
+            Ok(Context::Finalize) => {
+              work
+                .as_ref()
+                .safe_call(None)
+                .map(|_| ())
+                .unwrap_or_else(handle_panic);
+              break;
+            }
+            Ok(Context::Term) => break,
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,
           };
@@ -132,57 +156,35 @@ where
   logger::error(format!("panic in safe work {:?}", err))
 }
 
-pub struct SafeWorkThread<T, R> {
-  thread: JoinHandle<()>,
-  channel: Sender<(T, Sender<R>)>,
-}
-impl<T, R> SafeWorkThread<T, R>
-where
-  T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
-{
-  pub fn new<S: ToString>(name: S, size: usize, work: SafeWork<T, R>) -> Self {
-    let work = Arc::new(work);
-    let (tx, rx) = unbounded();
-    let thread = std::thread::Builder::new()
-      .name(name.to_string())
-      .stack_size(size)
-      .spawn(move || work.as_ref().run(rx))
-      .unwrap();
-    Self {
-      thread,
-      channel: tx,
-    }
-  }
-
-  #[inline]
-  pub fn send(&self, v: T) -> Receiver<R> {
-    let (done_t, done_r) = unbounded();
-    self.channel.must_send((v, done_t));
-    done_r
-  }
-
-  pub fn send_await(&self, v: T) -> R {
-    self.send(v).must_recv()
-  }
-
-  pub fn close(self) {
-    drop(self.channel);
-    if let Err(err) = self.thread.join() {
-      logger::error(format!("{:?}", err));
-    };
-  }
-}
-
 pub struct SharedWorkThread<T, R> {
   threads: ArrayQueue<JoinHandle<()>>,
-  channel: Sender<(T, Sender<R>)>,
+  channel: Sender<Context<T, R>>,
 }
 impl<T, R> SharedWorkThread<T, R>
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
+  fn new<S: ToString>(name: S, size: usize, count: usize, work: SafeWork<T, R>) -> Self {
+    let (tx, rx) = unbounded();
+    let threads = ArrayQueue::new(count);
+    let work = Arc::new(work);
+    for i in 0..count {
+      let work = work.clone();
+      let rx = rx.clone();
+      let th = std::thread::Builder::new()
+        .name(format!("{} {}", name.to_string(), i))
+        .stack_size(size)
+        .spawn(move || work.as_ref().run(rx))
+        .unwrap();
+      let _ = threads.push(th);
+    }
+    Self {
+      threads,
+      channel: tx,
+    }
+  }
+
   pub fn build<S: ToString, F, E>(
     name: S,
     size: usize,
@@ -213,22 +215,71 @@ where
   #[inline]
   pub fn send(&self, v: T) -> Receiver<R> {
     let (done_t, done_r) = unbounded();
-    self.channel.must_send((v, done_t));
+    self.channel.must_send(Context::Work((v, done_t)));
     done_r
   }
   pub fn send_await(&self, v: T) -> R {
     self.send(v).must_recv()
   }
 
-  pub fn close(self) {
-    drop(self.channel);
-    for th in self.threads {
+  #[inline]
+  fn join(&self) {
+    while let Some(th) = self.threads.pop() {
       if let Err(err) = th.join() {
         logger::error(format!("{:?}", err));
-      };
+      }
     }
+  }
+
+  pub fn close(&self) {
+    self.channel.must_send(Context::Term);
+    self.join();
+  }
+
+  pub fn finalize(&self) {
+    self.channel.must_send(Context::Finalize);
+    self.join();
   }
 }
 
 impl<T, R> RefUnwindSafe for SafeWorkThread<T, R> {}
 impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
+
+pub struct SafeWorkThread<T, R>(SharedWorkThread<T, R>);
+impl<T, R> SafeWorkThread<T, R>
+where
+  T: Send + UnwindSafe + 'static,
+  R: Send + 'static,
+{
+  pub fn new<S: ToString>(name: S, size: usize, work: SafeWork<T, R>) -> Self {
+    Self(SharedWorkThread::new(name, size, 1, work))
+  }
+
+  pub fn build<S: ToString, F, E>(
+    name: S,
+    size: usize,
+    count: usize,
+    build: F,
+  ) -> std::result::Result<Self, E>
+  where
+    F: Fn(usize) -> std::result::Result<SafeWork<T, R>, E>,
+  {
+    Ok(Self(SharedWorkThread::build(name, size, count, build)?))
+  }
+
+  pub fn send(&self, v: T) -> Receiver<R> {
+    self.0.send(v)
+  }
+
+  pub fn send_await(&self, v: T) -> R {
+    self.0.send_await(v)
+  }
+
+  pub fn close(&self) {
+    self.0.close();
+  }
+
+  pub fn finalize(&self) {
+    self.0.finalize();
+  }
+}
