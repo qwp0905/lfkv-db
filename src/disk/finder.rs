@@ -12,7 +12,7 @@ use crate::{
   Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, UnwrappedSender,
 };
 
-use super::DirectIO;
+use super::{CopyableFile, Pread, Pwrite};
 
 const DEFAULT_READ_THREADS: usize = 1;
 const DEFAULT_WRITE_THREADS: usize = 1;
@@ -38,14 +38,14 @@ impl<const N: usize> Finder<N> {
       .read(true)
       .write(true)
       .create(true)
-      .direct_io(&config.path)
+      .open(&config.path)
       .map_err(Error::IO)?;
 
     let ff = file.copy().map_err(Error::IO)?;
     let flush_th = Arc::new(SafeWorkThread::new(
       format!("flush {}", config.path.to_string_lossy()),
       N,
-      SafeWork::no_timeout(move |_| ff.fsync()),
+      SafeWork::no_timeout(move |_| ff.sync_all()),
     ));
 
     let read_ths = SharedWorkThread::build(
