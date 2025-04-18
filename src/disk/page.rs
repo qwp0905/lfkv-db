@@ -14,15 +14,8 @@ pub struct Page<const T: usize = PAGE_SIZE> {
 }
 
 impl<const T: usize> Page<T> {
-  pub fn new_empty() -> Self {
-    let bytes = [0; T];
-    Self { bytes }
-  }
-
   pub fn new() -> Self {
-    let mut bytes = [0; T];
-    bytes[0] = 1;
-    Self { bytes }
+    Self { bytes: [0; T] }
   }
 
   fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
@@ -31,7 +24,7 @@ impl<const T: usize> Page<T> {
   }
 
   pub fn copy(&self) -> Self {
-    let mut p = Self::new_empty();
+    let mut p = Self::new();
     p.as_mut().copy_from_slice(self.as_ref());
     p
   }
@@ -42,14 +35,6 @@ impl<const T: usize> Page<T> {
 
   pub fn writer(&mut self) -> PageWriter<'_, T> {
     PageWriter::new(&mut self.bytes)
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.bytes[0].eq(&0)
-  }
-
-  pub fn set_empty(&mut self) {
-    self.bytes[0] = 0
   }
 }
 
@@ -94,7 +79,7 @@ impl<const T: usize> From<Page<T>> for Vec<u8> {
 }
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
-    let mut page = Page::new_empty();
+    let mut page = Page::new();
     page.as_mut().copy_from_slice(value);
     page
   }
@@ -106,7 +91,7 @@ pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
 }
 impl<'a, const T: usize> PageScanner<'a, T> {
   fn new(inner: &'a [u8; T]) -> Self {
-    Self { inner, offset: 1 }
+    Self { inner, offset: 0 }
   }
 
   pub fn read(&mut self) -> Result<u8> {
@@ -145,7 +130,7 @@ pub struct PageWriter<'a, const T: usize = PAGE_SIZE> {
 }
 impl<'a, const T: usize> PageWriter<'a, T> {
   fn new(inner: &'a mut [u8; T]) -> Self {
-    Self { inner, offset: 1 }
+    Self { inner, offset: 0 }
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
@@ -167,17 +152,17 @@ mod tests {
   use crate::{Page, PAGE_SIZE};
 
   #[test]
-  fn _1() {
+  fn test_writer() {
     let mut page = Page::<PAGE_SIZE>::new();
     let mut wt = page.writer();
     wt.write(&[1, 2, 3, 5, 6]).unwrap();
 
     assert_eq!(page.bytes[0], 1);
-    assert_eq!(page.bytes[1], 1);
-    assert_eq!(page.bytes[2], 2);
-    assert_eq!(page.bytes[3], 3);
-    assert_eq!(page.bytes[4], 5);
-    assert_eq!(page.bytes[5], 6);
+    assert_eq!(page.bytes[1], 2);
+    assert_eq!(page.bytes[2], 3);
+    assert_eq!(page.bytes[3], 5);
+    assert_eq!(page.bytes[4], 6);
+    assert_eq!(page.bytes[5], 0);
     assert_eq!(page.bytes[6], 0);
   }
 }

@@ -55,7 +55,7 @@ impl<const N: usize> Finder<N> {
       |_| {
         let fd = file.copy().map_err(Error::IO)?;
         let work = SafeWork::no_timeout(move |index: usize| {
-          let mut page = Page::new_empty();
+          let mut page = Page::new();
           fd.pread(page.as_mut(), index.mul(N) as u64)?;
           Ok(page)
         });

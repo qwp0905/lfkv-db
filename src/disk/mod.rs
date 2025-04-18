@@ -12,6 +12,3 @@ pub use free::*;
 
 mod io;
 pub use io::*;
-
-mod append;
-pub use append::*;
