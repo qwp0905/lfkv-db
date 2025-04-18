@@ -151,6 +151,6 @@ impl FLock {
 }
 impl Drop for FLock {
   fn drop(&mut self) {
-    self.release().ok();
+    let _ = self.release();
   }
 }
