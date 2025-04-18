@@ -44,3 +44,15 @@ impl<T> DroppableReceiver for Receiver<T> {
     self.recv().ok();
   }
 }
+
+pub trait SendBy
+where
+  Self: Sized,
+{
+  fn send_by(self, sender: &Sender<Self>);
+}
+impl<T> SendBy for T {
+  fn send_by(self, sender: &Sender<Self>) {
+    sender.send(self).unwrap();
+  }
+}

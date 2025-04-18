@@ -25,6 +25,12 @@ pub enum Error {
 
   #[error("memory pool empty")]
   MemoryPoolEmpty,
+
+  #[error("worker closed")]
+  WorkerClosed,
+
+  #[error("panic")]
+  Panic(Box<dyn std::any::Any + Send>),
 }
 impl Error {
   pub fn unknown<E>(e: E) -> Error

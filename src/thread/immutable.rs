@@ -8,11 +8,11 @@ use std::{
 };
 
 use crossbeam::{
-  channel::{unbounded, Receiver, RecvTimeoutError, Sender},
+  channel::{unbounded, Receiver, RecvTimeoutError, Sender, TrySendError},
   queue::ArrayQueue,
 };
 
-use crate::{logger, AsTimer, UnwrappedReceiver, UnwrappedSender};
+use crate::{logger, AsTimer, Error, Result, SendBy, UnwrappedReceiver, UnwrappedSender};
 
 pub trait SafeCallable<T, R> {
   type Error;
@@ -30,7 +30,7 @@ where
 }
 
 pub enum Context<T, R> {
-  Work((T, Sender<R>)),
+  Work((T, Sender<Result<R>>)),
   Finalize,
   Term,
 }
@@ -43,7 +43,7 @@ pub enum SafeWork<T, R> {
   ),
   WithTimer(
     Duration,
-    Arc<dyn Fn(Option<(T, Sender<R>)>) -> bool + Send + Sync + RefUnwindSafe>,
+    Arc<dyn Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + Sync + RefUnwindSafe>,
   ),
   Empty,
 }
@@ -64,7 +64,7 @@ impl<T, R> SafeWork<T, R> {
 
   pub fn with_timer<F>(timeout: Duration, f: F) -> Self
   where
-    F: Fn(Option<(T, Sender<R>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
+    F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
     SafeWork::WithTimer(timeout, Arc::new(f))
   }
@@ -85,8 +85,8 @@ where
           work
             .as_ref()
             .safe_call(v)
-            .map(|r| done.must_send(r))
-            .unwrap_or_else(handle_panic);
+            .map_err(Error::Panic)
+            .send_by(&done);
         }
       }
       SafeWork::WithTimeout(timeout, work) => loop {
@@ -95,8 +95,8 @@ where
             work
               .as_ref()
               .safe_call(Some(v))
-              .map(|r| done.must_send(r))
-              .unwrap_or_else(handle_panic);
+              .map_err(Error::Panic)
+              .send_by(&done);
           }
           Ok(Context::Finalize) => {
             work
@@ -104,9 +104,8 @@ where
               .safe_call(None)
               .map(|_| ())
               .unwrap_or_else(handle_panic);
-            break;
+            return;
           }
-          Ok(Context::Term) => break,
           Err(RecvTimeoutError::Timeout) => {
             work
               .as_ref()
@@ -114,34 +113,37 @@ where
               .map(|_| ())
               .unwrap_or_else(handle_panic);
           }
-          Err(RecvTimeoutError::Disconnected) => break,
+          Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => return,
         };
       },
       SafeWork::WithTimer(duration, work) => {
         let mut timer = duration.as_timer();
         loop {
-          let arg = match rx.recv_timeout(timer.get_remain()) {
-            Ok(Context::Work((v, done))) => Some((v, done)),
+          match rx.recv_timeout(timer.get_remain()) {
+            Ok(Context::Work((v, done))) => {
+              match work.as_ref().safe_call(Some((v, done.clone()))) {
+                Ok(true) => timer.reset(),
+                Ok(false) => timer.check(),
+                Err(err) => done.must_send(Err(Error::Panic(err))),
+              };
+            }
             Ok(Context::Finalize) => {
               work
                 .as_ref()
                 .safe_call(None)
                 .map(|_| ())
                 .unwrap_or_else(handle_panic);
-              break;
+              return;
             }
-            Ok(Context::Term) => break,
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+              match work.as_ref().safe_call(None) {
+                Ok(true) => timer.reset(),
+                Ok(false) => timer.check(),
+                Err(err) => handle_panic(err),
+              };
+            }
+            Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => return,
           };
-          work
-            .as_ref()
-            .safe_call(arg)
-            .map(|r| match r {
-              true => timer.reset(),
-              false => timer.check(),
-            })
-            .unwrap_or_else(handle_panic);
         }
       }
       SafeWork::Empty => {}
@@ -213,12 +215,19 @@ where
   }
 
   #[inline]
-  pub fn send(&self, v: T) -> Receiver<R> {
+  pub fn send(&self, v: T) -> Receiver<Result<R>> {
     let (done_t, done_r) = unbounded();
-    self.channel.must_send(Context::Work((v, done_t)));
+    if let Err(TrySendError::Disconnected(_)) =
+      self.channel.try_send(Context::Work((v, done_t)))
+    {
+      drop(done_r);
+      let (done_t, done_r) = unbounded();
+      done_t.must_send(Err(Error::WorkerClosed));
+      return done_r;
+    }
     done_r
   }
-  pub fn send_await(&self, v: T) -> R {
+  pub fn send_await(&self, v: T) -> Result<R> {
     self.send(v).must_recv()
   }
 
@@ -232,12 +241,16 @@ where
   }
 
   pub fn close(&self) {
-    self.channel.must_send(Context::Term);
+    for _ in 0..self.threads.len() {
+      self.channel.must_send(Context::Term);
+    }
     self.join();
   }
 
   pub fn finalize(&self) {
-    self.channel.must_send(Context::Finalize);
+    for _ in 0..self.threads.len() {
+      self.channel.must_send(Context::Finalize);
+    }
     self.join();
   }
 }
@@ -267,11 +280,11 @@ where
     Ok(Self(SharedWorkThread::build(name, size, count, build)?))
   }
 
-  pub fn send(&self, v: T) -> Receiver<R> {
+  pub fn send(&self, v: T) -> Receiver<Result<R>> {
     self.0.send(v)
   }
 
-  pub fn send_await(&self, v: T) -> R {
+  pub fn send_await(&self, v: T) -> Result<R> {
     self.0.send_await(v)
   }
 
@@ -281,5 +294,195 @@ where
 
   pub fn finalize(&self) {
     self.0.finalize();
+  }
+}
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::thread;
+  use std::time::Instant;
+
+  #[test]
+  fn test_shared_work_thread_no_timeout() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    let work = SafeWork::no_timeout(move |x: usize| {
+      counter_clone.fetch_add(x, Ordering::SeqCst);
+      x * 2
+    });
+
+    let thread = SharedWorkThread::new("test-no-timeout", 8192, 2, work);
+
+    // Send multiple tasks
+    let results: Vec<_> = (1..5).map(|i| thread.send_await(i).unwrap()).collect();
+
+    assert_eq!(results, vec![2, 4, 6, 8]);
+    assert_eq!(counter.load(Ordering::SeqCst), 10); // 1+2+3+4 = 10
+
+    thread.close();
+  }
+
+  #[test]
+  fn test_shared_work_thread_with_timeout() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    let work =
+      SafeWork::with_timeout(Duration::from_millis(100), move |x: Option<usize>| {
+        if let Some(val) = x {
+          counter_clone.fetch_add(val, Ordering::SeqCst);
+          val * 2
+        } else {
+          // When timeout occurs
+          counter_clone.fetch_add(1000, Ordering::SeqCst);
+          0
+        }
+      });
+
+    let thread = SharedWorkThread::new("test-timeout", 8192, 1, work);
+
+    // Send a task
+    let result = thread.send_await(5).unwrap();
+    assert_eq!(result, 10);
+
+    // Wait a bit to trigger timeout
+    thread::sleep(Duration::from_millis(200));
+
+    // Send another task
+    let result = thread.send_await(7).unwrap();
+    assert_eq!(result, 14);
+
+    // Check final counter value
+    // 5 + 7 + 1000 (timeout) = 1012
+    assert_eq!(counter.load(Ordering::SeqCst), 1012);
+
+    thread.close();
+  }
+
+  #[test]
+  fn test_panic_handling() {
+    let work = SafeWork::no_timeout(|x: i32| {
+      if x < 0 {
+        panic!("Cannot process negative numbers");
+      }
+      x * 2
+    });
+
+    let thread = SharedWorkThread::new("test-panic", 8192, 1, work);
+
+    // Normal case
+    let result = thread.send_await(10);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 20);
+
+    // Panic-inducing case
+    let result = thread.send_await(-5);
+    assert!(result.is_err());
+    if let Err(Error::Panic(_)) = result {
+      // Panic was converted to Error::Panic as expected
+    } else {
+      panic!("Panic was not converted to Error::Panic");
+    }
+
+    thread.close();
+  }
+
+  #[test]
+  fn test_with_timer() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    let work = SafeWork::with_timer(Duration::from_millis(50), move |data| {
+      if let Some((val, done)) = data {
+        counter_clone.fetch_add(val, Ordering::SeqCst);
+        let _ = done.send(Ok(val * 2));
+        true // Reset timer
+      } else {
+        counter_clone.fetch_add(1, Ordering::SeqCst);
+        false // Continue timer
+      }
+    });
+
+    let thread = SharedWorkThread::new("test-timer", 8192, 1, work);
+
+    // Send a task
+    let receiver = thread.send(10);
+    let result = receiver.recv().unwrap().unwrap();
+    assert_eq!(result, 20);
+
+    // Wait a bit to allow multiple timer triggers
+    thread::sleep(Duration::from_millis(200));
+
+    // Check final counter value (10 + number of timeouts)
+    let final_count = counter.load(Ordering::SeqCst);
+    assert!(final_count > 10); // 10 + number of timeouts (hard to predict exactly)
+
+    thread.close();
+  }
+
+  #[test]
+  fn test_finalize() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    let work =
+      SafeWork::with_timeout(Duration::from_millis(100), move |x: Option<usize>| {
+        if let Some(val) = x {
+          counter_clone.fetch_add(val, Ordering::SeqCst);
+          val * 2
+        } else {
+          // On timeout or finalization
+          counter_clone.fetch_add(100, Ordering::SeqCst);
+          0
+        }
+      });
+
+    let thread = SharedWorkThread::new("test-finalize", 8192, 1, work);
+
+    // Send a task
+    let result = thread.send_await(5).unwrap();
+    assert_eq!(result, 10);
+
+    let count_before_finalize = counter.load(Ordering::SeqCst);
+
+    // Call finalize
+    thread.finalize();
+
+    // Check that counter has increased after finalization
+    assert_eq!(counter.load(Ordering::SeqCst), count_before_finalize + 100);
+
+    // Channel should be closed after finalization
+    let result = thread.send(10);
+    assert!(result.recv().unwrap().is_err());
+  }
+
+  #[test]
+  fn test_multiple_threads() {
+    let work = SafeWork::no_timeout(|x: usize| {
+      thread::sleep(Duration::from_millis(50 * x as u64))
+    });
+
+    let thread_count = 4;
+    let thread = SharedWorkThread::new("test-multi", 8192, thread_count, work);
+
+    // Start multiple tasks simultaneously
+    let start = Instant::now();
+
+    let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
+
+    // Collect all results
+    for receiver in receivers.iter() {
+      let _ = receiver.recv().unwrap().unwrap();
+    }
+
+    let elapsed = start.elapsed();
+
+    // If processed in parallel, total time should be just slightly longer than the longest task (4)
+    // If sequential, it would take about 1+2+3+4=10 times longer
+    assert!(elapsed < Duration::from_millis(250)); // Generous margin
+
+    thread.close();
   }
 }

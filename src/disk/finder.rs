@@ -88,24 +88,33 @@ impl<const N: usize> Finder<N> {
       N,
       SafeWork::with_timer(config.batch_delay, move |v| {
         if let Some(((index, page), done)) = v {
-          if let Err(err) = wc.send_await((index, page)) {
-            done.must_send(Err(err));
-            return false;
-          }
-
+          match wc.send_await((index, page)) {
+            Ok(Err(err)) => {
+              done.must_send(Ok(Err(err)));
+              return false;
+            }
+            Err(err) => {
+              done.must_send(Err(err));
+              return false;
+            }
+            _ => {}
+          };
           let _ = wait.push(done);
           if !wait.is_full() {
             return false;
           }
-
-          if let Err(_) = fc.send_await(()) {
-            return false;
-          }
-
-          while let Some(done) = wait.pop() {
-            done.must_send(Ok(()));
-          }
         }
+
+        match fc.send_await(()) {
+          Ok(Err(_)) => return false,
+          Err(_) => return false,
+          _ => {}
+        }
+
+        while let Some(done) = wait.pop() {
+          done.must_send(Ok(Ok(())));
+        }
+
         true
       }),
     ));
@@ -127,15 +136,15 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn read(&self, index: usize) -> Result<Page<N>> {
-    self.read_ths.send_await(index).map_err(Error::IO)
+    self.read_ths.send_await(index)?.map_err(Error::IO)
   }
 
   pub fn write(&self, index: usize, page: Page<N>) -> Result {
-    self.batch_th.send_await((index, page)).map_err(Error::IO)
+    self.batch_th.send_await((index, page))?.map_err(Error::IO)
   }
 
   pub fn fsync(&self) -> Result {
-    self.flush_th.send_await(()).map_err(Error::IO)
+    self.flush_th.send_await(())?.map_err(Error::IO)
   }
 
   pub fn close(&self) {
@@ -146,7 +155,7 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn len(&self) -> Result<usize> {
-    let meta = self.meta_th.send_await(()).map_err(Error::IO)?;
+    let meta = self.meta_th.send_await(())?.map_err(Error::IO)?;
     Ok((meta.len() as usize).div(N))
   }
 }
