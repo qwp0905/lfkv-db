@@ -131,6 +131,10 @@ impl<'a, const T: usize> PageWriter<'a, T> {
     self.offset = end;
     Ok(())
   }
+
+  pub fn is_eof(&self) -> bool {
+    self.inner.len().le(&self.offset)
+  }
 }
 
 #[cfg(test)]
@@ -159,7 +163,9 @@ mod tests {
 
     // Write test
     let mut writer = page.writer();
+    assert!(!writer.is_eof());
     writer.write(&test_data).unwrap();
+    assert!(writer.is_eof());
 
     // Read test
     let mut scanner = page.scanner();
@@ -204,6 +210,7 @@ mod tests {
       assert!(scanner.read().is_ok());
     }
 
+    assert!(scanner.is_eof());
     // Attempt to read at EOF
     assert!(scanner.read().is_err());
   }
