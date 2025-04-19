@@ -9,7 +9,8 @@ use std::{
 use crossbeam::queue::ArrayQueue;
 
 use crate::{
-  Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, UnwrappedSender,
+  Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, ToArc,
+  UnwrappedSender, WorkBuilder,
 };
 
 use super::{Pread, Pwrite};
@@ -42,17 +43,18 @@ impl<const N: usize> Finder<N> {
       .map_err(Error::IO)?;
 
     let ff = file.try_clone().map_err(Error::IO)?;
-    let flush_th = Arc::new(SafeWorkThread::new(
-      format!("flush {}", config.path.to_string_lossy()),
-      N,
-      SafeWork::no_timeout(move |_| ff.sync_all()),
-    ));
+    let flush_th = WorkBuilder::new()
+      .name(format!("flush {}", config.path.to_string_lossy()))
+      .stack_size(N)
+      .single()
+      .no_timeout(move |_| ff.sync_all())
+      .new_arc();
 
-    let read_ths = SharedWorkThread::build(
-      format!("read {}", config.path.to_string_lossy()),
-      N,
-      config.read_threads.unwrap_or(DEFAULT_READ_THREADS),
-      |_| {
+    let read_ths = WorkBuilder::new()
+      .name(format!("read {}", config.path.to_string_lossy()))
+      .stack_size(N)
+      .shared(config.read_threads.unwrap_or(DEFAULT_READ_THREADS))
+      .build(|_| {
         let fd = file.try_clone().map_err(Error::IO)?;
         let work = SafeWork::no_timeout(move |index: usize| {
           let mut page = Page::new();
@@ -60,33 +62,32 @@ impl<const N: usize> Finder<N> {
           Ok(page)
         });
         Ok(work)
-      },
-    )?;
-    let read_ths = Arc::new(read_ths);
+      })?
+      .new_arc();
 
-    let write_ths = SharedWorkThread::build(
-      format!("read {}", config.path.to_string_lossy()),
-      N,
-      config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS),
-      |_| {
+    let write_ths = WorkBuilder::new()
+      .name(format!("read {}", config.path.to_string_lossy()))
+      .stack_size(N)
+      .shared(config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS))
+      .build(|_| {
         let fd = file.try_clone().map_err(Error::IO)?;
         let work = SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
           fd.pwrite(page.as_ref(), index.mul(N) as u64)?;
           Ok(())
         });
         Ok(work)
-      },
-    )?;
+      })?
+      .new_arc();
 
-    let write_ths = Arc::new(write_ths);
     let wc = write_ths.clone();
     let fc = flush_th.clone();
     let wait = ArrayQueue::new(config.batch_size);
 
-    let batch_th = Arc::new(SafeWorkThread::new(
-      format!("batch {}", config.path.to_string_lossy()),
-      N,
-      SafeWork::with_timer(config.batch_delay, move |v| {
+    let batch_th = WorkBuilder::new()
+      .name(format!("batch {}", config.path.to_string_lossy()))
+      .stack_size(N)
+      .single()
+      .with_timer(config.batch_delay, move |v| {
         if let Some(((index, page), done)) = v {
           match wc.send_await((index, page)) {
             Ok(Err(err)) => {
@@ -116,16 +117,16 @@ impl<const N: usize> Finder<N> {
         }
 
         true
-      }),
-    ));
+      })
+      .new_arc();
 
     let mf = file.try_clone().map_err(Error::IO)?;
-    let meta_th = SafeWorkThread::new(
-      format!("meta {}", config.path.to_string_lossy()),
-      1,
-      SafeWork::no_timeout(move |_| mf.metadata()),
-    );
-    let meta_th = Arc::new(meta_th);
+    let meta_th = WorkBuilder::new()
+      .name(format!("meta {}", config.path.to_string_lossy()))
+      .stack_size(N)
+      .single()
+      .no_timeout(move |_| mf.metadata())
+      .new_arc();
 
     Ok(Self {
       read_ths,

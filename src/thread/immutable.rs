@@ -12,7 +12,9 @@ use crossbeam::{
   queue::ArrayQueue,
 };
 
-use crate::{logger, AsTimer, Error, Result, SendBy, UnwrappedReceiver, UnwrappedSender};
+use crate::{
+  logger, AsTimer, Error, Result, SendBy, ToArc, UnwrappedReceiver, UnwrappedSender,
+};
 
 pub trait SafeCallable<T, R> {
   type Error;
@@ -52,21 +54,21 @@ impl<T, R> SafeWork<T, R> {
   where
     F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::NoTimeout(Arc::new(f))
+    SafeWork::NoTimeout(f.new_arc())
   }
 
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimeout(timeout, Arc::new(f))
+    SafeWork::WithTimeout(timeout, f.new_arc())
   }
 
   pub fn with_timer<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimer(timeout, Arc::new(f))
+    SafeWork::WithTimer(timeout, f.new_arc())
   }
 
   pub fn empty() -> Self {
@@ -170,7 +172,7 @@ where
   fn new<S: ToString>(name: S, size: usize, count: usize, work: SafeWork<T, R>) -> Self {
     let (tx, rx) = unbounded();
     let threads = ArrayQueue::new(count);
-    let work = Arc::new(work);
+    let work = work.new_arc();
     for i in 0..count {
       let work = work.clone();
       let rx = rx.clone();
@@ -199,7 +201,7 @@ where
     let (tx, rx) = unbounded();
     let threads = ArrayQueue::new(count);
     for i in 0..count {
-      let work = Arc::new(build(i)?);
+      let work = build(i)?.new_arc();
       let rx = rx.clone();
       let th = std::thread::Builder::new()
         .name(format!("{} {}", name.to_string(), i))

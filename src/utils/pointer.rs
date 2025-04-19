@@ -1,4 +1,4 @@
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
 pub trait Pointer<T> {
   fn from_box(v: T) -> NonNull<T>;
@@ -43,5 +43,14 @@ impl<T> AsMut<T> for Link<T> {
 impl<T> AsRef<T> for Link<T> {
   fn as_ref(&self) -> &T {
     unsafe { self.0.as_ref() }
+  }
+}
+
+pub trait ToArc {
+  fn new_arc(self) -> Arc<Self>;
+}
+impl<T> ToArc for T {
+  fn new_arc(self) -> Arc<Self> {
+    Arc::new(self)
   }
 }
