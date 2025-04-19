@@ -3,7 +3,7 @@ use std::process::Command;
 #[test]
 #[ignore]
 fn create_coverage() {
-  std::env::set_var("RUSTFLAGS", "-Cinstrument-coverage");
+  std::env::set_var("RUSTFLAGS", "-Cinstrument-coverage -Awarnings");
   std::env::set_var("LLVM_PROFILE_FILE", "lfkv-%p-%m.profraw");
 
   let status = Command::new("cargo")
@@ -22,11 +22,14 @@ fn create_coverage() {
     panic!("failed to run tests.");
   }
 
+  let _ = std::fs::remove_dir_all("./coverage/");
   let status = Command::new("grcov")
     .args([
       ".",
       "-s",
       ".",
+      "--keep-only",
+      "src/**/*",
       "--binary-path",
       "./target/debug/",
       "-t",
