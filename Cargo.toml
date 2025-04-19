@@ -12,8 +12,6 @@ serde_json = "1.0.108"
 chrono = "0.4.31"
 sysinfo = "0.30.5"
 libc = "0.2.169"
-winapi = "0.3.9"
-fs2 = "0.4.3"
 
 
 [dependencies.hashbrown]
@@ -25,5 +23,3 @@ features = ["raw"]
 tempfile = "3.10.1"
 
 [workspace]
-
-[workspace.dependencies]
