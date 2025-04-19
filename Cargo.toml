@@ -20,6 +20,9 @@ version = "0.14.1"
 default-features = false
 features = ["raw"]
 
+[dev-dependencies]
+tempfile = "3.10.1"
+
 [workspace]
 
 [workspace.dependencies]
