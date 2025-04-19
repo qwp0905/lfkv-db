@@ -9,7 +9,7 @@ use std::{
 use crossbeam::queue::ArrayQueue;
 
 use crate::{
-  Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, ToArc,
+  Error, Page, Result, SafeWork, SharedWorkThread, SingleWorkThread, ToArc,
   UnwrappedSender, WorkBuilder,
 };
 
@@ -29,9 +29,9 @@ pub struct FinderConfig {
 pub struct Finder<const N: usize> {
   read_ths: Arc<SharedWorkThread<usize, std::io::Result<Page<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
-  batch_th: Arc<SafeWorkThread<(usize, Page<N>), std::io::Result<()>>>,
-  flush_th: Arc<SafeWorkThread<(), std::io::Result<()>>>,
-  meta_th: Arc<SafeWorkThread<(), std::io::Result<Metadata>>>,
+  batch_th: Arc<SingleWorkThread<(usize, Page<N>), std::io::Result<()>>>,
+  flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
+  meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {

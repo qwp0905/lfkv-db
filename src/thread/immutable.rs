@@ -257,11 +257,11 @@ where
   }
 }
 
-impl<T, R> RefUnwindSafe for SafeWorkThread<T, R> {}
+impl<T, R> RefUnwindSafe for SingleWorkThread<T, R> {}
 impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
 
-pub struct SafeWorkThread<T, R>(SharedWorkThread<T, R>);
-impl<T, R> SafeWorkThread<T, R>
+pub struct SingleWorkThread<T, R>(SharedWorkThread<T, R>);
+impl<T, R> SingleWorkThread<T, R>
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,

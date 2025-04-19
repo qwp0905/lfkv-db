@@ -7,7 +7,7 @@ use crossbeam::channel::Sender;
 
 use crate::Result;
 
-use super::{SafeWork, SafeWorkThread, SharedWorkThread};
+use super::{SafeWork, SharedWorkThread, SingleWorkThread};
 
 pub struct WorkBuilder {
   name: String,
@@ -65,39 +65,39 @@ pub struct SafeWorkBuilder {
   builder: WorkBuilder,
 }
 impl SafeWorkBuilder {
-  pub fn no_timeout<T, R, F>(self, f: F) -> SafeWorkThread<T, R>
+  pub fn no_timeout<T, R, F>(self, f: F) -> SingleWorkThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
     F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWorkThread::new(
+    SingleWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
       SafeWork::no_timeout(f),
     )
   }
 
-  pub fn with_timeout<T, R, F>(self, timeout: Duration, f: F) -> SafeWorkThread<T, R>
+  pub fn with_timeout<T, R, F>(self, timeout: Duration, f: F) -> SingleWorkThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
     F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWorkThread::new(
+    SingleWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
       SafeWork::with_timeout(timeout, f),
     )
   }
 
-  pub fn with_timer<T, R, F>(self, timeout: Duration, f: F) -> SafeWorkThread<T, R>
+  pub fn with_timer<T, R, F>(self, timeout: Duration, f: F) -> SingleWorkThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
     F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWorkThread::new(
+    SingleWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
       SafeWork::with_timer(timeout, f),
