@@ -91,7 +91,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
     let end = self.offset.add(n);
-    if end.ge(&self.inner.len()) {
+    if end.gt(&self.inner.len()) {
       return Err(Error::EOF);
     }
 
@@ -121,7 +121,7 @@ impl<'a, const T: usize> PageWriter<'a, T> {
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
     let end = self.offset.add(bytes.len());
-    if end.ge(&T) {
+    if end.gt(&T) {
       return Err(Error::EOF);
     };
     self
@@ -154,7 +154,7 @@ mod tests {
 
   #[test]
   fn test_read_write() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let mut page = Page::<5>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     // Write test
@@ -319,5 +319,140 @@ mod tests {
     assert_eq!(scanner.read().unwrap(), 4);
     assert_eq!(scanner.read().unwrap(), 5);
     assert_eq!(scanner.read().unwrap(), 3); // Third byte remains unchanged
+  }
+
+  #[test]
+  fn test_page_copy() {
+    let mut page = Page::<PAGE_SIZE>::new();
+    let test_data = [1, 2, 3, 4, 5];
+
+    // Write data to original page
+    let mut writer = page.writer();
+    writer.write(&test_data).unwrap();
+
+    // Create copy and verify data
+    let copied = page.copy();
+    let mut scanner = copied.scanner();
+    for &expected in test_data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
+
+    // Modify original, verify copy remains unchanged
+    let mut writer = page.writer();
+    writer.write(&[9, 9]).unwrap();
+
+    let mut scanner = copied.scanner();
+    for &expected in test_data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
+  }
+
+  #[test]
+  fn test_from_array() {
+    const SIZE: usize = 5;
+    let data = [1, 2, 3, 4, 5];
+    let page = Page::<SIZE>::from(data);
+
+    let mut scanner = page.scanner();
+    for &expected in data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
+  }
+
+  #[test]
+  fn test_from_vec() {
+    const SIZE: usize = 5;
+    let data = vec![1, 2, 3, 4, 5];
+    let page = Page::<SIZE>::from(data.clone());
+
+    let mut scanner = page.scanner();
+    for &expected in data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
+
+    // Test with vec larger than page size
+    let large_data = vec![1, 2, 3, 4, 5, 6];
+    let page = Page::<SIZE>::from(large_data);
+
+    let mut scanner = page.scanner();
+    for i in 0..SIZE {
+      assert_eq!(scanner.read().unwrap(), (i + 1) as u8);
+    }
+  }
+
+  #[test]
+  fn test_from_slice() {
+    const SIZE: usize = 5;
+    let data = [1, 2, 3, 4, 5];
+    let page = Page::<SIZE>::from(&data[..]);
+
+    let mut scanner = page.scanner();
+    for &expected in data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
+  }
+
+  #[test]
+  fn test_into_vec() {
+    const SIZE: usize = 5;
+    let mut page = Page::<SIZE>::new();
+    let test_data = [1, 2, 3, 4, 5];
+
+    let mut writer = page.writer();
+    writer.write(&test_data).unwrap();
+
+    // Convert page to Vec<u8>
+    let vec: Vec<u8> = page.into();
+    assert_eq!(&vec[..SIZE], &test_data);
+  }
+
+  #[test]
+  fn test_read_usize() {
+    let mut page = Page::<15>::new();
+    let test_value: usize = 42;
+
+    // Write usize value
+    let bytes = test_value.to_be_bytes();
+    let mut writer = page.writer();
+    writer.write(&bytes).unwrap();
+
+    // Read and verify usize value
+    let mut scanner = page.scanner();
+    let read_value = scanner.read_usize().unwrap();
+    assert_eq!(read_value, test_value);
+
+    // Test EOF handling
+    assert!(scanner.read_usize().is_err());
+  }
+
+  #[test]
+  fn test_as_ref() {
+    const SIZE: usize = 5;
+    let mut page = Page::<SIZE>::new();
+    let test_data = [1, 2, 3, 4, 5];
+
+    let mut writer = page.writer();
+    writer.write(&test_data).unwrap();
+
+    // Verify AsRef implementation
+    let slice: &[u8] = page.as_ref();
+    assert_eq!(slice, &test_data);
+  }
+
+  #[test]
+  fn test_as_mut() {
+    const SIZE: usize = 5;
+    let mut page = Page::<SIZE>::new();
+    let test_data = [1, 2, 3, 4, 5];
+
+    // Modify through AsMut
+    let slice: &mut [u8] = page.as_mut();
+    slice.copy_from_slice(&test_data);
+
+    // Verify changes
+    let mut scanner = page.scanner();
+    for &expected in test_data.iter() {
+      assert_eq!(scanner.read().unwrap(), expected);
+    }
   }
 }
