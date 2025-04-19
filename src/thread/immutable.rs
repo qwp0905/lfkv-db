@@ -54,21 +54,21 @@ impl<T, R> SafeWork<T, R> {
   where
     F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::NoTimeout(f.new_arc())
+    SafeWork::NoTimeout(f.to_arc())
   }
 
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimeout(timeout, f.new_arc())
+    SafeWork::WithTimeout(timeout, f.to_arc())
   }
 
   pub fn with_timer<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimer(timeout, f.new_arc())
+    SafeWork::WithTimer(timeout, f.to_arc())
   }
 
   pub fn empty() -> Self {
@@ -172,7 +172,7 @@ where
   fn new<S: ToString>(name: S, size: usize, count: usize, work: SafeWork<T, R>) -> Self {
     let (tx, rx) = unbounded();
     let threads = ArrayQueue::new(count);
-    let work = work.new_arc();
+    let work = work.to_arc();
     for i in 0..count {
       let work = work.clone();
       let rx = rx.clone();
@@ -201,7 +201,7 @@ where
     let (tx, rx) = unbounded();
     let threads = ArrayQueue::new(count);
     for i in 0..count {
-      let work = build(i)?.new_arc();
+      let work = build(i)?.to_arc();
       let rx = rx.clone();
       let th = std::thread::Builder::new()
         .name(format!("{} {}", name.to_string(), i))

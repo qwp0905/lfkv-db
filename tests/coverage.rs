@@ -1,5 +1,7 @@
 use std::process::Command;
 
+const COV_DIR: &str = "./coverage/";
+
 #[test]
 #[ignore]
 fn create_coverage() {
@@ -22,7 +24,7 @@ fn create_coverage() {
     panic!("failed to run tests.");
   }
 
-  let _ = std::fs::remove_dir_all("./coverage/");
+  let _ = std::fs::remove_dir_all(COV_DIR);
   let status = Command::new("grcov")
     .args([
       ".",
@@ -37,7 +39,7 @@ fn create_coverage() {
       "--branch",
       "--ignore-not-existing",
       "-o",
-      "./coverage/",
+      COV_DIR,
     ])
     .status()
     .expect("failed to create coverage report.");

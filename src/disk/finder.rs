@@ -48,7 +48,7 @@ impl<const N: usize> Finder<N> {
       .stack_size(N)
       .single()
       .no_timeout(move |_| ff.sync_all())
-      .new_arc();
+      .to_arc();
 
     let read_ths = WorkBuilder::new()
       .name(format!("read {}", config.path.to_string_lossy()))
@@ -63,7 +63,7 @@ impl<const N: usize> Finder<N> {
         });
         Ok(work)
       })?
-      .new_arc();
+      .to_arc();
 
     let write_ths = WorkBuilder::new()
       .name(format!("read {}", config.path.to_string_lossy()))
@@ -77,7 +77,7 @@ impl<const N: usize> Finder<N> {
         });
         Ok(work)
       })?
-      .new_arc();
+      .to_arc();
 
     let wc = write_ths.clone();
     let fc = flush_th.clone();
@@ -107,8 +107,7 @@ impl<const N: usize> Finder<N> {
         }
 
         match fc.send_await(()) {
-          Ok(Err(_)) => return false,
-          Err(_) => return false,
+          Ok(Err(_)) | Err(_) => return false,
           _ => {}
         }
 
@@ -118,7 +117,7 @@ impl<const N: usize> Finder<N> {
 
         true
       })
-      .new_arc();
+      .to_arc();
 
     let mf = file.try_clone().map_err(Error::IO)?;
     let meta_th = WorkBuilder::new()
@@ -126,7 +125,7 @@ impl<const N: usize> Finder<N> {
       .stack_size(N)
       .single()
       .no_timeout(move |_| mf.metadata())
-      .new_arc();
+      .to_arc();
 
     Ok(Self {
       read_ths,

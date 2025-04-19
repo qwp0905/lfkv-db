@@ -47,10 +47,10 @@ impl<T> AsRef<T> for Link<T> {
 }
 
 pub trait ToArc {
-  fn new_arc(self) -> Arc<Self>;
+  fn to_arc(self) -> Arc<Self>;
 }
 impl<T> ToArc for T {
-  fn new_arc(self) -> Arc<Self> {
+  fn to_arc(self) -> Arc<Self> {
     Arc::new(self)
   }
 }
