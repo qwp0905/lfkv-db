@@ -46,12 +46,12 @@ fn create_coverage() {
   println!("Coverage report generated.");
 
   // Clean up profraw files
-  let paths = std::fs::read_dir(".").unwrap();
+  let paths = std::fs::read_dir(".").expect("failed to read directory.");
   for path in paths {
     let path = path.unwrap().path();
     if path.extension().map_or(true, |ext| ext != "profraw") {
       continue;
     }
-    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(path).expect("failed to remove profraw file");
   }
 }
