@@ -348,7 +348,7 @@ mod tests {
     assert_eq!(result, 10);
 
     // Wait a bit to trigger timeout
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(130));
 
     // Send another task
     let result = thread.send_await(7).unwrap();
