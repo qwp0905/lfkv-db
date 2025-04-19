@@ -1,0 +1,2 @@
+[alias]
+"test:cov" = "test --test coverage --all-features --no-default-features -- --ignored"

@@ -14,3 +14,6 @@ target/
 
 .local
 .DS_Store
+
+coverage/
+*.profraw
