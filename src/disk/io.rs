@@ -1,78 +1,11 @@
-use std::{
-  fs::File,
-  io::Result,
-  os::fd::{AsRawFd, FromRawFd, RawFd},
-};
+use std::{fs::File, io::Result};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::unix::fs::FileExt;
 
 #[cfg(target_os = "windows")]
-use std::{
-  io::Error,
-  mem,
-  os::windows::{
-    fs::FileExt,
-    io::{AsRawHandle, FromRawHandle, RawHandle},
-  },
-};
-#[cfg(target_os = "windows")]
-use winapi::shared::{
-  minwindef::{BOOL, DWORD},
-  um::{
-    fileapi::{
-      GetDiskFreeSpaceW, GetVolumePathNameW, LockFileEx, SetFileInformationByHandle,
-      UnlockFile, FILE_ALLOCATION_INFO, FILE_STANDARD_INFO,
-    },
-    handleapi::DuplicateHandle,
-    minwinbase::{
-      FileAllocationInfo, FileStandardInfo, LOCKFILE_EXCLUSIVE_LOCK,
-      LOCKFILE_FAIL_IMMEDIATELY,
-    },
-    processthreadsapi::GetCurrentProcess,
-    winbase::GetFileInformationByHandleEx,
-  },
-  winerror::ERROR_LOCK_VIOLATION,
-  winnt::DUPLICATE_SAME_ACCESS,
-};
+use std::os::windows::fs::FileExt;
 
-pub trait CopyableFile {
-  fn copy(&self) -> Result<Self>
-  where
-    Self: Sized;
-}
-impl CopyableFile for File {
-  #[cfg(any(target_os = "macos", target_os = "linux"))]
-  fn copy(&self) -> Result<Self>
-  where
-    Self: Sized,
-  {
-    let fd = self.as_raw_fd();
-    Ok(unsafe { File::from_raw_fd(libc::dup(fd)) })
-  }
-
-  #[cfg(target_os = "windows")]
-  fn copy(&self) -> Result<Self>
-  where
-    Self: Sized,
-  {
-    let mut handle = ptr::null_mut();
-    let current_process = GetCurrentProcess();
-    let ret = DuplicateHandle(
-      current_process,
-      self.as_raw_handle(),
-      current_process,
-      &mut handle,
-      0,
-      true as BOOL,
-      DUPLICATE_SAME_ACCESS,
-    );
-    if ret == 0 {
-      return Err(Error::last_os_error());
-    }
-    Ok(unsafe { File::from_raw_handle(handle) })
-  }
-}
 pub trait Pread {
   fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
 }
@@ -113,45 +46,16 @@ impl Append for File {
   }
 }
 
-struct FLock(RawFd);
-impl FLock {
-  #[cfg(any(target_os = "macos", target_os = "linux"))]
-  pub fn new<T: AsRawFd>(file: &T) -> Result<Self> {
-    let fd = file.as_raw_fd();
-    unsafe {
-      libc::flock(fd, libc::LOCK_EX);
-    }
-    Ok(Self(fd))
-  }
-  #[cfg(target_os = "windows")]
-  pub fn new(file: &File) -> Result<Self> {
-    let fd = file.as_raw_handle();
-    unsafe {
-      let mut overlapped = mem::zeroed();
-      let ret = LockFileEx(fd, LOCKFILE_EXCLUSIVE_LOCK, 0, !0, !0, &mut overlapped);
-      if ret == 0 {
-        return Err(Error::last_os_error());
-      }
-    }
-    Ok(Self(fd))
-  }
-  #[cfg(any(target_os = "macos", target_os = "linux"))]
-  pub fn release(&self) -> Result<()> {
-    unsafe { libc::flock(self.0, libc::LOCK_UN) };
-    Ok(())
-  }
-
-  #[cfg(target_os = "windows")]
-  pub fn release(&self) -> Result<()> {
-    if UnlockFile(self.0, 0, 0, !0, !0) == 0 {
-      return Err(Error::last_os_error());
-    }
-    Ok(())
+struct FLock<'a>(&'a File);
+impl<'a> FLock<'a> {
+  fn new(file: &'a File) -> Result<Self> {
+    fs2::FileExt::lock_exclusive(file)?;
+    Ok(FLock(file))
   }
 }
-impl Drop for FLock {
+impl<'a> Drop for FLock<'a> {
   fn drop(&mut self) {
-    let _ = self.release();
+    let _ = fs2::FileExt::unlock(self.0);
   }
 }
 
@@ -159,7 +63,7 @@ impl Drop for FLock {
 mod tests {
   use super::*;
   use std::fs::File;
-  use std::io::{Read, Seek, SeekFrom, Write};
+  use std::io::{Read, Write};
   use tempfile::tempdir;
 
   #[test]
@@ -228,45 +132,6 @@ mod tests {
     let empty_buf: &[u8] = &[];
     let bytes_written = file.pwrite(empty_buf, 0)?;
     assert_eq!(bytes_written, 0);
-
-    Ok(())
-  }
-
-  #[test]
-  fn test_copy() -> Result<()> {
-    let dir = tempdir()?;
-    let file_path = dir.path().join("test_copy.txt");
-
-    // 원본 파일 생성 및 데이터 작성 (read/write 권한으로 열기)
-    let mut original = std::fs::OpenOptions::new()
-      .read(true)
-      .write(true)
-      .create(true)
-      .open(&file_path)?;
-    original.write_all(b"Original content")?;
-    original.flush()?;
-    original.sync_all()?;
-
-    // 파일 디스크립터 복사
-    let mut copied = original.copy()?;
-
-    // 복사된 fd를 통해 데이터 읽기
-    copied.seek(SeekFrom::Start(0))?;
-    let mut content = String::new();
-    copied.read_to_string(&mut content)?;
-    assert_eq!(content, "Original content");
-
-    // 복사된 fd를 통해 데이터 추가 쓰기
-    copied.seek(SeekFrom::End(0))?;
-    copied.write_all(b" Additional content")?;
-    copied.flush()?;
-    copied.sync_all()?;
-
-    // 원본 fd를 통해 전체 내용 확인
-    original.seek(SeekFrom::Start(0))?;
-    let mut final_content = String::new();
-    original.read_to_string(&mut final_content)?;
-    assert_eq!(final_content, "Original content Additional content");
 
     Ok(())
   }

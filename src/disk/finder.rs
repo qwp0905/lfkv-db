@@ -7,12 +7,13 @@ use std::{
 };
 
 use crossbeam::queue::ArrayQueue;
+use fs2::FileExt;
 
 use crate::{
   Error, Page, Result, SafeWork, SafeWorkThread, SharedWorkThread, UnwrappedSender,
 };
 
-use super::{CopyableFile, Pread, Pwrite};
+use super::{Pread, Pwrite};
 
 const DEFAULT_READ_THREADS: usize = 1;
 const DEFAULT_WRITE_THREADS: usize = 1;
@@ -41,7 +42,7 @@ impl<const N: usize> Finder<N> {
       .open(&config.path)
       .map_err(Error::IO)?;
 
-    let ff = file.copy().map_err(Error::IO)?;
+    let ff = file.duplicate().map_err(Error::IO)?;
     let flush_th = Arc::new(SafeWorkThread::new(
       format!("flush {}", config.path.to_string_lossy()),
       N,
@@ -53,7 +54,7 @@ impl<const N: usize> Finder<N> {
       N,
       config.read_threads.unwrap_or(DEFAULT_READ_THREADS),
       |_| {
-        let fd = file.copy().map_err(Error::IO)?;
+        let fd = file.duplicate().map_err(Error::IO)?;
         let work = SafeWork::no_timeout(move |index: usize| {
           let mut page = Page::new();
           fd.pread(page.as_mut(), index.mul(N) as u64)?;
@@ -69,7 +70,7 @@ impl<const N: usize> Finder<N> {
       N,
       config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS),
       |_| {
-        let fd = file.copy().map_err(Error::IO)?;
+        let fd = file.duplicate().map_err(Error::IO)?;
         let work = SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
           fd.pwrite(page.as_ref(), index.mul(N) as u64)?;
           Ok(())
@@ -119,7 +120,7 @@ impl<const N: usize> Finder<N> {
       }),
     ));
 
-    let mf = file.copy().map_err(Error::IO)?;
+    let mf = file.duplicate().map_err(Error::IO)?;
     let meta_th = SafeWorkThread::new(
       format!("meta {}", config.path.to_string_lossy()),
       1,
