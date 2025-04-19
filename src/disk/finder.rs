@@ -183,23 +183,23 @@ mod tests {
     };
     let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
 
-    // 초기 길이는 0이어야 함
+    // Initial length should be 0
     assert_eq!(finder.len()?, 0);
 
-    // 페이지 쓰기
+    // Write a page
     let mut page = Page::new();
     let test_data = [1u8, 2u8, 3u8, 4u8];
     page.as_mut()[..test_data.len()].copy_from_slice(&test_data);
     finder.write(0, page)?;
 
-    // fsync로 디스크에 즉시 쓰기
+    // Immediately write to disk with fsync
     finder.fsync()?;
 
-    // 페이지 읽기
+    // Read the page
     let read_page = finder.read(0)?;
     assert_eq!(&read_page.as_ref()[..test_data.len()], &test_data);
 
-    // 파일 길이 확인
+    // Check file length
     assert_eq!(finder.len()?, 1);
 
     finder.close();
@@ -218,7 +218,7 @@ mod tests {
     };
     let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
 
-    // 존재하지 않는 페이지 읽기 시도
+    // Attempt to read a non-existent page
     let page = finder.read(100)?;
     assert_eq!(page.as_ref(), &[0u8; TEST_PAGE_SIZE]);
 
@@ -238,7 +238,7 @@ mod tests {
     };
     let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
 
-    // 여러 페이지 쓰기
+    // Write multiple pages
     for i in 0..3 {
       let mut page = Page::new();
       let value = (i + 1) as u8;
@@ -247,7 +247,7 @@ mod tests {
     }
     finder.fsync()?;
 
-    // 여러 페이지 읽기 & 검증
+    // Read and verify multiple pages
     for i in 0..3 {
       let page = finder.read(i)?;
       assert_eq!(page.as_ref()[0], (i + 1) as u8);
@@ -276,7 +276,7 @@ mod tests {
     const PAGES_PER_THREAD: usize = 25;
     let mut handles = vec![];
 
-    // 여러 스레드에서 동시에 쓰기 작업
+    // Perform concurrent write operations from multiple threads
     for thread_id in 0..THREADS_COUNT {
       let finder_clone = finder.clone();
       handles.push(thread::spawn(move || -> Result<()> {
@@ -300,14 +300,14 @@ mod tests {
       }));
     }
 
-    // 모든 쓰기 작업 완료 대기
+    // Wait for all write operations to complete
     for handle in handles {
       handle.join().unwrap()?;
     }
 
     finder.fsync()?;
 
-    // 검증을 위한 스레드들
+    // Verification threads
     let mut verify_handles = vec![];
     for thread_id in 0..THREADS_COUNT {
       let finder_clone = finder.clone();
@@ -326,7 +326,7 @@ mod tests {
       }));
     }
 
-    // 모든 검증 완료 대기
+    // Wait for all verification to complete
     for handle in verify_handles {
       handle.join().unwrap()?;
     }
@@ -358,7 +358,7 @@ mod tests {
 
     let mut handles = vec![];
 
-    // 여러 스레드에서 동시에 랜덤 읽기/쓰기 수행
+    // Perform random read/write operations from multiple threads
     for _ in 0..THREADS_COUNT {
       let finder_clone = finder.clone();
       handles.push(thread::spawn(move || -> Result<()> {
@@ -368,7 +368,7 @@ mod tests {
           let page_idx = rng.gen_range(0..MAX_PAGE_INDEX);
 
           if rng.gen_bool(0.7) {
-            // 70% 확률로 쓰기 작업
+            // 70% chance of write operation
             let mut page = Page::new();
             let value = rng.gen::<u8>();
             for j in 0..TEST_PAGE_SIZE {
@@ -377,11 +377,11 @@ mod tests {
             finder_clone.write(page_idx, page)?;
 
             if rng.gen_bool(0.2) {
-              // 20% 확률로 fsync
+              // 20% chance of fsync
               finder_clone.fsync()?;
             }
           } else {
-            // 30% 확률로 읽기 작업
+            // 30% chance of read operation
             let _ = finder_clone.read(page_idx)?;
           }
         }
@@ -389,7 +389,7 @@ mod tests {
       }));
     }
 
-    // 모든 작업 완료 대기
+    // Wait for all operations to complete
     for handle in handles {
       handle.join().unwrap()?;
     }
