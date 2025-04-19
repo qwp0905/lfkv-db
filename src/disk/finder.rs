@@ -30,7 +30,7 @@ pub struct Finder<const N: usize> {
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   batch_th: Arc<SafeWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SafeWorkThread<(), std::io::Result<()>>>,
-  meta_th: SafeWorkThread<(), std::io::Result<Metadata>>,
+  meta_th: Arc<SafeWorkThread<(), std::io::Result<Metadata>>>,
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
@@ -125,6 +125,7 @@ impl<const N: usize> Finder<N> {
       1,
       SafeWork::no_timeout(move |_| mf.metadata()),
     );
+    let meta_th = Arc::new(meta_th);
 
     Ok(Self {
       read_ths,
