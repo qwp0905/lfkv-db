@@ -159,7 +159,7 @@ impl Drop for FLock {
 mod tests {
   use super::*;
   use std::fs::File;
-  use std::io::{Read, Write};
+  use std::io::{Read, Seek, SeekFrom, Write};
   use tempfile::tempdir;
 
   #[test]
@@ -228,6 +228,45 @@ mod tests {
     let empty_buf: &[u8] = &[];
     let bytes_written = file.pwrite(empty_buf, 0)?;
     assert_eq!(bytes_written, 0);
+
+    Ok(())
+  }
+
+  #[test]
+  fn test_copy() -> Result<()> {
+    let dir = tempdir()?;
+    let file_path = dir.path().join("test_copy.txt");
+
+    // 원본 파일 생성 및 데이터 작성 (read/write 권한으로 열기)
+    let mut original = std::fs::OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .open(&file_path)?;
+    original.write_all(b"Original content")?;
+    original.flush()?;
+    original.sync_all()?;
+
+    // 파일 디스크립터 복사
+    let mut copied = original.copy()?;
+
+    // 복사된 fd를 통해 데이터 읽기
+    copied.seek(SeekFrom::Start(0))?;
+    let mut content = String::new();
+    copied.read_to_string(&mut content)?;
+    assert_eq!(content, "Original content");
+
+    // 복사된 fd를 통해 데이터 추가 쓰기
+    copied.seek(SeekFrom::End(0))?;
+    copied.write_all(b" Additional content")?;
+    copied.flush()?;
+    copied.sync_all()?;
+
+    // 원본 fd를 통해 전체 내용 확인
+    original.seek(SeekFrom::Start(0))?;
+    let mut final_content = String::new();
+    original.read_to_string(&mut final_content)?;
+    assert_eq!(final_content, "Original content Additional content");
 
     Ok(())
   }
