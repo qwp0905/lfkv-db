@@ -15,8 +15,8 @@ use crate::{
 
 use super::{Pread, Pwrite};
 
-const DEFAULT_READ_THREADS: usize = 1;
-const DEFAULT_WRITE_THREADS: usize = 1;
+const DEFAULT_READ_THREADS: usize = 3;
+const DEFAULT_WRITE_THREADS: usize = 3;
 
 pub struct FinderConfig {
   pub path: PathBuf,
@@ -265,14 +265,14 @@ mod tests {
     let config = FinderConfig {
       path: dir.path().join("test.db"),
       batch_delay: Duration::from_millis(10),
-      batch_size: 8,
+      batch_size: 50,
       read_threads: None,
       write_threads: None,
     };
 
     let finder = Arc::new(Finder::<TEST_PAGE_SIZE>::open(config)?);
 
-    const THREADS_COUNT: usize = 100;
+    const THREADS_COUNT: usize = 1000;
     const PAGES_PER_THREAD: usize = 25;
     let mut handles = vec![];
 
@@ -345,7 +345,7 @@ mod tests {
     let config = FinderConfig {
       path: dir.path().join("test.db"),
       batch_delay: Duration::from_millis(10),
-      batch_size: 8,
+      batch_size: 50,
       read_threads: None,
       write_threads: None,
     };
