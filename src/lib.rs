@@ -21,3 +21,6 @@ pub use disk::{Page, Serializable, PAGE_SIZE};
 
 mod log;
 use log::*;
+
+mod cache;
+use cache::*;
