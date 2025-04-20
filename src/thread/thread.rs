@@ -6,16 +6,9 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use crate::{logger, AsTimer, ShortenedMutex, UnwrappedReceiver, UnwrappedSender};
-
-pub trait Callable<T, R> {
-  fn call(&mut self, v: T) -> R;
-}
-impl<T, R, F: FnMut(T) -> R> Callable<T, R> for F {
-  fn call(&mut self, v: T) -> R {
-    self(v)
-  }
-}
+use crate::{
+  logger, AsTimer, CallableMut, ShortenedMutex, UnwrappedReceiver, UnwrappedSender,
+};
 
 pub enum BackgroundWork<T, R> {
   NoTimeout(Box<dyn FnMut(T) -> R + Send>),

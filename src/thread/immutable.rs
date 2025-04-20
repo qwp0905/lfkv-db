@@ -13,23 +13,9 @@ use crossbeam::{
 };
 
 use crate::{
-  logger, AsTimer, Error, Result, SendBy, ToArc, UnwrappedReceiver, UnwrappedSender,
+  logger, AsTimer, Error, Result, SafeCallable, SendBy, ToArc, UnwrappedReceiver,
+  UnwrappedSender,
 };
-
-pub trait SafeCallable<T, R> {
-  type Error;
-  fn safe_call(&self, v: T) -> std::result::Result<R, Self::Error>;
-}
-impl<T, R, F> SafeCallable<T, R> for F
-where
-  T: UnwindSafe + 'static,
-  F: Fn(T) -> R + RefUnwindSafe,
-{
-  type Error = Box<dyn std::any::Any + Send>;
-  fn safe_call(&self, v: T) -> std::result::Result<R, Self::Error> {
-    std::panic::catch_unwind(|| self(v))
-  }
-}
 
 pub enum Context<T, R> {
   Work((T, Sender<Result<R>>)),
@@ -160,7 +146,7 @@ where
   logger::error(format!("panic in safe work {:?}", err))
 }
 
-pub struct SharedWorkThread<T, R> {
+pub struct SharedWorkThread<T, R = ()> {
   threads: ArrayQueue<JoinHandle<()>>,
   channel: Sender<Context<T, R>>,
 }
@@ -260,7 +246,7 @@ where
 impl<T, R> RefUnwindSafe for SingleWorkThread<T, R> {}
 impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
 
-pub struct SingleWorkThread<T, R>(SharedWorkThread<T, R>);
+pub struct SingleWorkThread<T, R = ()>(SharedWorkThread<T, R>);
 impl<T, R> SingleWorkThread<T, R>
 where
   T: Send + UnwindSafe + 'static,

@@ -1,4 +1,4 @@
-use std::{ptr::NonNull, sync::Arc};
+use std::{ops::Deref, ptr::NonNull, sync::Arc};
 
 pub trait Pointer<T> {
   fn from_box(v: T) -> NonNull<T>;
@@ -42,6 +42,18 @@ impl<T> AsMut<T> for Link<T> {
 
 impl<T> AsRef<T> for Link<T> {
   fn as_ref(&self) -> &T {
+    unsafe { self.0.as_ref() }
+  }
+}
+impl<T> Clone for Link<T> {
+  fn clone(&self) -> Self {
+    Self(self.0)
+  }
+}
+impl<T> Deref for Link<T> {
+  type Target = T;
+
+  fn deref(&self) -> &Self::Target {
     unsafe { self.0.as_ref() }
   }
 }

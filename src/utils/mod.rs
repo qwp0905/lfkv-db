@@ -18,3 +18,6 @@ pub use timer::*;
 
 mod pointer;
 pub use pointer::*;
+
+mod bit;
+pub use bit::*;
