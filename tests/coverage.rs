@@ -5,7 +5,7 @@ const COV_DIR: &str = "./coverage/";
 #[test]
 #[ignore]
 fn create_coverage() {
-  std::env::set_var("RUSTFLAGS", "-Cinstrument-coverage -Awarnings");
+  std::env::set_var("RUSTFLAGS", "-Cinstrument-coverage");
   std::env::set_var("LLVM_PROFILE_FILE", "lfkv-%p-%m.profraw");
 
   let status = Command::new("cargo")
@@ -17,7 +17,7 @@ fn create_coverage() {
   }
 
   let status = Command::new("cargo")
-    .arg("test")
+    .args(["test", "--", "--test-threads=5"])
     .status()
     .expect("failed to run tests.");
   if !status.success() {
