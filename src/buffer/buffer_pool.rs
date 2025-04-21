@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-  disk::Finder, wal::CommitInfo, BackgroundThread, BackgroundWork, Error, Page,
-  Result, ShortenedMutex,
+  disk::Finder, wal::CommitInfo, BackgroundThread, BackgroundWork, Error, Page, Result,
+  ShortenedMutex,
 };
 
 use super::{CacheStorage, DataBlock, RollbackStorage, BLOCK_SIZE};
