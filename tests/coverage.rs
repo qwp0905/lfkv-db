@@ -17,7 +17,7 @@ fn create_coverage() {
   }
 
   let status = Command::new("cargo")
-    .args(["test", "--", "--test-threads=5"])
+    .args(["test", "--", "--test-threads=3"])
     .status()
     .expect("failed to run tests.");
   if !status.success() {
