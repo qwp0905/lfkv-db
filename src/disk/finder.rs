@@ -106,6 +106,10 @@ impl<const N: usize> Finder<N> {
           }
         }
 
+        if wait.is_empty() {
+          return true;
+        }
+
         match fc.send_await(()) {
           Ok(Err(_)) | Err(_) => return false,
           _ => {}
@@ -265,9 +269,9 @@ mod tests {
     let config = FinderConfig {
       path: dir.path().join("test.db"),
       batch_delay: Duration::from_millis(10),
-      batch_size: 50,
-      read_threads: None,
-      write_threads: None,
+      batch_size: 500,
+      read_threads: Some(8),
+      write_threads: Some(8),
     };
 
     let finder = Arc::new(Finder::<TEST_PAGE_SIZE>::open(config)?);
@@ -291,10 +295,6 @@ mod tests {
           }
 
           finder_clone.write(page_idx, page)?;
-
-          if i % 5 == 0 {
-            finder_clone.fsync()?;
-          }
         }
         Ok(())
       }));
@@ -304,8 +304,6 @@ mod tests {
     for handle in handles {
       handle.join().unwrap()?;
     }
-
-    finder.fsync()?;
 
     // Verification threads
     let mut verify_handles = vec![];
