@@ -1,8 +1,11 @@
 use std::{
   fs::{Metadata, OpenOptions},
-  ops::{Div, Mul},
+  ops::{Add, Div, Mul},
   path::PathBuf,
-  sync::Arc,
+  sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+  },
   time::Duration,
 };
 
@@ -32,6 +35,7 @@ pub struct Finder<const N: usize> {
   batch_th: Arc<SingleWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
+  extend_th: Arc<SingleWorkThread<usize, std::io::Result<usize>>>,
 }
 impl<const N: usize> Finder<N> {
   pub fn open(config: FinderConfig) -> Result<Self> {
@@ -41,6 +45,14 @@ impl<const N: usize> Finder<N> {
       .create(true)
       .open(&config.path)
       .map_err(Error::IO)?;
+
+    let mf = file.try_clone().map_err(Error::IO)?;
+    let meta_th = WorkBuilder::new()
+      .name(format!("meta {}", config.path.to_string_lossy()))
+      .stack_size(2 << 10)
+      .single()
+      .no_timeout(move |_| mf.metadata())
+      .to_arc();
 
     let ff = file.try_clone().map_err(Error::IO)?;
     let flush_th = WorkBuilder::new()
@@ -100,6 +112,7 @@ impl<const N: usize> Finder<N> {
             }
             _ => {}
           };
+
           let _ = wait.push(done);
           if !wait.is_full() {
             return false;
@@ -123,12 +136,19 @@ impl<const N: usize> Finder<N> {
       })
       .to_arc();
 
-    let mf = file.try_clone().map_err(Error::IO)?;
-    let meta_th = WorkBuilder::new()
-      .name(format!("meta {}", config.path.to_string_lossy()))
+    let ef = file.try_clone().map_err(Error::IO)?;
+    let last_len = AtomicU64::new(meta_th.send_await(())?.map_err(Error::IO)?.len());
+
+    let extend_th = WorkBuilder::new()
+      .name(format!("extend {}", config.path.to_string_lossy()))
       .stack_size(2 << 10)
       .single()
-      .no_timeout(move |_| mf.metadata())
+      .no_timeout(move |size: usize| {
+        let len = (size.mul(N) as u64).add(last_len.load(Ordering::Relaxed));
+        ef.set_len(len)?;
+        last_len.store(len, Ordering::Relaxed);
+        Ok((len as usize).div(N))
+      })
       .to_arc();
 
     Ok(Self {
@@ -137,6 +157,7 @@ impl<const N: usize> Finder<N> {
       batch_th,
       flush_th,
       meta_th,
+      extend_th,
     })
   }
 
@@ -150,6 +171,11 @@ impl<const N: usize> Finder<N> {
 
   pub fn fsync(&self) -> Result {
     self.flush_th.send_await(())?.map_err(Error::IO)
+  }
+
+  // return last index
+  pub fn extend(&self, size: usize) -> Result<usize> {
+    self.extend_th.send_await(size)?.map_err(Error::IO)
   }
 
   pub fn close(&self) {
@@ -274,7 +300,7 @@ mod tests {
       write_threads: Some(8),
     };
 
-    let finder = Arc::new(Finder::<TEST_PAGE_SIZE>::open(config)?);
+    let finder = Finder::<TEST_PAGE_SIZE>::open(config)?.to_arc();
 
     const THREADS_COUNT: usize = 1000;
     const PAGES_PER_THREAD: usize = 25;
@@ -394,6 +420,31 @@ mod tests {
 
     finder.fsync()?;
     finder.close();
+
+    Ok(())
+  }
+
+  #[test]
+  fn test_extend_file() -> Result<()> {
+    let dir = tempdir().map_err(Error::IO)?;
+    let config = FinderConfig {
+      path: dir.path().join("test.db"),
+      batch_delay: Duration::from_millis(10),
+      batch_size: 50,
+      read_threads: None,
+      write_threads: None,
+    };
+    let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
+    let initial_len = finder.len()?;
+    assert_eq!(initial_len, 0);
+    let new_len = finder.extend(10)?;
+    assert_eq!(new_len, 10);
+    let current_len = finder.len()?;
+    assert_eq!(current_len, 10);
+    let new_len = finder.extend(5)?;
+    assert_eq!(new_len, 15);
+    let current_len = finder.len()?;
+    assert_eq!(current_len, 15);
 
     Ok(())
   }
