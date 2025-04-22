@@ -297,17 +297,25 @@ mod tests {
     let counter_clone = counter.clone();
 
     let work = SafeWork::no_timeout(move |x: usize| {
+      thread::sleep(Duration::from_millis(100));
       counter_clone.fetch_add(x, Ordering::SeqCst);
       x * 2
     });
 
-    let thread = SharedWorkThread::new("test-no-timeout", 8192, 2, work);
+    let thread = SharedWorkThread::new("test-no-timeout", 8192, 4, work);
 
+    let start = Instant::now();
     // Send multiple tasks
-    let results: Vec<_> = (1..5).map(|i| thread.send_await(i).unwrap()).collect();
+    let receivers: Vec<_> = (1..5).map(|i| thread.send(i)).collect();
+    let results = receivers
+      .into_iter()
+      .map(|receiver| receiver.recv().unwrap().unwrap())
+      .collect::<Vec<usize>>();
+    let elapsed = start.elapsed();
 
     assert_eq!(results, vec![2, 4, 6, 8]);
     assert_eq!(counter.load(Ordering::SeqCst), 10); // 1+2+3+4 = 10
+    assert!(elapsed.as_millis() < 110); // Should take at least 150ms
 
     thread.close();
   }
