@@ -1,6 +1,4 @@
 use std::{
-  any::Any,
-  fmt::Debug,
   panic::{RefUnwindSafe, UnwindSafe},
   sync::Arc,
   thread::JoinHandle,
@@ -17,11 +15,7 @@ use crate::{
   UnwrappedSender,
 };
 
-pub enum Context<T, R> {
-  Work((T, Sender<Result<R>>)),
-  Finalize,
-  Term,
-}
+use super::{work::handle_panic, Context};
 
 pub enum SafeWork<T, R> {
   NoTimeout(Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>),
@@ -139,13 +133,6 @@ where
   }
 }
 
-fn handle_panic<E>(err: E)
-where
-  E: Any + Debug,
-{
-  logger::error(format!("panic in safe work {:?}", err))
-}
-
 pub struct SharedWorkThread<T, R = ()> {
   threads: ArrayQueue<JoinHandle<()>>,
   channel: Sender<Context<T, R>>,
@@ -187,12 +174,12 @@ where
     let (tx, rx) = unbounded();
     let threads = ArrayQueue::new(count);
     for i in 0..count {
-      let work = build(i)?.to_arc();
+      let work = build(i)?;
       let rx = rx.clone();
       let th = std::thread::Builder::new()
         .name(format!("{} {}", name.to_string(), i))
         .stack_size(size)
-        .spawn(move || work.as_ref().run(rx))
+        .spawn(move || work.run(rx))
         .unwrap();
       let _ = threads.push(th);
     }
