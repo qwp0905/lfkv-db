@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-  disk::{Finder, FinderConfig},
+  disk::{RandomAccessDisk, RandomAccessDiskConfig},
   wal::CommitInfo,
   Error, Page, Result, Serializable, ShortenedMutex, PAGE_SIZE,
 };
@@ -115,7 +115,7 @@ pub struct RollbackStorageConfig {
 
 pub struct RollbackStorage {
   cache: Mutex<LRUCache<usize, UndoLog>>,
-  disk: Finder<UNDO_PAGE_SIZE>,
+  disk: RandomAccessDisk<UNDO_PAGE_SIZE>,
   config: RollbackStorageConfig,
   cursor: Mutex<usize>,
 }
@@ -124,7 +124,7 @@ impl RollbackStorage {
     config.max_file_size.div_assign(UNDO_PAGE_SIZE);
     config.max_cache_size.div_assign(UNDO_PAGE_SIZE);
 
-    let disk = Finder::open(FinderConfig {
+    let disk = RandomAccessDisk::open(RandomAccessDiskConfig {
       path: config.path.clone(),
       read_threads: None,
       write_threads: None,

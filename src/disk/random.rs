@@ -6,29 +6,30 @@ use std::{
 };
 
 use crate::{
-  Error, Page, Result, SafeWork, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
+  Error, Page, Result, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
 };
 
-use super::{Pread, Pwrite};
+use super::thread::{
+  create_flush_thread, create_metadata_thread, create_read_thread, create_write_thread,
+};
 
 const DEFAULT_READ_THREADS: usize = 3;
 const DEFAULT_WRITE_THREADS: usize = 3;
 
-// you must implement log file without this struct
-pub struct FinderConfig {
+pub struct RandomAccessDiskConfig {
   pub path: PathBuf,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
 }
 
-pub struct Finder<const N: usize> {
+pub struct RandomAccessDisk<const N: usize> {
   read_ths: Arc<SharedWorkThread<usize, std::io::Result<Page<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
 }
-impl<const N: usize> Finder<N> {
-  pub fn open(config: FinderConfig) -> Result<Self> {
+impl<const N: usize> RandomAccessDisk<N> {
+  pub fn open(config: RandomAccessDiskConfig) -> Result<Self> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
@@ -36,56 +37,25 @@ impl<const N: usize> Finder<N> {
       .open(&config.path)
       .map_err(Error::IO)?;
 
-    let ff = file.try_clone().map_err(Error::IO)?;
-    let flush_th = WorkBuilder::new()
-      .name(format!("flush {}", config.path.to_string_lossy()))
-      .stack_size(2 << 10)
-      .single()
-      .no_timeout(move |_| ff.sync_all())
-      .to_arc();
-
     let read_ths = WorkBuilder::new()
       .name(format!("read {}", config.path.to_string_lossy()))
       .stack_size(N.mul(150))
       .shared(config.read_threads.unwrap_or(DEFAULT_READ_THREADS))
-      .build(|_| {
-        let fd = file.try_clone().map_err(Error::IO)?;
-        let work = SafeWork::no_timeout(move |index: usize| {
-          let mut page = Page::new();
-          fd.pread(page.as_mut(), index.mul(N) as u64)?;
-          Ok(page)
-        });
-        Ok(work)
-      })?
+      .build(create_read_thread(&file))?
       .to_arc();
 
     let write_ths = WorkBuilder::new()
       .name(format!("write {}", config.path.to_string_lossy()))
       .stack_size(N.mul(150))
       .shared(config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS))
-      .build(|_| {
-        let fd = file.try_clone().map_err(Error::IO)?;
-        let work = SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
-          fd.pwrite(page.as_ref(), index.mul(N) as u64)?;
-          Ok(())
-        });
-        Ok(work)
-      })?
-      .to_arc();
-
-    let mf = file.try_clone().map_err(Error::IO)?;
-    let meta_th = WorkBuilder::new()
-      .name(format!("meta {}", config.path.to_string_lossy()))
-      .stack_size(2 << 10)
-      .single()
-      .no_timeout(move |_| mf.metadata())
+      .build(create_write_thread(&file))?
       .to_arc();
 
     Ok(Self {
       read_ths,
       write_ths,
-      flush_th,
-      meta_th,
+      flush_th: create_flush_thread(&file, &config.path)?.to_arc(),
+      meta_th: create_metadata_thread(&file, &config.path)?.to_arc(),
     })
   }
 
@@ -125,12 +95,12 @@ mod tests {
   #[test]
   fn test_basic_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = FinderConfig {
+    let config = RandomAccessDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Initial length should be 0
     assert_eq!(finder.len()?, 0);
@@ -158,12 +128,12 @@ mod tests {
   #[test]
   fn test_nonexistent_page() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = FinderConfig {
+    let config = RandomAccessDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Attempt to read a non-existent page
     let page = finder.read(100)?;
@@ -176,12 +146,12 @@ mod tests {
   #[test]
   fn test_multiple_pages() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = FinderConfig {
+    let config = RandomAccessDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = Finder::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Write multiple pages
     for i in 0..3 {
@@ -207,13 +177,13 @@ mod tests {
   #[test]
   fn test_concurrent_large_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = FinderConfig {
+    let config = RandomAccessDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: Some(8),
       write_threads: Some(8),
     };
 
-    let finder = Arc::new(Finder::<TEST_PAGE_SIZE>::open(config)?);
+    let finder = Arc::new(RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?);
 
     const THREADS_COUNT: usize = 1000;
     const PAGES_PER_THREAD: usize = 25;
@@ -280,13 +250,13 @@ mod tests {
     use rand::Rng;
 
     let dir = tempdir().map_err(Error::IO)?;
-    let config = FinderConfig {
+    let config = RandomAccessDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
 
-    let finder = Arc::new(Finder::<TEST_PAGE_SIZE>::open(config)?);
+    let finder = Arc::new(RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?);
 
     const THREADS_COUNT: usize = 500;
     const OPERATIONS_PER_THREAD: usize = 50;

@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
   buffer::BufferPool,
-  disk::{Finder, FinderConfig},
+  disk::{RandomAccessDisk, RandomAccessDiskConfig},
   logger, size, BackgroundThread, BackgroundWork, DrainAll, Page, Result, Serializable,
   ShortenedRwLock,
 };
@@ -29,7 +29,7 @@ pub struct WriteAheadLogConfig {
 pub struct WriteAheadLog {
   buffer: Arc<LogBuffer>,
   commit_c: Arc<BackgroundThread<CommitInfo, Result>>,
-  disk: Arc<Finder<WAL_PAGE_SIZE>>,
+  disk: Arc<RandomAccessDisk<WAL_PAGE_SIZE>>,
   io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
   checkpoint_c: Arc<BackgroundThread<()>>,
   config: WriteAheadLogConfig,
@@ -44,12 +44,12 @@ impl WriteAheadLog {
   ) -> Result<Self> {
     config.max_file_size.div_assign(WAL_PAGE_SIZE);
 
-    let disk_config = FinderConfig {
+    let disk_config = RandomAccessDiskConfig {
       path: config.path.clone(),
       read_threads: None,
       write_threads: None,
     };
-    let disk = Arc::new(Finder::open(disk_config)?);
+    let disk = Arc::new(RandomAccessDisk::open(disk_config)?);
     let buffer = Arc::new(LogBuffer::new());
 
     let last_index = Arc::new(RwLock::new(0));
@@ -76,7 +76,7 @@ impl WriteAheadLog {
   fn new(
     buffer: Arc<LogBuffer>,
     commit_c: Arc<BackgroundThread<CommitInfo, Result>>,
-    disk: Arc<Finder<WAL_PAGE_SIZE>>,
+    disk: Arc<RandomAccessDisk<WAL_PAGE_SIZE>>,
     io_c: Arc<BackgroundThread<Vec<LogRecord>, Result>>,
     checkpoint_c: Arc<BackgroundThread<()>>,
     config: WriteAheadLogConfig,
