@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-  disk::RandomAccessDisk, wal::CommitInfo, BackgroundThread, BackgroundWork, Error, Page,
+  disk::RandomWriteDisk, wal::CommitInfo, BackgroundThread, BackgroundWork, Error, Page,
   Result, ShortenedMutex,
 };
 
@@ -15,12 +15,12 @@ pub struct BufferPool {
   cache: Arc<CacheStorage>,
   rollback: Arc<RollbackStorage>,
   uncommitted: Arc<Mutex<BTreeMap<usize, Vec<usize>>>>,
-  disk: Arc<RandomAccessDisk<BLOCK_SIZE>>,
+  disk: Arc<RandomWriteDisk<BLOCK_SIZE>>,
 }
 impl BufferPool {
   pub fn generate(
     rollback: Arc<RollbackStorage>,
-    disk: Arc<RandomAccessDisk<BLOCK_SIZE>>,
+    disk: Arc<RandomWriteDisk<BLOCK_SIZE>>,
     max_cache_size: usize,
   ) -> (
     Self,

@@ -1,8 +1,11 @@
-use std::ops::{Add, Sub};
+use std::{
+  ops::{Add, Sub},
+  sync::Mutex,
+};
 
 use crate::{
   disk::{Page, PageScanner, PageWriter},
-  size, Error, Serializable, PAGE_SIZE,
+  size, Error, Serializable, ShortenedMutex, PAGE_SIZE,
 };
 
 pub const WAL_PAGE_SIZE: usize = size::kb(16);

@@ -10,16 +10,16 @@ use std::{
 
 use crate::{BackgroundThread, BackgroundWork, Result, ShortenedMutex};
 
-use super::RandomAccessDisk;
+use super::RandomWriteDisk;
 
 pub struct FreeList<const N: usize> {
   list: Arc<Mutex<BTreeSet<usize>>>,
-  file: Arc<RandomAccessDisk<N>>,
+  file: Arc<RandomWriteDisk<N>>,
   chan: BackgroundThread<(), Result>,
   last_index: AtomicUsize,
 }
 impl<const N: usize> FreeList<N> {
-  pub fn new(interval: Duration, file: Arc<RandomAccessDisk<N>>) -> Result<Self> {
+  pub fn new(interval: Duration, file: Arc<RandomWriteDisk<N>>) -> Result<Self> {
     let chan = BackgroundThread::new(
       "defragmentation",
       N.mul(2),

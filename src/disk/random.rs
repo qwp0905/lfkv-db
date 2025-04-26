@@ -16,20 +16,20 @@ use super::thread::{
 const DEFAULT_READ_THREADS: usize = 3;
 const DEFAULT_WRITE_THREADS: usize = 3;
 
-pub struct RandomAccessDiskConfig {
+pub struct RandomWriteDiskConfig {
   pub path: PathBuf,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
 }
 
-pub struct RandomAccessDisk<const N: usize> {
+pub struct RandomWriteDisk<const N: usize> {
   read_ths: Arc<SharedWorkThread<usize, std::io::Result<Page<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
 }
-impl<const N: usize> RandomAccessDisk<N> {
-  pub fn open(config: RandomAccessDiskConfig) -> Result<Self> {
+impl<const N: usize> RandomWriteDisk<N> {
+  pub fn open(config: RandomWriteDiskConfig) -> Result<Self> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
@@ -95,12 +95,12 @@ mod tests {
   #[test]
   fn test_basic_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomAccessDiskConfig {
+    let config = RandomWriteDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Initial length should be 0
     assert_eq!(finder.len()?, 0);
@@ -128,12 +128,12 @@ mod tests {
   #[test]
   fn test_nonexistent_page() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomAccessDiskConfig {
+    let config = RandomWriteDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Attempt to read a non-existent page
     let page = finder.read(100)?;
@@ -146,12 +146,12 @@ mod tests {
   #[test]
   fn test_multiple_pages() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomAccessDiskConfig {
+    let config = RandomWriteDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
-    let finder = RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?;
+    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config)?;
 
     // Write multiple pages
     for i in 0..3 {
@@ -177,13 +177,13 @@ mod tests {
   #[test]
   fn test_concurrent_large_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomAccessDiskConfig {
+    let config = RandomWriteDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: Some(8),
       write_threads: Some(8),
     };
 
-    let finder = Arc::new(RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?);
+    let finder = Arc::new(RandomWriteDisk::<TEST_PAGE_SIZE>::open(config)?);
 
     const THREADS_COUNT: usize = 1000;
     const PAGES_PER_THREAD: usize = 25;
@@ -250,13 +250,13 @@ mod tests {
     use rand::Rng;
 
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomAccessDiskConfig {
+    let config = RandomWriteDiskConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
 
-    let finder = Arc::new(RandomAccessDisk::<TEST_PAGE_SIZE>::open(config)?);
+    let finder = Arc::new(RandomWriteDisk::<TEST_PAGE_SIZE>::open(config)?);
 
     const THREADS_COUNT: usize = 500;
     const OPERATIONS_PER_THREAD: usize = 50;

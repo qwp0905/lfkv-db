@@ -13,8 +13,5 @@ pub use free::*;
 mod io;
 pub use io::*;
 
-mod sequential;
-pub use sequential::*;
-
 mod thread;
 use thread::*;
