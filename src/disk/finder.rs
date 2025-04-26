@@ -3,14 +3,10 @@ use std::{
   ops::{Div, Mul},
   path::PathBuf,
   sync::Arc,
-  time::Duration,
 };
 
-use crossbeam::queue::ArrayQueue;
-
 use crate::{
-  Error, Page, Result, SafeWork, SharedWorkThread, SingleWorkThread, ToArc,
-  UnwrappedSender, WorkBuilder,
+  Error, Page, Result, SafeWork, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 use super::{Pread, Pwrite};
@@ -18,10 +14,9 @@ use super::{Pread, Pwrite};
 const DEFAULT_READ_THREADS: usize = 3;
 const DEFAULT_WRITE_THREADS: usize = 3;
 
+// you must implement log file without this struct
 pub struct FinderConfig {
   pub path: PathBuf,
-  pub batch_delay: Duration,
-  pub batch_size: usize,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
 }
@@ -29,7 +24,6 @@ pub struct FinderConfig {
 pub struct Finder<const N: usize> {
   read_ths: Arc<SharedWorkThread<usize, std::io::Result<Page<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
-  batch_th: Arc<SingleWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
 }
@@ -79,50 +73,6 @@ impl<const N: usize> Finder<N> {
       })?
       .to_arc();
 
-    let wc = write_ths.clone();
-    let fc = flush_th.clone();
-    let wait = ArrayQueue::new(config.batch_size);
-
-    let batch_th = WorkBuilder::new()
-      .name(format!("batch {}", config.path.to_string_lossy()))
-      .stack_size(N.mul(config.batch_size).mul(20))
-      .single()
-      .with_timer(config.batch_delay, move |v| {
-        if let Some(((index, page), done)) = v {
-          match wc.send_await((index, page)) {
-            Ok(Err(err)) => {
-              done.must_send(Ok(Err(err)));
-              return false;
-            }
-            Err(err) => {
-              done.must_send(Err(err));
-              return false;
-            }
-            _ => {}
-          };
-          let _ = wait.push(done);
-          if !wait.is_full() {
-            return false;
-          }
-        }
-
-        if wait.is_empty() {
-          return true;
-        }
-
-        match fc.send_await(()) {
-          Ok(Err(_)) | Err(_) => return false,
-          _ => {}
-        }
-
-        while let Some(done) = wait.pop() {
-          done.must_send(Ok(Ok(())));
-        }
-
-        true
-      })
-      .to_arc();
-
     let mf = file.try_clone().map_err(Error::IO)?;
     let meta_th = WorkBuilder::new()
       .name(format!("meta {}", config.path.to_string_lossy()))
@@ -134,7 +84,6 @@ impl<const N: usize> Finder<N> {
     Ok(Self {
       read_ths,
       write_ths,
-      batch_th,
       flush_th,
       meta_th,
     })
@@ -145,7 +94,7 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn write(&self, index: usize, page: Page<N>) -> Result {
-    self.batch_th.send_await((index, page))?.map_err(Error::IO)
+    self.write_ths.send_await((index, page))?.map_err(Error::IO)
   }
 
   pub fn fsync(&self) -> Result {
@@ -153,7 +102,6 @@ impl<const N: usize> Finder<N> {
   }
 
   pub fn close(&self) {
-    self.batch_th.finalize();
     self.write_ths.close();
     self.read_ths.close();
     self.flush_th.close();
@@ -170,7 +118,6 @@ mod tests {
   use super::*;
   use std::sync::Arc;
   use std::thread;
-  use std::time::Duration;
   use tempfile::tempdir;
 
   const TEST_PAGE_SIZE: usize = 4096;
@@ -180,8 +127,6 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = FinderConfig {
       path: dir.path().join("test.db"),
-      batch_delay: Duration::from_millis(10),
-      batch_size: 8,
       read_threads: None,
       write_threads: None,
     };
@@ -215,8 +160,6 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = FinderConfig {
       path: dir.path().join("test.db"),
-      batch_delay: Duration::from_millis(10),
-      batch_size: 8,
       read_threads: None,
       write_threads: None,
     };
@@ -235,8 +178,6 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = FinderConfig {
       path: dir.path().join("test.db"),
-      batch_delay: Duration::from_millis(10),
-      batch_size: 8,
       read_threads: None,
       write_threads: None,
     };
@@ -268,8 +209,6 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = FinderConfig {
       path: dir.path().join("test.db"),
-      batch_delay: Duration::from_millis(10),
-      batch_size: 500,
       read_threads: Some(8),
       write_threads: Some(8),
     };
@@ -299,6 +238,7 @@ mod tests {
         Ok(())
       }));
     }
+    finder.fsync()?;
 
     // Wait for all write operations to complete
     for handle in handles {
@@ -342,8 +282,6 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = FinderConfig {
       path: dir.path().join("test.db"),
-      batch_delay: Duration::from_millis(10),
-      batch_size: 50,
       read_threads: None,
       write_threads: None,
     };

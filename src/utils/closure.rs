@@ -28,6 +28,7 @@ impl<T, R, F> Callable<T, R> for F
 where
   F: Fn(T) -> R,
 {
+  #[inline]
   fn call(&self, v: T) -> R {
     self(v)
   }
@@ -36,6 +37,7 @@ pub trait CallableMut<T, R> {
   fn call(&mut self, v: T) -> R;
 }
 impl<T, R, F: FnMut(T) -> R> CallableMut<T, R> for F {
+  #[inline]
   fn call(&mut self, v: T) -> R {
     self(v)
   }
@@ -44,6 +46,7 @@ pub trait CallableOnce<T, R> {
   fn call(self, v: T) -> R;
 }
 impl<T, R, F: FnOnce(T) -> R> CallableOnce<T, R> for F {
+  #[inline]
   fn call(self, v: T) -> R {
     self(v)
   }
@@ -59,6 +62,8 @@ where
   F: Fn(T) -> R + RefUnwindSafe,
 {
   type Error = Box<dyn std::any::Any + Send>;
+
+  #[inline]
   fn safe_call(&self, v: T) -> std::result::Result<R, Self::Error> {
     std::panic::catch_unwind(|| self(v))
   }

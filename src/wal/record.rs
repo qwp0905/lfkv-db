@@ -62,7 +62,7 @@ impl LogRecord {
   }
 
   pub fn new_abort(transaction_id: usize) -> Self {
-    Self::new(0, transaction_id, Operation::Commit)
+    Self::new(0, transaction_id, Operation::Abort)
   }
 
   pub fn new_insert(transaction_id: usize, page_index: usize, data: Page) -> Self {

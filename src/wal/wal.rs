@@ -46,8 +46,6 @@ impl WriteAheadLog {
 
     let disk_config = FinderConfig {
       path: config.path.clone(),
-      batch_delay: config.group_commit_delay,
-      batch_size: config.group_commit_count,
       read_threads: None,
       write_threads: None,
     };

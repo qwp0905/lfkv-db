@@ -126,8 +126,6 @@ impl RollbackStorage {
 
     let disk = Finder::open(FinderConfig {
       path: config.path.clone(),
-      batch_delay: config.fsync_delay,
-      batch_size: config.fsync_count,
       read_threads: None,
       write_threads: None,
     })?;
