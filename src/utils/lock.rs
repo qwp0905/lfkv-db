@@ -10,8 +10,8 @@ impl<T: ?Sized> ShortenedMutex<T> for Mutex<T> {
 }
 
 pub trait ShortenedRwLock<T: ?Sized> {
-  fn wl(&self) -> RwLockWriteGuard<'_, T>;
   fn rl(&self) -> RwLockReadGuard<'_, T>;
+  fn wl(&self) -> RwLockWriteGuard<'_, T>;
 }
 impl<T: ?Sized> ShortenedRwLock<T> for RwLock<T> {
   fn rl(&self) -> RwLockReadGuard<'_, T> {

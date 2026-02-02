@@ -1,21 +1,34 @@
-use std::{ops::Deref, ptr::NonNull, sync::Arc};
+use std::{
+  ops::Deref,
+  ptr::NonNull,
+  sync::{Arc, Mutex},
+};
 
 pub trait Pointer<T> {
-  fn from_box(v: T) -> NonNull<T>;
-  fn refs(&self) -> &T;
-  fn muts(&mut self) -> &mut T;
+  fn from_box(v: T) -> Self;
+  fn borrow(&self) -> &T;
+  fn borrow_mut(&mut self) -> &mut T;
+  fn drop(self);
 }
 impl<T> Pointer<T> for NonNull<T> {
-  fn from_box(v: T) -> NonNull<T> {
+  #[inline]
+  fn from_box(v: T) -> Self {
     NonNull::from(Box::leak(Box::new(v)))
   }
 
-  fn refs(&self) -> &T {
+  #[inline]
+  fn borrow(&self) -> &T {
     unsafe { self.as_ref() }
   }
 
-  fn muts(&mut self) -> &mut T {
+  #[inline]
+  fn borrow_mut(&mut self) -> &mut T {
     unsafe { self.as_mut() }
+  }
+
+  #[inline]
+  fn drop(self) {
+    unsafe { self.drop_in_place() };
   }
 }
 
@@ -62,7 +75,18 @@ pub trait ToArc {
   fn to_arc(self) -> Arc<Self>;
 }
 impl<T> ToArc for T {
+  #[inline]
   fn to_arc(self) -> Arc<Self> {
     Arc::new(self)
+  }
+}
+
+pub trait ToArcMutex {
+  fn to_arc_mutex(self) -> Arc<Mutex<Self>>;
+}
+impl<T> ToArcMutex for T {
+  #[inline]
+  fn to_arc_mutex(self) -> Arc<Mutex<Self>> {
+    Mutex::new(self).to_arc()
   }
 }

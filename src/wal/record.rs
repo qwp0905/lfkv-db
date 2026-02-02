@@ -1,199 +1,153 @@
 use std::{
-  ops::{Add, Sub},
-  sync::Mutex,
+  ops::Add,
+  time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
-  disk::{Page, PageScanner, PageWriter},
-  size, Error, Serializable, ShortenedMutex, PAGE_SIZE,
-};
+use crate::{Error, Page, Result, PAGE_SIZE};
 
-pub const WAL_PAGE_SIZE: usize = size::kb(16);
+pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
 
-#[derive(Debug)]
-pub struct InsertLog {
-  pub page_index: usize,
-  pub data: Page,
-}
-impl InsertLog {
-  fn new(page_index: usize, data: Page) -> Self {
-    Self { page_index, data }
-  }
-}
-impl Clone for InsertLog {
-  fn clone(&self) -> Self {
-    Self {
-      page_index: self.page_index,
-      data: self.data.copy(),
-    }
-  }
-}
-
-#[derive(Debug, Clone)]
 pub enum Operation {
+  Insert(
+    usize, // index of the page
+    Page,  // data
+  ),
   Start,
   Commit,
   Abort,
-  Checkpoint(usize),
-  Insert(InsertLog),
-}
-impl Operation {
-  fn size(&self) -> usize {
-    match self {
-      Operation::Start => 1,
-      Operation::Commit => 1,
-      Operation::Abort => 1,
-      Operation::Checkpoint(_) => 9,
-      Operation::Insert(_) => 8 + PAGE_SIZE,
-    }
-  }
+  Checkpoint,
 }
 
-#[derive(Debug)]
 pub struct LogRecord {
-  pub index: usize,
-  pub transaction_id: usize,
-  pub operation: Operation,
+  pub log_id: usize,
+  pub tx_id: usize,
+  operation: Operation,
 }
 impl LogRecord {
-  pub fn new_start(transaction_id: usize) -> Self {
-    Self::new(0, transaction_id, Operation::Start)
-  }
-
-  pub fn new_commit(transaction_id: usize) -> Self {
-    Self::new(0, transaction_id, Operation::Commit)
-  }
-
-  pub fn new_abort(transaction_id: usize) -> Self {
-    Self::new(0, transaction_id, Operation::Abort)
-  }
-
-  pub fn new_insert(transaction_id: usize, page_index: usize, data: Page) -> Self {
-    Self::new(
-      0,
-      transaction_id,
-      Operation::Insert(InsertLog::new(page_index, data)),
-    )
-  }
-
-  pub fn new_checkpoint(applied: usize) -> Self {
-    Self::new(0, 0, Operation::Checkpoint(applied))
-  }
-
-  pub fn assign_id(&mut self, index: usize) {
-    self.index = index
-  }
-
-  fn new(index: usize, transaction_id: usize, operation: Operation) -> Self {
-    Self {
-      index,
-      transaction_id,
+  #[inline]
+  fn new(log_id: usize, tx_id: usize, operation: Operation) -> Self {
+    LogRecord {
+      tx_id,
       operation,
+      log_id,
     }
   }
-
-  pub fn size(&self) -> usize {
-    self.operation.size().add(16)
+  pub fn new_insert(log_id: usize, tx_id: usize, page_index: usize, data: Page) -> Self {
+    LogRecord::new(log_id, tx_id, Operation::Insert(page_index, data))
   }
 
-  fn write_to(&self, wt: &mut PageWriter<WAL_PAGE_SIZE>) -> crate::Result<()> {
-    wt.write(&self.index.to_be_bytes())?;
-    wt.write(&self.transaction_id.to_be_bytes())?;
+  pub fn new_start(log_id: usize, tx_id: usize) -> Self {
+    LogRecord::new(log_id, tx_id, Operation::Start)
+  }
+
+  pub fn new_commit(log_id: usize, tx_id: usize) -> Self {
+    LogRecord::new(log_id, tx_id, Operation::Commit)
+  }
+
+  pub fn new_abort(log_id: usize, tx_id: usize) -> Self {
+    LogRecord::new(log_id, tx_id, Operation::Abort)
+  }
+
+  pub fn new_checkpoint(log_id: usize, tx_id: usize) -> Self {
+    LogRecord::new(log_id, tx_id, Operation::Checkpoint)
+  }
+
+  pub fn to_bytes(self) -> Vec<u8> {
+    let mut vec = Vec::new();
+
+    vec.extend_from_slice(&self.log_id.to_le_bytes());
+    vec.extend_from_slice(&self.tx_id.to_le_bytes());
+
     match &self.operation {
-      Operation::Start => {
-        wt.write(&[0])?;
+      Operation::Insert(index, page) => {
+        vec.push(0);
+        vec.extend_from_slice(&index.to_le_bytes());
+        vec.extend_from_slice(page.as_ref());
       }
-      Operation::Commit => {
-        wt.write(&[1])?;
-      }
-      Operation::Abort => {
-        wt.write(&[2])?;
-      }
-      Operation::Checkpoint(i) => {
-        wt.write(&[3])?;
-        wt.write(&i.to_be_bytes())?;
-      }
-      Operation::Insert(log) => {
-        wt.write(&[4])?;
-        wt.write(log.page_index.to_be_bytes().as_ref())?;
-        wt.write(log.data.as_ref())?;
-      }
+      Operation::Start => vec.push(1),
+      Operation::Commit => vec.push(2),
+      Operation::Abort => vec.push(3),
+      Operation::Checkpoint => vec.push(4),
     }
-    Ok(())
+    vec
   }
+}
+impl From<LogRecord> for Vec<u8> {
+  fn from(value: LogRecord) -> Self {
+    value.to_bytes()
+  }
+}
+impl TryFrom<Vec<u8>> for LogRecord {
+  type Error = Error;
 
-  fn read_from(sc: &mut PageScanner<WAL_PAGE_SIZE>) -> crate::Result<Self> {
-    let index = sc.read_usize()?;
-    let transaction_id = sc.read_usize()?;
-    let operation = match sc.read()? {
-      0 => Operation::Start,
-      1 => Operation::Commit,
-      2 => Operation::Abort,
-      3 => {
-        let i = sc.read_usize()?;
-        Operation::Checkpoint(i)
+  fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+    let len = value.len();
+    if len.lt(&17) {
+      return Err(Error::Invalid);
+    }
+    let log_id =
+      usize::from_le_bytes(value[0..8].try_into().map_err(|_| Error::Invalid)?);
+    let tx_id =
+      usize::from_le_bytes(value[8..16].try_into().map_err(|_| Error::Invalid)?);
+    let operation = match value[16] {
+      0 => {
+        if len.ne(&PAGE_SIZE.add(17).add(8)) {
+          return Err(Error::Invalid);
+        }
+        let index =
+          usize::from_le_bytes(value[17..25].try_into().map_err(|_| Error::Invalid)?);
+        let data = value[25..].try_into().map_err(|_| Error::Invalid)?;
+        Operation::Insert(index, data)
       }
-      4 => {
-        let page_index = sc.read_usize()?;
-        let data = sc.read_n(PAGE_SIZE)?.into();
-        Operation::Insert(InsertLog::new(page_index, data))
-      }
+      1 => Operation::Start,
+      2 => Operation::Commit,
+      3 => Operation::Abort,
+      4 => Operation::Checkpoint,
       _ => return Err(Error::Invalid),
     };
-    return Ok(Self::new(index, transaction_id, operation));
+    Ok(LogRecord::new(log_id, tx_id, operation))
   }
 }
 
-#[derive(Debug)]
 pub struct LogEntry {
-  pub records: Vec<LogRecord>,
+  data: Vec<u8>,
 }
 impl LogEntry {
   pub fn new() -> Self {
-    Self { records: vec![] }
+    Self { data: vec![0; 2] }
   }
 
-  pub fn is_available(&self, record: &LogRecord) -> bool {
+  pub fn append(&mut self, record: LogRecord) -> Result<()> {
+    let buf = record.to_bytes();
+    if self.data.len().add(buf.len().add(2)).gt(&WAL_BLOCK_SIZE) {
+      return Err(Error::EOF);
+    }
+    let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
     self
-      .records
-      .iter()
-      .fold(0, |a, r| a.add(r.size()))
-      .add(record.size())
-      .le(&WAL_PAGE_SIZE.sub(30))
-  }
-
-  pub fn append(&mut self, record: LogRecord) {
-    self.records.push(record)
-  }
-
-  fn iter(&self) -> impl Iterator<Item = &LogRecord> {
-    self.records.iter()
+      .data
+      .extend_from_slice(&(buf.len() as u16).to_le_bytes());
+    self.data.extend_from_slice(&buf);
+    self.data[0..2].copy_from_slice(&len.add(1).to_le_bytes());
+    Ok(())
   }
 }
-impl Default for LogEntry {
-  fn default() -> Self {
-    Self::new()
+impl From<LogEntry> for Page<WAL_BLOCK_SIZE> {
+  fn from(value: LogEntry) -> Self {
+    value.data.into()
   }
 }
+impl TryFrom<Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
+  type Error = Error;
 
-impl Serializable<Error, WAL_PAGE_SIZE> for LogEntry {
-  fn serialize(&self) -> Result<Page<WAL_PAGE_SIZE>, Error> {
-    let mut page = Page::new();
-    let mut wt = page.writer();
-    wt.write(&self.records.len().to_be_bytes())?;
-    for record in self.iter() {
-      record.write_to(&mut wt)?;
+  fn try_from(value: Page<WAL_BLOCK_SIZE>) -> std::result::Result<Self, Self::Error> {
+    let mut scanner = value.scanner();
+    let len = scanner.read_u16()?;
+    let mut data = vec![];
+    for _ in 0..len {
+      let size = scanner.read_u16()?;
+      let record = scanner.read_n(size as usize)?.to_vec().try_into()?;
+      data.push(record);
     }
-    Ok(page)
-  }
-  fn deserialize(value: &Page<WAL_PAGE_SIZE>) -> Result<Self, Error> {
-    let mut sc = value.scanner();
-    let l = sc.read_usize()?;
-    let mut records = vec![];
-    for _ in 0..l {
-      records.push(LogRecord::read_from(&mut sc)?);
-    }
-
-    Ok(Self { records })
+    Ok(data)
   }
 }

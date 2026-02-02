@@ -3,7 +3,7 @@ use std::ops::{Add, AddAssign, Index, IndexMut};
 use crate::error::{Error, Result};
 use crate::utils::size;
 
-pub const PAGE_SIZE: usize = size::kb(4) - 24;
+pub const PAGE_SIZE: usize = size::kb(4);
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Page<const T: usize = PAGE_SIZE> {
@@ -105,6 +105,11 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     Ok(usize::from_be_bytes(b))
   }
 
+  pub fn read_u16(&mut self) -> Result<u16> {
+    let b = self.read_n(2)?.try_into().map_err(|_| Error::EOF)?;
+    Ok(u16::from_be_bytes(b))
+  }
+
   pub fn is_eof(&self) -> bool {
     self.inner.len().le(&self.offset)
   }
@@ -130,6 +135,10 @@ impl<'a, const T: usize> PageWriter<'a, T> {
       .copy_from_slice(&bytes);
     self.offset = end;
     Ok(())
+  }
+
+  pub fn write_usize(&mut self, value: usize) -> Result<()> {
+    self.write(&value.to_be_bytes())
   }
 
   pub fn is_eof(&self) -> bool {

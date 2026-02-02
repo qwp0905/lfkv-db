@@ -133,9 +133,7 @@ where
     let t = std::thread::Builder::new()
       .name(inner.name.clone())
       .stack_size(inner.size)
-      .spawn(move || {
-        func.l().run(rx);
-      })
+      .spawn(move || func.l().run(rx))
       .unwrap();
     let (done_t, done_r) = unbounded();
     tx.must_send((v, done_t));

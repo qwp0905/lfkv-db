@@ -38,9 +38,8 @@ impl Pwrite for File {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::fs::{File /* OpenOptions */};
+  use std::fs::File;
   use std::io::{Read, Write};
-  // use std::thread;
   use tempfile::tempdir;
 
   #[test]

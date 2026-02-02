@@ -1,11 +1,11 @@
-mod wal;
-pub use wal::*;
+mod log;
+pub use log::*;
 
 mod record;
-pub use record::*;
+use record::*;
 
 mod buffer;
 use buffer::*;
 
-mod commit;
-pub use commit::*;
+mod wal;
+pub use wal::*;
