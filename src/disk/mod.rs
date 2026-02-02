@@ -4,11 +4,8 @@ pub use page::*;
 mod serialize;
 pub use serialize::*;
 
-mod random;
-pub use random::*;
-
-mod free;
-pub use free::*;
+mod controller;
+pub use controller::*;
 
 mod io;
 pub use io::*;
@@ -17,4 +14,4 @@ mod thread;
 use thread::*;
 
 mod page_pool;
-use page_pool::*;
+pub use page_pool::*;

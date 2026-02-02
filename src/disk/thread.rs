@@ -4,7 +4,9 @@ use std::{
   path::PathBuf,
 };
 
-use crate::{disk::PageRef, Error, Result, SafeWork, SingleWorkThread, WorkBuilder};
+use crate::{
+  disk::PageRef, Error, Page, Result, SafeWork, SingleWorkThread, WorkBuilder,
+};
 
 use super::{Pread, Pwrite};
 
@@ -25,12 +27,12 @@ pub fn create_read_thread<'a, const N: usize>(
 
 pub fn create_write_thread<'a, const N: usize>(
   file: &'a File,
-) -> impl Fn(usize) -> Result<SafeWork<PageRef<N>, std::io::Result<()>>> + use<'a, N> {
+) -> impl Fn(usize) -> Result<SafeWork<(usize, Page<N>), std::io::Result<()>>> + use<'a, N>
+{
   |_| {
     let fd = file.try_clone().map_err(Error::IO)?;
-    let work = SafeWork::no_timeout(move |page: PageRef<N>| {
-      let index = page.get_index();
-      fd.pwrite(page.as_ref().as_ref(), index.mul(N) as u64)?;
+    let work = SafeWork::no_timeout(move |(index, page): (usize, Page<N>)| {
+      fd.pwrite(page.as_ref(), index.mul(N) as u64)?;
       Ok(())
     });
     Ok(work)

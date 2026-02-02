@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
   disk::page_pool::{PagePool, PageRef},
-  Error, Result, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
+  Error, Page, Result, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 use super::{
@@ -17,25 +17,22 @@ use super::{
 const DEFAULT_READ_THREADS: usize = 3;
 const DEFAULT_WRITE_THREADS: usize = 3;
 
-pub struct RandomWriteDiskConfig {
+pub struct PageControllerConfig {
   pub path: PathBuf,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
 }
 
-pub struct RandomWriteDisk<const N: usize> {
+pub struct PageController<const N: usize> {
   read_ths: Arc<SharedWorkThread<PageRef<N>, std::io::Result<PageRef<N>>>>,
-  write_ths: Arc<SharedWorkThread<PageRef<N>, std::io::Result<()>>>,
+  write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
   page_pool: Arc<PagePool<N>>,
   last_index: AtomicUsize,
 }
-impl<const N: usize> RandomWriteDisk<N> {
-  pub fn open(
-    config: RandomWriteDiskConfig,
-    page_pool: Arc<PagePool<N>>,
-  ) -> Result<Self> {
+impl<const N: usize> PageController<N> {
+  pub fn open(config: PageControllerConfig, page_pool: Arc<PagePool<N>>) -> Result<Self> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
@@ -77,8 +74,11 @@ impl<const N: usize> RandomWriteDisk<N> {
       .map_err(Error::IO)
   }
 
-  pub fn write(&self, page: PageRef<N>) -> Result {
-    self.write_ths.send_await(page)?.map_err(Error::IO)
+  pub fn write<'a>(&self, page: &'a PageRef<N>) -> Result {
+    self
+      .write_ths
+      .send_await((page.get_index(), page.as_ref().copy()))?
+      .map_err(Error::IO)
   }
 
   pub fn fsync(&self) -> Result {
@@ -110,13 +110,13 @@ mod tests {
   #[test]
   fn test_basic_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomWriteDiskConfig {
+    let config = PageControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
+    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
 
     // Initial length should be 0
     assert_eq!(finder.len()?, 0);
@@ -125,7 +125,7 @@ mod tests {
     let mut page = page_pool.acquire(0);
     let test_data = [1u8, 2u8, 3u8, 4u8];
     page.as_mut().as_mut()[..test_data.len()].copy_from_slice(&test_data);
-    finder.write(page)?;
+    finder.write(&page)?;
 
     // Immediately write to disk with fsync
     finder.fsync()?;
@@ -144,13 +144,13 @@ mod tests {
   #[test]
   fn test_nonexistent_page() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomWriteDiskConfig {
+    let config = PageControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config, page_pool)?;
+    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool)?;
 
     // Attempt to read a non-existent page
     let page = finder.read(100)?;
@@ -163,20 +163,20 @@ mod tests {
   #[test]
   fn test_multiple_pages() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomWriteDiskConfig {
+    let config = PageControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = RandomWriteDisk::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
+    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
 
     // Write multiple pages
     for i in 0..3 {
       let mut page = page_pool.acquire(i);
       let value = (i + 1) as u8;
       page.as_mut().as_mut()[0] = value;
-      finder.write(page)?;
+      finder.write(&page)?;
     }
     finder.fsync()?;
 
@@ -195,14 +195,14 @@ mod tests {
   #[test]
   fn test_concurrent_large_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomWriteDiskConfig {
+    let config = PageControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: Some(8),
       write_threads: Some(8),
     };
     let page_pool = Arc::new(PagePool::new(16));
 
-    let finder = Arc::new(RandomWriteDisk::<TEST_PAGE_SIZE>::open(
+    let finder = Arc::new(PageController::<TEST_PAGE_SIZE>::open(
       config,
       page_pool.clone(),
     )?);
@@ -226,7 +226,7 @@ mod tests {
             page.as_mut().as_mut()[j] = ((page_idx + j) % 256) as u8;
           }
 
-          finder_clone.write(page)?;
+          finder_clone.write(&page)?;
         }
         Ok(())
       }));
@@ -273,14 +273,14 @@ mod tests {
     use rand::Rng;
 
     let dir = tempdir().map_err(Error::IO)?;
-    let config = RandomWriteDiskConfig {
+    let config = PageControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
 
-    let finder = Arc::new(RandomWriteDisk::<TEST_PAGE_SIZE>::open(
+    let finder = Arc::new(PageController::<TEST_PAGE_SIZE>::open(
       config,
       page_pool.clone(),
     )?);
@@ -308,7 +308,7 @@ mod tests {
             for j in 0..TEST_PAGE_SIZE {
               page.as_mut().as_mut()[j] = value.wrapping_add((j % 256) as u8);
             }
-            finder_clone.write(page)?;
+            finder_clone.write(&page)?;
 
             if rng.gen_bool(0.2) {
               // 20% chance of fsync
