@@ -24,3 +24,9 @@ use log::*;
 
 mod cache;
 use cache::*;
+
+mod transaction;
+pub use transaction::*;
+
+mod buffer_pool;
+pub use buffer_pool::*;

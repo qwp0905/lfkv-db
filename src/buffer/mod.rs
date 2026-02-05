@@ -14,3 +14,6 @@ pub use undo::*;
 
 mod block;
 pub use block::*;
+
+mod free;
+pub use free::*;

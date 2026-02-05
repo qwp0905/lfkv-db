@@ -1,7 +1,4 @@
-use std::{
-  ops::Add,
-  time::{SystemTime, UNIX_EPOCH},
-};
+use std::ops::Add;
 
 use crate::{Error, Page, Result, PAGE_SIZE};
 
@@ -21,7 +18,7 @@ pub enum Operation {
 pub struct LogRecord {
   pub log_id: usize,
   pub tx_id: usize,
-  operation: Operation,
+  pub operation: Operation,
 }
 impl LogRecord {
   #[inline]
@@ -52,7 +49,7 @@ impl LogRecord {
     LogRecord::new(log_id, tx_id, Operation::Checkpoint)
   }
 
-  pub fn to_bytes(self) -> Vec<u8> {
+  pub fn to_bytes(&self) -> Vec<u8> {
     let mut vec = Vec::new();
 
     vec.extend_from_slice(&self.log_id.to_le_bytes());
@@ -111,13 +108,21 @@ impl TryFrom<Vec<u8>> for LogRecord {
 
 pub struct LogEntry {
   data: Vec<u8>,
+  index: usize,
 }
 impl LogEntry {
-  pub fn new() -> Self {
-    Self { data: vec![0; 2] }
+  pub fn new(index: usize) -> Self {
+    Self {
+      data: vec![0; 2],
+      index,
+    }
   }
 
-  pub fn append(&mut self, record: LogRecord) -> Result<()> {
+  pub fn get_index(&self) -> usize {
+    self.index
+  }
+
+  pub fn append(&mut self, record: &LogRecord) -> Result<()> {
     let buf = record.to_bytes();
     if self.data.len().add(buf.len().add(2)).gt(&WAL_BLOCK_SIZE) {
       return Err(Error::EOF);
@@ -136,10 +141,10 @@ impl From<LogEntry> for Page<WAL_BLOCK_SIZE> {
     value.data.into()
   }
 }
-impl TryFrom<Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
+impl TryFrom<&Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
   type Error = Error;
 
-  fn try_from(value: Page<WAL_BLOCK_SIZE>) -> std::result::Result<Self, Self::Error> {
+  fn try_from(value: &Page<WAL_BLOCK_SIZE>) -> std::result::Result<Self, Self::Error> {
     let mut scanner = value.scanner();
     let len = scanner.read_u16()?;
     let mut data = vec![];
@@ -149,5 +154,10 @@ impl TryFrom<Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
       data.push(record);
     }
     Ok(data)
+  }
+}
+impl AsRef<[u8]> for LogEntry {
+  fn as_ref(&self) -> &[u8] {
+    &self.data
   }
 }

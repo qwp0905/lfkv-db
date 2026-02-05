@@ -2,10 +2,7 @@ mod log;
 pub use log::*;
 
 mod record;
-use record::*;
-
-mod buffer;
-use buffer::*;
+pub use record::*;
 
 mod wal;
 pub use wal::*;

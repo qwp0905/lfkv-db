@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-  disk::{RandomWriteDisk, RandomWriteDiskConfig},
+  disk::{DiskController, DiskControllerConfig},
   wal::CommitInfo,
   Error, Page, Result, Serializable, ShortenedMutex, PAGE_SIZE,
 };
@@ -115,7 +115,7 @@ pub struct RollbackStorageConfig {
 
 pub struct RollbackStorage {
   cache: Mutex<LRUCache<usize, UndoLog>>,
-  disk: RandomWriteDisk<UNDO_PAGE_SIZE>,
+  disk: DiskController<UNDO_PAGE_SIZE>,
   config: RollbackStorageConfig,
   cursor: Mutex<usize>,
 }
@@ -124,7 +124,7 @@ impl RollbackStorage {
     config.max_file_size.div_assign(UNDO_PAGE_SIZE);
     config.max_cache_size.div_assign(UNDO_PAGE_SIZE);
 
-    let disk = RandomWriteDisk::open(RandomWriteDiskConfig {
+    let disk = DiskController::open(DiskControllerConfig {
       path: config.path.clone(),
       read_threads: None,
       write_threads: None,

@@ -54,7 +54,13 @@ impl<K, V> LRUShard<K, V>
 where
   K: Eq + Hash,
 {
-  pub fn get<Q: ?Sized, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<&V>
+  #[inline]
+  fn get_bucket<Q: ?Sized, S>(
+    &mut self,
+    key: &Q,
+    hash: u64,
+    hasher: &S,
+  ) -> Option<&mut Bucket<K, V>>
   where
     K: Borrow<Q>,
     Q: Hash + Eq,
@@ -62,18 +68,36 @@ where
   {
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(key)) {
       self.new_sub_list.move_to_head(bucket);
-      return Some(unsafe { bucket.as_ref() }.get_value());
+      return Some(unsafe { bucket.as_mut() });
     }
 
-    let mut bucket = match self.old_entries.remove_entry(hash, equivalent(key)) {
-      Some(b) => b,
-      None => return None,
-    };
+    let mut bucket = self.old_entries.remove_entry(hash, equivalent(key))?;
     self.old_sub_list.remove(&mut bucket);
     self.new_sub_list.push_head(&mut bucket);
     self.new_entries.insert(hash, bucket, make_hasher(hasher));
     self.rebalance(hasher);
-    Some(unsafe { bucket.as_ref() }.get_value())
+    Some(unsafe { bucket.as_mut() })
+  }
+  pub fn get<Q: ?Sized, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<&V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+    S: BuildHasher,
+  {
+    Some(self.get_bucket(key, hash, hasher)?.get_value())
+  }
+  pub fn get_mut<Q: ?Sized, S>(
+    &mut self,
+    key: &Q,
+    hash: u64,
+    hasher: &S,
+  ) -> Option<&mut V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+    S: BuildHasher,
+  {
+    Some(self.get_bucket(key, hash, hasher)?.get_value_mut())
   }
 
   pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>

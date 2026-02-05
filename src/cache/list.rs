@@ -1,5 +1,7 @@
 use std::ptr::NonNull;
 
+use crate::Pointer;
+
 use super::Bucket;
 
 pub struct LRUList<K, V> {
@@ -26,12 +28,12 @@ impl<K, V> LRUList<K, V> {
     self.len_ += 1;
     match &self.tail {
       Some(_) => {
-        unsafe { bucket.as_mut() }.set_next(self.head.clone());
-        self.head = Some(bucket.clone());
+        bucket.borrow_mut().set_next(self.head);
+        self.head = Some(*bucket);
       }
       None => {
-        self.tail = Some(bucket.clone());
-        self.head = Some(bucket.clone())
+        self.tail = Some(*bucket);
+        self.head = Some(*bucket)
       }
     }
   }
@@ -41,17 +43,18 @@ impl<K, V> LRUList<K, V> {
       return;
     }
 
-    let n = unsafe { bucket.as_mut() }.set_next(None);
-    let p = unsafe { bucket.as_mut() }.set_prev(None);
+    let bucket = bucket.borrow_mut();
+    let n = bucket.set_next(None);
+    let p = bucket.set_prev(None);
 
     if let Some(mut next) = &n {
-      unsafe { next.as_mut() }.set_prev(p.clone());
+      next.borrow_mut().set_prev(p.clone());
     } else {
-      self.tail = p.clone();
+      self.tail = p;
     }
 
     if let Some(mut prev) = &p {
-      unsafe { prev.as_mut() }.set_next(n);
+      prev.borrow_mut().set_next(n);
     } else {
       self.head = n;
     }
@@ -65,13 +68,9 @@ impl<K, V> LRUList<K, V> {
   }
 
   pub fn pop_tail(&mut self) -> Option<NonNull<Bucket<K, V>>> {
-    match self.tail {
-      Some(mut tail) => {
-        self.remove(&mut tail);
-        Some(tail)
-      }
-      None => None,
-    }
+    let mut tail = self.tail?;
+    self.remove(&mut tail);
+    Some(tail)
   }
 
   pub fn len(&self) -> usize {

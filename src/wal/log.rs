@@ -8,7 +8,7 @@ use std::{
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use crate::{
-  disk::{RandomWriteDisk, RandomWriteDiskConfig},
+  disk::{DiskController, DiskControllerConfig, PagePool},
   logger, DrainAll, Page, Result, ShortenedMutex, SingleWorkThread, ToArc, ToArcMutex,
   UnwrappedSender, WorkBuilder,
 };
@@ -35,18 +35,23 @@ pub struct WriteAheadLog {
   io_th: Arc<SingleWorkThread<LogRecord, Result>>,
   checkpoint_th: Arc<SingleWorkThread<usize, Result>>,
   indexes: Arc<Mutex<Indexes>>,
-  disk: Arc<RandomWriteDisk<WAL_BLOCK_SIZE>>,
+  disk: Arc<DiskController<WAL_BLOCK_SIZE>>,
+  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 }
 impl WriteAheadLog {
   pub fn open(
     config: WriteAheadLogConfig,
     flush_th: Arc<SingleWorkThread<usize, Result>>,
   ) -> Result<Self> {
-    let disk = RandomWriteDisk::open(RandomWriteDiskConfig {
-      path: config.path,
-      read_threads: Some(1),
-      write_threads: Some(3),
-    })?
+    let page_pool = PagePool::new(1).to_arc();
+    let disk = DiskController::open(
+      DiskControllerConfig {
+        path: config.path,
+        read_threads: Some(1),
+        write_threads: Some(3),
+      },
+      page_pool.clone(),
+    )?
     .to_arc();
 
     let waits = ArrayQueue::new(config.group_commit_count);
@@ -96,12 +101,9 @@ impl WriteAheadLog {
             return true;
           }
 
-          if let Err(_) = disk_c.fsync() {
-            return false;
-          }
-
+          let result = disk_c.fsync();
           while let Some(done) = waits.pop() {
-            done.must_send(Ok(Ok(())));
+            done.must_send(Ok(result));
           }
 
           true
@@ -137,6 +139,7 @@ impl WriteAheadLog {
       checkpoint_th,
       indexes,
       disk,
+      page_pool,
     })
   }
   pub fn new_transaction(&self) -> Result<(usize, usize)> {
@@ -181,7 +184,7 @@ impl WriteAheadLog {
   }
 }
 
-fn replay(disk: Arc<RandomWriteDisk<WAL_BLOCK_SIZE>>) -> Result<(Indexes, usize)> {
+fn replay(disk: Arc<DiskController<WAL_BLOCK_SIZE>>) -> Result<(Indexes, usize)> {
   if disk.len()?.eq(&0) {
     return Ok((
       Indexes {

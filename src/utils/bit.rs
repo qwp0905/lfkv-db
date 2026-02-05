@@ -1,98 +1,106 @@
-use std::ops::{Mul, Sub};
+const SHIFT: usize = 6;
+const MAX_BIT: usize = 1 << SHIFT;
+const MASK: usize = MAX_BIT - 1;
 
-pub struct IterableBitMap {
+pub struct BitMap {
   bits: Vec<u64>,
-  active: Vec<usize>,
-  removed: usize,
+  len_: usize,
 }
-impl IterableBitMap {
-  pub fn new() -> Self {
-    Self {
-      bits: vec![0; 1],
-      active: Vec::new(),
-      removed: 0,
+impl BitMap {
+  pub fn new(capacity: usize) -> Self {
+    BitMap {
+      bits: vec![0; capacity],
+      len_: 0,
     }
   }
 
-  pub fn insert(&mut self, i: usize) {
-    let index = i >> 6;
-    let bit = i & 63;
-    if index >= self.bits.len() {
-      self.bits.resize(self.bits.len().mul(2), 0);
-    }
-    let bi = 1 << bit;
-    if self.bits[index] & bi != 0 {
-      return;
+  pub fn insert(&mut self, n: usize) -> bool {
+    let i = n >> SHIFT;
+    let j = n & MASK;
+    if i >= self.bits.len() {
+      return false;
     };
-    self.bits[index] |= bi;
-    self.active.push(i);
-  }
 
-  pub fn remove(&mut self, i: usize) {
-    let index = i >> 6;
-    let bit = i & 63;
-    if index >= self.bits.len() {
-      return;
-    }
-    let bi = 1 << bit;
-    if self.bits[index] & bi == 0 {
-      return;
+    let prev = self.bits[i];
+    self.bits[i] |= 1 << j;
+    if prev == self.bits[i] {
+      return false;
     };
-    self.bits[index] &= !bi;
-    self.removed += 1;
+
+    self.len_ += 1;
+    true
   }
 
-  pub fn contains(&self, i: usize) -> bool {
-    let index = i >> 6;
-    let bit = i & 63;
-    if index >= self.bits.len() {
+  pub fn contains(&mut self, n: usize) -> bool {
+    let i = n >> SHIFT;
+    let j = n & MASK;
+    if i >= self.bits.len() {
+      return false;
+    };
+    self.bits[i] & (1 << j) != 0
+  }
+
+  pub fn remove(&mut self, n: usize) -> bool {
+    let i = n >> SHIFT;
+    let j = n & MASK;
+    if i >= self.bits.len() {
+      return false;
+    };
+
+    let prev = self.bits[i];
+    self.bits[i] &= !(1 << j);
+    if prev == self.bits[i] {
       return false;
     }
-    self.bits[index] & (1 << bit) != 0
+
+    self.len_ -= 1;
+    true
   }
 
   pub fn is_empty(&self) -> bool {
-    self.active.len().sub(self.removed).eq(&0)
+    self.len_ == 0
   }
-}
-impl Default for IterableBitMap {
-  fn default() -> Self {
-    Self::new()
+
+  pub fn len(&self) -> usize {
+    self.len_
   }
-}
-impl IntoIterator for IterableBitMap {
-  type Item = usize;
 
-  type IntoIter = BitMapIntoIter;
-
-  fn into_iter(self) -> Self::IntoIter {
-    BitMapIntoIter::new(self)
+  pub fn iter(&self) -> BitMapIter<'_> {
+    BitMapIter::new(&self.bits)
   }
 }
 
-pub struct BitMapIntoIter {
-  bits: IterableBitMap,
+pub struct BitMapIter<'a> {
+  bits: &'a [u64],
   index: usize,
+  remaining: u64,
 }
-impl BitMapIntoIter {
-  pub fn new(bits: IterableBitMap) -> Self {
-    Self { bits, index: 0 }
+impl<'a> BitMapIter<'a> {
+  pub fn new(bits: &'a Vec<u64>) -> Self {
+    let remaining = *bits.first().unwrap_or(&0);
+    Self {
+      bits,
+      index: 0,
+      remaining,
+    }
   }
 }
-impl<'a> Iterator for BitMapIntoIter {
+
+impl<'a> Iterator for BitMapIter<'a> {
   type Item = usize;
 
   fn next(&mut self) -> Option<Self::Item> {
-    let &i = match self.bits.active.get(self.index) {
-      Some(i) => i,
-      None => return None,
-    };
-
-    if !self.bits.contains(i) {
-      return None;
+    while self.remaining == 0 {
+      self.index += 1;
+      if self.index >= self.bits.len() {
+        return None;
+      };
+      self.remaining = self.bits[self.index];
     }
-    self.index += 1;
-    Some(i)
+
+    let bit = self.remaining.trailing_zeros() as usize;
+    self.remaining &= self.remaining - 1;
+    Some((self.index << SHIFT) + bit)
   }
 }
 
@@ -102,20 +110,17 @@ mod tests {
 
   #[test]
   fn test_insert() {
-    let mut bits = IterableBitMap::new();
-    bits.insert(0);
-    bits.insert(1);
-    bits.insert(63);
-    bits.insert(64);
-    bits.insert(65);
-    assert_eq!(bits.bits.len(), 2);
-    assert_eq!(bits.active.len(), 5);
-    assert_eq!(bits.removed, 0);
+    let mut bits = BitMap::new(100);
+    assert!(bits.insert(0));
+    assert!(bits.insert(1));
+    assert!(bits.insert(63));
+    assert!(bits.insert(64));
+    assert!(bits.insert(65));
   }
 
   #[test]
   fn test_contains() {
-    let mut bits = IterableBitMap::new();
+    let mut bits = BitMap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
@@ -133,29 +138,27 @@ mod tests {
 
   #[test]
   fn test_remove() {
-    let mut bits = IterableBitMap::new();
-    bits.insert(0);
-    bits.insert(1);
-    bits.insert(63);
-    bits.insert(64);
-    bits.insert(65);
-    assert_eq!(bits.active.len(), 5);
-    assert_eq!(bits.removed, 0);
-    bits.remove(0);
-    assert_eq!(bits.active.len(), 5);
-    assert_eq!(bits.removed, 1);
+    let mut bits = BitMap::new(100);
+    assert!(bits.insert(0));
+    assert!(bits.insert(1));
+    assert!(bits.insert(63));
+    assert!(bits.insert(64));
+    assert!(bits.insert(65));
+    assert_eq!(bits.len(), 5);
+    assert!(bits.remove(0));
+    assert_eq!(bits.len(), 4);
     assert!(!bits.contains(0));
   }
 
   #[test]
   fn test_iter() {
-    let mut bits = IterableBitMap::new();
+    let mut bits = BitMap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
     bits.insert(64);
     bits.insert(65);
-    let mut iter = bits.into_iter();
+    let mut iter = bits.iter();
     assert_eq!(iter.next(), Some(0));
     assert_eq!(iter.next(), Some(1));
     assert_eq!(iter.next(), Some(63));
@@ -166,7 +169,7 @@ mod tests {
 
   #[test]
   fn test_is_empty() {
-    let mut bits = IterableBitMap::new();
+    let mut bits = BitMap::new(100);
     assert!(bits.is_empty());
     bits.insert(0);
     assert!(!bits.is_empty());

@@ -13,7 +13,7 @@ use sysinfo::System;
 
 use crate::{
   buffer::{BufferPool, RollbackStorage, RollbackStorageConfig, BLOCK_SIZE},
-  disk::{FreeList, RandomWriteDisk, RandomWriteDiskConfig},
+  disk::{DiskController, DiskControllerConfig, FreeList},
   logger,
   wal::{WriteAheadLog, WriteAheadLogConfig},
   Cursor, Error, Result,
@@ -56,7 +56,7 @@ impl Engine {
     logger::info(format!("{} system memory", mem_size));
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
-    let disk = Arc::new(RandomWriteDisk::open(RandomWriteDiskConfig {
+    let disk = Arc::new(DiskController::open(DiskControllerConfig {
       path: config.base_path.as_ref().join(DISK_PATH),
       read_threads: None,
       write_threads: None,

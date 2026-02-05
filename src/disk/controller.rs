@@ -2,7 +2,7 @@ use std::{
   fs::{Metadata, OpenOptions},
   ops::{Div, Mul},
   path::PathBuf,
-  sync::{atomic::AtomicUsize, Arc},
+  sync::Arc,
 };
 
 use crate::{
@@ -17,31 +17,27 @@ use super::{
 const DEFAULT_READ_THREADS: usize = 3;
 const DEFAULT_WRITE_THREADS: usize = 3;
 
-pub struct PageControllerConfig {
+pub struct DiskControllerConfig {
   pub path: PathBuf,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
 }
 
-pub struct PageController<const N: usize> {
+pub struct DiskController<const N: usize> {
   read_ths: Arc<SharedWorkThread<PageRef<N>, std::io::Result<PageRef<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
   page_pool: Arc<PagePool<N>>,
-  last_index: AtomicUsize,
 }
-impl<const N: usize> PageController<N> {
-  pub fn open(config: PageControllerConfig, page_pool: Arc<PagePool<N>>) -> Result<Self> {
+impl<const N: usize> DiskController<N> {
+  pub fn open(config: DiskControllerConfig, page_pool: Arc<PagePool<N>>) -> Result<Self> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
       .create(true)
       .open(&config.path)
       .map_err(Error::IO)?;
-
-    let last_index =
-      AtomicUsize::new((file.metadata().map_err(Error::IO)?.len() as usize).div(N));
 
     let read_ths = WorkBuilder::new()
       .name(format!("read {}", config.path.to_string_lossy()))
@@ -63,7 +59,6 @@ impl<const N: usize> PageController<N> {
       flush_th: create_flush_thread(&file, &config.path)?.to_arc(),
       meta_th: create_metadata_thread(&file, &config.path)?.to_arc(),
       page_pool,
-      last_index,
     })
   }
 
@@ -110,13 +105,13 @@ mod tests {
   #[test]
   fn test_basic_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = PageControllerConfig {
+    let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
+    let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
 
     // Initial length should be 0
     assert_eq!(finder.len()?, 0);
@@ -144,13 +139,13 @@ mod tests {
   #[test]
   fn test_nonexistent_page() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = PageControllerConfig {
+    let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool)?;
+    let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool)?;
 
     // Attempt to read a non-existent page
     let page = finder.read(100)?;
@@ -163,46 +158,46 @@ mod tests {
   #[test]
   fn test_multiple_pages() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = PageControllerConfig {
+    let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
-    let finder = PageController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
+    let co = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
 
     // Write multiple pages
     for i in 0..3 {
       let mut page = page_pool.acquire(i);
       let value = (i + 1) as u8;
       page.as_mut().as_mut()[0] = value;
-      finder.write(&page)?;
+      co.write(&page)?;
     }
-    finder.fsync()?;
+    co.fsync()?;
 
     // Read and verify multiple pages
     for i in 0..3 {
-      let page = finder.read(i)?;
+      let page = co.read(i)?;
       assert_eq!(page.as_ref().as_ref()[0], (i + 1) as u8);
     }
 
-    assert_eq!(finder.len()?, 3);
+    assert_eq!(co.len()?, 3);
 
-    finder.close();
+    co.close();
     Ok(())
   }
 
   #[test]
   fn test_concurrent_large_operations() -> Result<()> {
     let dir = tempdir().map_err(Error::IO)?;
-    let config = PageControllerConfig {
+    let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: Some(8),
       write_threads: Some(8),
     };
     let page_pool = Arc::new(PagePool::new(16));
 
-    let finder = Arc::new(PageController::<TEST_PAGE_SIZE>::open(
+    let co = Arc::new(DiskController::<TEST_PAGE_SIZE>::open(
       config,
       page_pool.clone(),
     )?);
@@ -213,7 +208,7 @@ mod tests {
 
     // Perform concurrent write operations from multiple threads
     for thread_id in 0..THREADS_COUNT {
-      let finder_clone = finder.clone();
+      let finder_clone = co.clone();
       let pool_clone = page_pool.clone();
       handles.push(thread::spawn(move || -> Result<()> {
         let base_idx = thread_id * PAGES_PER_THREAD;
@@ -231,7 +226,7 @@ mod tests {
         Ok(())
       }));
     }
-    finder.fsync()?;
+    co.fsync()?;
 
     // Wait for all write operations to complete
     for handle in handles {
@@ -241,13 +236,13 @@ mod tests {
     // Verification threads
     let mut verify_handles = vec![];
     for thread_id in 0..THREADS_COUNT {
-      let finder_clone = finder.clone();
+      let co_clone = co.clone();
       verify_handles.push(thread::spawn(move || -> Result<()> {
         let base_idx = thread_id * PAGES_PER_THREAD;
 
         for i in 0..PAGES_PER_THREAD {
           let page_idx = base_idx + i;
-          let read_page = finder_clone.read(page_idx)?;
+          let read_page = co_clone.read(page_idx)?;
 
           for j in 0..TEST_PAGE_SIZE {
             assert_eq!(read_page.as_ref().as_ref()[j], ((page_idx + j) % 256) as u8);
@@ -262,8 +257,8 @@ mod tests {
       handle.join().unwrap()?;
     }
 
-    assert_eq!(finder.len()?, THREADS_COUNT * PAGES_PER_THREAD);
-    finder.close();
+    assert_eq!(co.len()?, THREADS_COUNT * PAGES_PER_THREAD);
+    co.close();
 
     Ok(())
   }
@@ -273,14 +268,14 @@ mod tests {
     use rand::Rng;
 
     let dir = tempdir().map_err(Error::IO)?;
-    let config = PageControllerConfig {
+    let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       read_threads: None,
       write_threads: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
 
-    let finder = Arc::new(PageController::<TEST_PAGE_SIZE>::open(
+    let co = Arc::new(DiskController::<TEST_PAGE_SIZE>::open(
       config,
       page_pool.clone(),
     )?);
@@ -293,7 +288,7 @@ mod tests {
 
     // Perform random read/write operations from multiple threads
     for _ in 0..THREADS_COUNT {
-      let finder_clone = finder.clone();
+      let co_clone = co.clone();
       let pool_clone = page_pool.clone();
       handles.push(thread::spawn(move || -> Result<()> {
         let mut rng = rand::thread_rng();
@@ -308,15 +303,15 @@ mod tests {
             for j in 0..TEST_PAGE_SIZE {
               page.as_mut().as_mut()[j] = value.wrapping_add((j % 256) as u8);
             }
-            finder_clone.write(&page)?;
+            co_clone.write(&page)?;
 
             if rng.gen_bool(0.2) {
               // 20% chance of fsync
-              finder_clone.fsync()?;
+              co_clone.fsync()?;
             }
           } else {
             // 30% chance of read operation
-            let _ = finder_clone.read(page_idx)?;
+            let _ = co_clone.read(page_idx)?;
           }
         }
         Ok(())
@@ -328,8 +323,8 @@ mod tests {
       handle.join().unwrap()?;
     }
 
-    finder.fsync()?;
-    finder.close();
+    co.fsync()?;
+    co.close();
 
     Ok(())
   }

@@ -1,7 +1,7 @@
 use std::{
   borrow::Borrow,
   hash::{BuildHasher, Hash, RandomState},
-  sync::Mutex,
+  sync::{Mutex, MutexGuard},
 };
 
 use crate::{Callable, ShortenedMutex};
@@ -11,6 +11,25 @@ use super::{evict::Evicted, shard::LRUShard};
 pub struct CacheConfig {
   shard_count: usize,
   capacity: usize,
+}
+pub struct CacheRef<'a, K, V> {
+  guard: MutexGuard<'a, LRUShard<K, V>>,
+  value: &'a mut V,
+}
+impl<'a, K, V> CacheRef<'a, K, V> {
+  fn new(guard: MutexGuard<'a, LRUShard<K, V>>, value: &'a mut V) -> Self {
+    CacheRef { guard, value }
+  }
+}
+impl<'a, K, V> AsRef<V> for CacheRef<'a, K, V> {
+  fn as_ref(&self) -> &V {
+    &self.value
+  }
+}
+impl<'a, K, V> AsMut<V> for CacheRef<'a, K, V> {
+  fn as_mut(&mut self) -> &mut V {
+    &mut self.value
+  }
 }
 
 pub struct LRUCache<K, V, S = RandomState> {
@@ -48,6 +67,7 @@ where
   K: Eq + Hash,
   S: BuildHasher,
 {
+  #[inline]
   fn get_shard<Q: ?Sized>(&self, key: &Q) -> (u64, &Mutex<LRUShard<K, V>>)
   where
     K: Borrow<Q>,
@@ -57,24 +77,23 @@ where
     (h, &self.shards[self.index.call(h)])
   }
 
-  pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<V>
+  pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<CacheRef<'_, K, V>>
   where
     K: Borrow<Q>,
-    V: Clone,
+    // V: Clone,
     Q: Eq + Hash,
   {
     let (h, shard) = self.get_shard(key);
     let mut cache = shard.l();
-    cache.get(key, h, &self.hasher).map(|v| v.clone())
+    let value = cache.get_mut(key, h, &self.hasher)?;
+    Some(CacheRef::new(cache, value))
   }
 
   pub fn insert(&self, key: K, value: V) -> Option<Evicted<'_, K, V>> {
     let (h, shard) = self.get_shard(&key);
     let mut cache = shard.l();
-    match cache.insert(key, value, h, &self.hasher) {
-      Some(evicted) => Some(Evicted::new(cache, evicted)),
-      None => None,
-    }
+    let evicted = cache.insert(key, value, h, &self.hasher)?;
+    Some(Evicted::new(cache, evicted))
   }
 
   pub fn remove<Q>(&self, key: &Q) -> Option<V>

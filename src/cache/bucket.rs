@@ -24,18 +24,21 @@ impl<K, V> Bucket<K, V> {
     &mut self,
     prev: Option<NonNull<Bucket<K, V>>>,
   ) -> Option<NonNull<Bucket<K, V>>> {
-    replace(&mut self.prev, prev.map(|rc| rc.clone()))
+    replace(&mut self.prev, prev)
   }
 
   pub fn set_next(
     &mut self,
     next: Option<NonNull<Bucket<K, V>>>,
   ) -> Option<NonNull<Bucket<K, V>>> {
-    replace(&mut self.next, next.map(|rc| rc.clone()))
+    replace(&mut self.next, next)
   }
 
   pub fn get_value(&self) -> &V {
     &self.value
+  }
+  pub fn get_value_mut(&mut self) -> &mut V {
+    &mut self.value
   }
 
   pub fn set_value(&mut self, value: V) -> V {
