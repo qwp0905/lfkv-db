@@ -53,6 +53,6 @@ where
 }
 impl<T> SendBy for T {
   fn send_by(self, sender: &Sender<Self>) {
-    sender.send(self).unwrap();
+    let _ = sender.send(self);
   }
 }

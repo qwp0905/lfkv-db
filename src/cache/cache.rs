@@ -6,30 +6,31 @@ use std::{
 
 use crate::{Callable, ShortenedMutex};
 
-use super::{evict::Evicted, shard::LRUShard};
+use super::shard::LRUShard;
+
+pub struct Cached<'a, K, V> {
+  guard: MutexGuard<'a, LRUShard<K, V>>,
+  value: *mut V,
+}
+impl<'a, K, V> Cached<'a, K, V> {
+  pub fn new(guard: MutexGuard<'a, LRUShard<K, V>>, value: *mut V) -> Self {
+    Cached { guard, value }
+  }
+}
+impl<'a, K, V> AsRef<V> for Cached<'a, K, V> {
+  fn as_ref(&self) -> &V {
+    unsafe { &*self.value }
+  }
+}
+impl<'a, K, V> AsMut<V> for Cached<'a, K, V> {
+  fn as_mut(&mut self) -> &mut V {
+    unsafe { &mut *self.value }
+  }
+}
 
 pub struct CacheConfig {
   shard_count: usize,
   capacity: usize,
-}
-pub struct CacheRef<'a, K, V> {
-  guard: MutexGuard<'a, LRUShard<K, V>>,
-  value: &'a mut V,
-}
-impl<'a, K, V> CacheRef<'a, K, V> {
-  fn new(guard: MutexGuard<'a, LRUShard<K, V>>, value: &'a mut V) -> Self {
-    CacheRef { guard, value }
-  }
-}
-impl<'a, K, V> AsRef<V> for CacheRef<'a, K, V> {
-  fn as_ref(&self) -> &V {
-    &self.value
-  }
-}
-impl<'a, K, V> AsMut<V> for CacheRef<'a, K, V> {
-  fn as_mut(&mut self) -> &mut V {
-    &mut self.value
-  }
 }
 
 pub struct LRUCache<K, V, S = RandomState> {
@@ -77,23 +78,23 @@ where
     (h, &self.shards[self.index.call(h)])
   }
 
-  pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<CacheRef<'_, K, V>>
+  pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<Cached<'_, K, V>>
   where
     K: Borrow<Q>,
-    // V: Clone,
     Q: Eq + Hash,
   {
     let (h, shard) = self.get_shard(key);
     let mut cache = shard.l();
-    let value = cache.get_mut(key, h, &self.hasher)?;
-    Some(CacheRef::new(cache, value))
+    let value = cache.get_mut(key, h, &self.hasher)? as *mut V;
+    Some(Cached::new(cache, value))
   }
 
-  pub fn insert(&self, key: K, value: V) -> Option<Evicted<'_, K, V>> {
+  pub fn insert(&self, key: K, mut value: V) -> (Cached<'_, K, V>, Option<Vec<(K, V)>>) {
     let (h, shard) = self.get_shard(&key);
     let mut cache = shard.l();
-    let evicted = cache.insert(key, value, h, &self.hasher)?;
-    Some(Evicted::new(cache, evicted))
+    let ptr = &mut value as *mut V;
+    let evicted = cache.insert(key, value, h, &self.hasher);
+    (Cached::new(cache, ptr), evicted)
   }
 
   pub fn remove<Q>(&self, key: &Q) -> Option<V>

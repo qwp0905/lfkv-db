@@ -106,7 +106,7 @@ where
               match work.as_ref().safe_call(Some((v, done.clone()))) {
                 Ok(true) => timer.reset(),
                 Ok(false) => timer.check(),
-                Err(err) => done.must_send(Err(Error::Panic(err))),
+                Err(err) => done.maybe_send(Err(Error::Panic(err))),
               };
             }
             Ok(Context::Finalize) => {

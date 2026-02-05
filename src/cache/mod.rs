@@ -9,6 +9,3 @@ use shard::*;
 
 mod cache;
 pub use cache::*;
-
-mod evict;
-use evict::*;

@@ -2,16 +2,20 @@ const SHIFT: usize = 6;
 const MAX_BIT: usize = 1 << SHIFT;
 const MASK: usize = MAX_BIT - 1;
 
-pub struct BitMap {
+pub struct Bitmap {
   bits: Vec<u64>,
   len_: usize,
 }
-impl BitMap {
+impl Bitmap {
   pub fn new(capacity: usize) -> Self {
-    BitMap {
+    Bitmap {
       bits: vec![0; capacity],
       len_: 0,
     }
+  }
+
+  pub fn clear(&mut self) {
+    self.bits.fill(0)
   }
 
   pub fn insert(&mut self, n: usize) -> bool {
@@ -110,7 +114,7 @@ mod tests {
 
   #[test]
   fn test_insert() {
-    let mut bits = BitMap::new(100);
+    let mut bits = Bitmap::new(100);
     assert!(bits.insert(0));
     assert!(bits.insert(1));
     assert!(bits.insert(63));
@@ -120,7 +124,7 @@ mod tests {
 
   #[test]
   fn test_contains() {
-    let mut bits = BitMap::new(100);
+    let mut bits = Bitmap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
@@ -138,7 +142,7 @@ mod tests {
 
   #[test]
   fn test_remove() {
-    let mut bits = BitMap::new(100);
+    let mut bits = Bitmap::new(100);
     assert!(bits.insert(0));
     assert!(bits.insert(1));
     assert!(bits.insert(63));
@@ -152,7 +156,7 @@ mod tests {
 
   #[test]
   fn test_iter() {
-    let mut bits = BitMap::new(100);
+    let mut bits = Bitmap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
@@ -169,7 +173,7 @@ mod tests {
 
   #[test]
   fn test_is_empty() {
-    let mut bits = BitMap::new(100);
+    let mut bits = Bitmap::new(100);
     assert!(bits.is_empty());
     bits.insert(0);
     assert!(!bits.is_empty());
