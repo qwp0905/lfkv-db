@@ -7,8 +7,9 @@ use std::{
 };
 
 use crate::{
+  buffer_pool::BufferPoolConfig,
   disk::{PageRef, PAGE_SIZE},
-  wal::WAL,
+  wal::{WALConfig, WAL},
   BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
@@ -25,9 +26,12 @@ pub struct TxOrchestrator {
   checkpoint: SingleWorkThread<(), Result>,
 }
 impl TxOrchestrator {
-  pub fn new() -> Result<Self> {
-    let buffer_pool = BufferPool::open()?.to_arc();
-    let (wal, last_log_id, last_tx_id, redo) = WAL::replay(config)?;
+  pub fn new(
+    buffer_pool_config: BufferPoolConfig,
+    wal_config: WALConfig,
+  ) -> Result<Self> {
+    let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
+    let (wal, last_log_id, last_tx_id, redo) = WAL::replay(wal_config)?;
     let wal = wal.to_arc();
     let last_log_id = AtomicUsize::new(last_log_id).to_arc();
     let snapshot = TxSnapshot {
@@ -50,7 +54,7 @@ impl TxOrchestrator {
       .name("")
       .stack_size(1)
       .single()
-      .with_timeout(Duration::new(1, 1), |v| {
+      .with_timeout(Duration::new(1, 1), move |_| {
         let log_id = last_log_id.fetch_add(1, Ordering::SeqCst);
         b.flush()?;
         w.append_checkpoint(log_id)

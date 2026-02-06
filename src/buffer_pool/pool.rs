@@ -8,7 +8,7 @@ use std::{
 use crate::{
   buffer_pool::shard::{BufferPoolShard, CachedPage},
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
-  Callable, Result, ShortenedMutex, ToArc,
+  Result, ShortenedMutex, ToArc,
 };
 
 pub struct BufferPoolConfig {
@@ -22,7 +22,6 @@ pub struct BufferPoolConfig {
 pub struct BufferPool {
   shards: Vec<Mutex<BufferPoolShard>>,
   hasher: RandomState,
-  index: Box<dyn Callable<u64, usize>>,
 }
 impl BufferPool {
   pub fn open(config: BufferPoolConfig) -> Result<Self> {
@@ -40,24 +39,16 @@ impl BufferPool {
       shards.push(Mutex::new(BufferPoolShard::new(disk.clone(), cap)))
     }
     if config.shard_count & (config.shard_count - 1) == 0 {
-      return Ok(Self {
-        shards,
-        hasher,
-        index: Box::new(move |h| h as usize & (config.shard_count - 1)),
-      });
+      return Ok(Self { shards, hasher });
     }
 
-    Ok(Self {
-      shards,
-      hasher,
-      index: Box::new(move |h| h as usize % config.shard_count),
-    })
+    Ok(Self { shards, hasher })
   }
 
   #[inline]
   fn get_shard(&self, key: usize) -> (u64, &Mutex<BufferPoolShard>) {
     let h = self.hasher.hash_one(key);
-    (h, &self.shards[self.index.call(h)])
+    (h, &self.shards[h as usize % self.shards.len()])
   }
 
   pub fn read(&self, index: usize) -> Result<CachedPage<'_>> {
@@ -76,3 +67,5 @@ impl BufferPool {
     Ok(())
   }
 }
+unsafe impl Send for BufferPool {}
+unsafe impl Sync for BufferPool {}

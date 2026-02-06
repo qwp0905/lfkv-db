@@ -1,5 +1,11 @@
-mod buffer;
 mod wal;
+use wal::*;
+
+mod transaction;
+use transaction::*;
+
+mod buffer_pool;
+use buffer_pool::*;
 
 mod thread;
 pub use thread::*;
@@ -14,19 +20,10 @@ mod error;
 pub use error::*;
 
 mod utils;
-pub use utils::*;
+use utils::*;
 
 mod disk;
 pub use disk::{Page, Serializable, PAGE_SIZE};
 
 mod log;
 use log::*;
-
-mod cache;
-use cache::*;
-
-mod transaction;
-pub use transaction::*;
-
-mod buffer_pool;
-pub use buffer_pool::*;

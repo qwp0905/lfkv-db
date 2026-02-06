@@ -1,6 +1,3 @@
-mod log;
-pub use log::*;
-
 mod record;
 pub use record::*;
 
