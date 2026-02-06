@@ -3,7 +3,7 @@ use crate::{error::Error, PAGE_SIZE};
 use super::Page;
 
 pub trait Serializable<T = Error, const N: usize = PAGE_SIZE>: Sized {
-  fn serialize(&self) -> Result<Page<N>, T>;
+  fn serialize(&self, page: &mut Page<N>) -> Result<(), T>;
   fn deserialize(value: &Page<N>) -> Result<Self, T>;
 }
 impl<const N: usize> Page<N> {

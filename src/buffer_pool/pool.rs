@@ -38,9 +38,6 @@ impl BufferPool {
     for _ in 0..config.shard_count {
       shards.push(Mutex::new(BufferPoolShard::new(disk.clone(), cap)))
     }
-    if config.shard_count & (config.shard_count - 1) == 0 {
-      return Ok(Self { shards, hasher });
-    }
 
     Ok(Self { shards, hasher })
   }

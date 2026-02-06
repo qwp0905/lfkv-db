@@ -29,11 +29,10 @@ impl TreeHeader {
 }
 
 impl Serializable for TreeHeader {
-  fn serialize(&self) -> Result<Page, Error> {
-    let mut p = Page::new();
+  fn serialize(&self, p: &mut Page) -> Result<(), Error> {
     let mut wt = p.writer();
     wt.write(&self.root.to_be_bytes())?;
-    Ok(p)
+    Ok(())
   }
 
   fn deserialize(value: &Page) -> Result<Self, Error> {
