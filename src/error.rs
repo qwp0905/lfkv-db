@@ -23,14 +23,14 @@ pub enum Error {
   #[error("engine unavailable")]
   EngineUnavailable,
 
-  #[error("memory pool empty")]
-  MemoryPoolEmpty,
-
   #[error("worker closed")]
   WorkerClosed,
 
   #[error("flush failed")]
   FlushFailed,
+
+  #[error("wal capacity exceeded")]
+  WALCapacityExceeded,
 
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),

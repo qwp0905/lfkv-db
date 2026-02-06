@@ -111,23 +111,31 @@ impl WAL {
     let log =
       LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy());
     let mut buffer = self.buffer.l();
-    while let Err(Error::EOF) = buffer.append(&log) {
+    if let Err(Error::EOF) = buffer.append(&log) {
       self.disk.write(&self.entry_to_page(&buffer))?;
       let index = buffer.get_index().add(1);
-      *buffer = LogEntry::new(index.eq(&self.max_index).then(|| 0).unwrap_or(index));
+      if index == self.max_index {
+        *buffer = LogEntry::new(0);
+        let _ = buffer.append(&log);
+        return Err(Error::WALCapacityExceeded);
+      }
+
+      *buffer = LogEntry::new(index);
+      let _ = buffer.append(&log);
     }
     Ok(())
   }
 
   pub fn append_checkpoint(&self, log_id: usize) -> Result {
     let log = LogRecord::new_checkpoint(log_id, 0);
+    let mut buffer = self.buffer.l();
+    if let Err(Error::EOF) = buffer.append(&log) {}
     let page = {
       let mut buffer = self.buffer.l();
-      while let Err(Error::EOF) = buffer.append(&log) {
-        self.disk.write(&self.entry_to_page(&buffer))?;
-        let index = buffer.get_index().add(1);
-        *buffer = LogEntry::new(index.eq(&self.max_index).then(|| 0).unwrap_or(index));
-      }
+      self.disk.write(&self.entry_to_page(&buffer))?;
+      let index = buffer.get_index().add(1).rem_euclid(self.max_index);
+      *buffer = LogEntry::new(index);
+      let _ = buffer.append(&log);
       self.entry_to_page(&buffer)
     };
 

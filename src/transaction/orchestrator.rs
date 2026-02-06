@@ -9,7 +9,7 @@ use std::{
 use crate::{
   disk::{PageRef, PAGE_SIZE},
   wal::WAL,
-  BufferPool, CachedPage, Result, SingleWorkThread, ToArc, WorkBuilder,
+  BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 struct TxSnapshot {
@@ -59,7 +59,11 @@ impl TxOrchestrator {
   }
   pub fn log<P: AsRef<PageRef<PAGE_SIZE>>>(&self, tx_id: usize, page: &P) -> Result {
     let log_id = self.snapshot.last_log_id.fetch_add(1, Ordering::SeqCst);
-    self.wal.append_insert(tx_id, log_id, page.as_ref());
+    if let Err(Error::WALCapacityExceeded) =
+      self.wal.append_insert(tx_id, log_id, page.as_ref())
+    {
+      self.checkpoint.send_await(());
+    };
     Ok(())
   }
 
@@ -85,10 +89,5 @@ impl TxOrchestrator {
       .as_mut()
       .writer()
       .write_usize(self.snapshot.last_free.swap(f, Ordering::SeqCst));
-  }
-  fn checkpoint(&self) -> Result {
-    let log_id = self.snapshot.last_log_id.fetch_add(1, Ordering::SeqCst);
-    self.buffer_pool.flush()?;
-    self.wal.append_checkpoint(log_id)
   }
 }
