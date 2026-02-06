@@ -89,11 +89,10 @@ where
     Some(Cached::new(cache, value))
   }
 
-  pub fn insert(&self, key: K, mut value: V) -> (Cached<'_, K, V>, Option<Vec<(K, V)>>) {
+  pub fn insert(&self, key: K, value: V) -> (Cached<'_, K, V>, Option<Vec<(K, V)>>) {
     let (h, shard) = self.get_shard(&key);
     let mut cache = shard.l();
-    let ptr = &mut value as *mut V;
-    let evicted = cache.insert(key, value, h, &self.hasher);
+    let (ptr, evicted) = cache.insert(key, value, h, &self.hasher);
     (Cached::new(cache, ptr), evicted)
   }
 
@@ -124,8 +123,8 @@ where
     Q: Eq + Hash,
   {
     let (h, shard) = self.get_shard(key);
-    let cache = shard.l();
-    cache.has(key, h)
+
+    shard.l().has(key, h)
   }
 
   pub fn len(&self) -> usize {

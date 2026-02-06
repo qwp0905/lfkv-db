@@ -1,6 +1,6 @@
 use std::{
   borrow::Borrow,
-  hash::{BuildHasher, Hash, RandomState},
+  hash::{BuildHasher, Hash},
   ops::Mul,
   ptr::NonNull,
 };
@@ -24,13 +24,12 @@ where
   move |&ptr| hash_builder.hash_one(unsafe { ptr.as_ref() }.get_key())
 }
 
-pub struct LRUTable<K, V, S = RandomState> {
+pub struct LRUTable<K, V> {
   old_entries: RawTable<NonNull<Bucket<K, V>>>,
   old_sub_list: LRUList<K, V>,
   new_entries: RawTable<NonNull<Bucket<K, V>>>,
   new_sub_list: LRUList<K, V>,
   capacity: usize,
-  hasher: S,
 }
 
 impl<K, V> LRUTable<K, V> {
@@ -41,7 +40,6 @@ impl<K, V> LRUTable<K, V> {
       new_entries: RawTable::new(),
       new_sub_list: LRUList::new(),
       capacity,
-      hasher: Default::default(),
     }
   }
 
@@ -52,19 +50,22 @@ impl<K, V> LRUTable<K, V> {
     self.new_sub_list.clear();
   }
 }
-impl<K, V, S> LRUTable<K, V, S>
+impl<K, V> LRUTable<K, V>
 where
   K: Eq + Hash,
-  S: BuildHasher,
 {
   #[inline]
-  fn get_bucket<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut Bucket<K, V>>
+  fn get_bucket<Q: ?Sized, S>(
+    &mut self,
+    key: &Q,
+    hash: u64,
+    hasher: &S,
+  ) -> Option<&mut Bucket<K, V>>
   where
     K: Borrow<Q>,
     Q: Hash + Eq,
     S: BuildHasher,
   {
-    let hash = self.hasher.hash_one(key);
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(key)) {
       self.new_sub_list.move_to_head(bucket);
       return Some(unsafe { bucket.as_mut() });
@@ -73,26 +74,30 @@ where
     let mut bucket = self.old_entries.remove_entry(hash, equivalent(key))?;
     self.old_sub_list.remove(&mut bucket);
     self.new_sub_list.push_head(&mut bucket);
-    self
-      .new_entries
-      .insert(hash, bucket, make_hasher(&self.hasher));
-    self.rebalance();
+    self.new_entries.insert(hash, bucket, make_hasher(hasher));
+    self.rebalance(hasher);
     Some(unsafe { bucket.as_mut() })
   }
-  pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Option<&V>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq,
-  {
-    Some(self.get_bucket(key)?.get_value())
-  }
-  pub fn get_mut<Q: ?Sized>(&mut self, key: &Q) -> Option<&mut V>
+  pub fn get<Q: ?Sized, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<&V>
   where
     K: Borrow<Q>,
     Q: Hash + Eq,
     S: BuildHasher,
   {
-    Some(self.get_bucket(key)?.get_value_mut())
+    Some(self.get_bucket(key, hash, hasher)?.get_value())
+  }
+  pub fn get_mut<Q: ?Sized, S>(
+    &mut self,
+    key: &Q,
+    hash: u64,
+    hasher: &S,
+  ) -> Option<&mut V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+    S: BuildHasher,
+  {
+    Some(self.get_bucket(key, hash, hasher)?.get_value_mut())
   }
 
   pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>
@@ -111,7 +116,7 @@ where
     Some(unsafe { bucket.as_ref() }.get_value())
   }
 
-  fn rebalance(&mut self)
+  fn rebalance<S>(&mut self, hasher: &S)
   where
     S: BuildHasher,
   {
@@ -120,32 +125,32 @@ where
         Some(bucket) => unsafe { bucket.as_ref() }.get_key(),
         None => break,
       };
-      let h = self.hasher.hash_one(key);
+      let h = hasher.hash_one(key);
       let mut bucket = self.new_entries.remove_entry(h, equivalent(key)).unwrap();
       self.new_sub_list.remove(&mut bucket);
       self.old_sub_list.push_head(&mut bucket);
-      self
-        .old_entries
-        .insert(h, bucket, make_hasher(&self.hasher));
+      self.old_entries.insert(h, bucket, make_hasher(hasher));
     }
   }
 
-  pub fn evict(&mut self) -> Option<(K, V)>
+  pub fn evict<S>(&mut self, hasher: &S) -> Option<(K, V)>
   where
     S: BuildHasher,
   {
     let key = unsafe { self.old_sub_list.pop_tail()?.as_ref() }.get_key();
-    let h = self.hasher.hash_one(key);
+    let h = hasher.hash_one(key);
     let bucket = self
       .old_entries
       .remove_entry(h, equivalent(key))
       .map(|ptr| unsafe { Box::from_raw(ptr.as_ptr()) })?;
-    self.rebalance();
+    self.rebalance(hasher);
     Some(bucket.take())
   }
 
-  pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-    let hash = self.hasher.hash_one(&key);
+  pub fn insert<S>(&mut self, key: K, value: V, hash: u64, hasher: &S) -> Option<V>
+  where
+    S: BuildHasher,
+  {
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(&key)) {
       let prev = unsafe { bucket.as_mut() }.set_value(value);
       self.new_sub_list.move_to_head(bucket);
@@ -157,28 +162,24 @@ where
       let prev = unsafe { bucket.as_mut() }.set_value(value);
 
       self.new_sub_list.push_head(&mut bucket);
-      self
-        .new_entries
-        .insert(hash, bucket, make_hasher(&self.hasher));
-      self.rebalance();
+      self.new_entries.insert(hash, bucket, make_hasher(hasher));
+      self.rebalance(hasher);
 
       return Some(prev);
     }
 
     let mut bucket = Bucket::new_ptr(key, value);
     self.old_sub_list.push_head(&mut bucket);
-    self
-      .old_entries
-      .insert(hash, bucket, make_hasher(&self.hasher));
+    self.old_entries.insert(hash, bucket, make_hasher(hasher));
     None
   }
 
-  pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+  pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>
   where
     K: Borrow<Q>,
     Q: Hash + Eq,
+    S: BuildHasher,
   {
-    let hash = self.hasher.hash_one(key);
     if let Some(mut bucket) = self.new_entries.remove_entry(hash, equivalent(key)) {
       self.new_sub_list.remove(&mut bucket);
       let taken = unsafe { Box::from_raw(bucket.as_ptr()) };
@@ -190,7 +191,7 @@ where
       None => return None,
     };
     self.old_sub_list.remove(&mut bucket);
-    self.rebalance();
+    self.rebalance(hasher);
     let bucket = unsafe { Box::from_raw(bucket.as_ptr()) };
     Some(bucket.take_value())
   }

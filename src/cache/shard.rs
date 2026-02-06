@@ -123,7 +123,7 @@ where
     while self.new_sub_list.len().mul(3) > self.old_sub_list.len().mul(5) {
       let key = match self.new_sub_list.pop_tail() {
         Some(bucket) => unsafe { bucket.as_ref() }.get_key(),
-        None => break,
+        None => return,
       };
       let h = hasher.hash_one(key);
       let mut bucket = self.new_entries.remove_entry(h, equivalent(key)).unwrap();
@@ -162,19 +162,21 @@ where
     value: V,
     hash: u64,
     hasher: &S,
-  ) -> Option<Vec<(K, V)>>
+  ) -> (*mut V, Option<Vec<(K, V)>>)
   where
     S: BuildHasher,
   {
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(&key)) {
       unsafe { bucket.as_mut() }.set_value(value);
+      let ptr = unsafe { bucket.as_mut() }.get_value_mut() as *mut V;
       self.new_sub_list.move_to_head(bucket);
-      return None;
+      return (ptr, None);
     }
 
     if let Some(mut bucket) = self.old_entries.remove_entry(hash, equivalent(&key)) {
       self.old_sub_list.remove(&mut bucket);
       unsafe { bucket.as_mut() }.set_value(value);
+      let ptr = unsafe { bucket.as_mut() }.get_value_mut() as *mut V;
 
       let evicted = self.evict(hasher);
 
@@ -182,21 +184,22 @@ where
       self.new_entries.insert(hash, bucket, make_hasher(hasher));
       self.rebalance(hasher);
       if evicted.is_empty() {
-        return None;
+        return (ptr, None);
       }
 
-      return Some(evicted);
+      return (ptr, Some(evicted));
     }
 
     let mut bucket = Bucket::new_ptr(key, value);
+    let ptr = unsafe { bucket.as_mut() }.get_value_mut() as *mut V;
     let evicted = self.evict(hasher);
     self.old_sub_list.push_head(&mut bucket);
     self.old_entries.insert(hash, bucket, make_hasher(hasher));
     if evicted.is_empty() {
-      return None;
+      return (ptr, None);
     }
 
-    Some(evicted)
+    (ptr, Some(evicted))
   }
 
   pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>

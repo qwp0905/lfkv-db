@@ -9,13 +9,12 @@ use std::{
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use crate::{
-  disk::{DiskController, DiskControllerConfig, PagePool, PageRef},
+  disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
   wal::{
     record::{LogRecord, Operation},
     LogEntry, WAL_BLOCK_SIZE,
   },
-  Error, Page, Result, ShortenedMutex, SingleWorkThread, ToArc, ToArcMutex,
-  UnwrappedSender, WorkBuilder,
+  Error, Page, Result, ShortenedMutex, SingleWorkThread, ToArc, ToArcMutex, WorkBuilder,
 };
 
 pub struct WALConfig {
@@ -38,13 +37,7 @@ pub struct WAL {
 impl WAL {
   pub fn replay(
     config: WALConfig,
-  ) -> Result<(
-    Self,
-    usize,
-    usize,
-    usize,
-    HashMap<usize, Vec<(usize, Page)>>,
-  )> {
+  ) -> Result<(Self, usize, usize, HashMap<usize, Vec<(usize, Page)>>)> {
     let page_pool = PagePool::new(1).to_arc();
     let disk = DiskController::open(
       DiskControllerConfig {
@@ -56,8 +49,7 @@ impl WAL {
     )?
     .to_arc();
 
-    let (last_index, last_log_id, last_transaction_id, last_commit_id, redo) =
-      replay(&disk)?;
+    let (last_index, last_log_id, last_transaction_id, redo) = replay(&disk)?;
     let buffer = LogEntry::new(last_index).to_arc_mutex();
     let waits = ArrayQueue::new(config.group_commit_count);
     let disk_cloned = disk.clone();
@@ -77,7 +69,7 @@ impl WAL {
 
           let result = disk_cloned.fsync().is_ok();
           while let Some(done) = waits.pop() {
-            done.must_send(Ok(result));
+            let _ = done.send(Ok(result));
           }
           true
         },
@@ -92,7 +84,6 @@ impl WAL {
       },
       last_log_id,
       last_transaction_id,
-      last_commit_id,
       redo,
     ))
   }
@@ -105,12 +96,31 @@ impl WAL {
       .unwrap_or(Err(Error::FlushFailed))
   }
 
-  pub fn append(&self, log: LogRecord) -> Result<()> {
-    let is_commit = if let Operation::Commit = log.operation {
-      true
-    } else {
-      false
-    };
+  fn entry_to_page(&self, buffer: &LogEntry) -> PageRef<WAL_BLOCK_SIZE> {
+    let mut page = self.page_pool.acquire(buffer.get_index());
+    page.as_mut().writer().write(buffer.as_ref());
+    page
+  }
+
+  pub fn append_insert(
+    &self,
+    tx_id: usize,
+    log_id: usize,
+    page: &PageRef<PAGE_SIZE>,
+  ) -> Result<()> {
+    let log =
+      LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy());
+    let mut buffer = self.buffer.l();
+    while let Err(Error::EOF) = buffer.append(&log) {
+      self.disk.write(&self.entry_to_page(&buffer))?;
+      let index = buffer.get_index().add(1);
+      *buffer = LogEntry::new(index.eq(&self.max_index).then(|| 0).unwrap_or(index));
+    }
+    Ok(())
+  }
+
+  pub fn append_checkpoint(&self, log_id: usize) -> Result {
+    let log = LogRecord::new_checkpoint(log_id, 0);
     let page = {
       let mut buffer = self.buffer.l();
       while let Err(Error::EOF) = buffer.append(&log) {
@@ -118,79 +128,67 @@ impl WAL {
         let index = buffer.get_index().add(1);
         *buffer = LogEntry::new(index.eq(&self.max_index).then(|| 0).unwrap_or(index));
       }
-      if !is_commit {
-        return Ok(());
-      }
-
       self.entry_to_page(&buffer)
     };
 
     self.disk.write(&page)?;
     self.flush()
   }
-
-  fn entry_to_page(&self, buffer: &LogEntry) -> PageRef<WAL_BLOCK_SIZE> {
-    let mut page = self.page_pool.acquire(buffer.get_index());
-    page.as_mut().writer().write(buffer.as_ref());
-    page
-  }
 }
 
 fn replay(
   wal: &DiskController<WAL_BLOCK_SIZE>,
-) -> Result<(
-  usize,
-  usize,
-  usize,
-  usize,
-  HashMap<usize, Vec<(usize, Page)>>,
-)> {
+) -> Result<(usize, usize, usize, HashMap<usize, Vec<(usize, Page)>>)> {
   let len = wal.len()?;
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
-  let mut commit_id = 0;
+
+  let mut records = vec![];
+  for i in 0..len.div(WAL_BLOCK_SIZE) {
+    for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
+      records.push((i, record))
+    }
+  }
+  records.sort_by_key(|(_, r)| r.log_id);
 
   let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
   let mut commited = HashMap::<usize, Vec<(usize, Page)>>::new();
-  for i in 0..len.div(WAL_BLOCK_SIZE) {
-    for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
-      tx_id = tx_id.max(record.tx_id);
-      if log_id < record.log_id {
-        index = i;
-        log_id = record.log_id;
-      }
-
-      match record.operation {
-        Operation::Insert(i, page) => {
-          apply
-            .entry(record.tx_id)
-            .or_default()
-            .push((record.log_id, i, page));
-        }
-        Operation::Start => {
-          apply.insert(record.tx_id, vec![]);
-        }
-        Operation::Commit => {
-          commit_id = commit_id.max(record.tx_id);
-          apply
-            .remove(&record.tx_id)
-            .map(|mut pages| {
-              pages.sort_by_key(|(i, _, _)| *i);
-              pages.into_iter().map(|(_, i, p)| (i, p)).collect()
-            })
-            .and_then(|pages| commited.insert(record.tx_id, pages));
-        }
-        Operation::Abort => {
-          apply.remove(&record.tx_id);
-        }
-        Operation::Checkpoint => {
-          apply.clear();
-          commited.clear();
-        }
-      };
-    }
+  if let Some((i, record)) = records.last() {
+    index = *i;
+    log_id = record.log_id;
   }
 
-  Ok((index, log_id, tx_id, commit_id, commited))
+  for (_, record) in records {
+    tx_id = tx_id.max(record.tx_id);
+    match record.operation {
+      Operation::Insert(i, page) => {
+        apply
+          .entry(record.tx_id)
+          .or_default()
+          .push((record.log_id, i, page));
+      }
+      Operation::Start => {
+        apply.insert(record.tx_id, vec![]);
+      }
+      Operation::Commit => {
+        apply
+          .remove(&record.tx_id)
+          .map(|mut pages| {
+            pages.sort_by_key(|(i, _, _)| *i);
+            pages.into_iter().map(|(_, i, p)| (i, p)).collect()
+          })
+          .and_then(|pages| commited.insert(record.tx_id, pages));
+      }
+      Operation::Abort => {
+        apply.remove(&record.tx_id);
+      }
+      Operation::Checkpoint => {
+        apply.clear();
+        commited.clear();
+      }
+    };
+  }
+
+  Ok((index, log_id, tx_id, commited))
 }

@@ -6,10 +6,10 @@ use serde_json::json;
 
 #[derive(Debug, PartialEq)]
 pub enum Level {
-  Info,
-  Error,
-  Warn,
-  Debug,
+  Debug = 1,
+  Info = 2,
+  Warn = 3,
+  Error = 4,
 }
 
 pub enum LoggerType {
