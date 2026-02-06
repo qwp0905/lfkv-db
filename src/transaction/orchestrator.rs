@@ -27,7 +27,7 @@ pub struct TxOrchestrator {
 impl TxOrchestrator {
   pub fn new() -> Result<Self> {
     let buffer_pool = BufferPool::open()?.to_arc();
-    let (wal, last_log_id, last_tx_id, committed) = WAL::replay(config)?;
+    let (wal, last_log_id, last_tx_id, redo) = WAL::replay(config)?;
     let wal = wal.to_arc();
     let last_log_id = AtomicUsize::new(last_log_id).to_arc();
     let snapshot = TxSnapshot {
@@ -35,6 +35,15 @@ impl TxOrchestrator {
       last_log_id: last_log_id.clone(),
       last_free: AtomicUsize::new(last_tx_id),
     };
+    for (_, i, page) in redo {
+      buffer_pool
+        .read(i)?
+        .as_mut()
+        .as_mut()
+        .writer()
+        .write(page.as_ref());
+    }
+
     let b = buffer_pool.clone();
     let w = wal.clone();
     let checkpoint = WorkBuilder::new()

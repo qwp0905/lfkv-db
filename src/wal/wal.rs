@@ -37,7 +37,7 @@ pub struct WAL {
 impl WAL {
   pub fn replay(
     config: WALConfig,
-  ) -> Result<(Self, usize, usize, HashMap<usize, Vec<(usize, Page)>>)> {
+  ) -> Result<(Self, usize, usize, Vec<(usize, usize, Page)>)> {
     let page_pool = PagePool::new(1).to_arc();
     let disk = DiskController::open(
       DiskControllerConfig {
@@ -133,8 +133,7 @@ impl WAL {
     let page = {
       let mut buffer = self.buffer.l();
       self.disk.write(&self.entry_to_page(&buffer))?;
-      let index = buffer.get_index().add(1).rem_euclid(self.max_index);
-      *buffer = LogEntry::new(index);
+      *buffer = LogEntry::new(buffer.get_index().add(1).rem_euclid(self.max_index));
       let _ = buffer.append(&log);
       self.entry_to_page(&buffer)
     };
@@ -146,7 +145,7 @@ impl WAL {
 
 fn replay(
   wal: &DiskController<WAL_BLOCK_SIZE>,
-) -> Result<(usize, usize, usize, HashMap<usize, Vec<(usize, Page)>>)> {
+) -> Result<(usize, usize, usize, Vec<(usize, usize, Page)>)> {
   let len = wal.len()?;
   let mut tx_id = 0;
   let mut log_id = 0;
@@ -161,7 +160,7 @@ fn replay(
   records.sort_by_key(|(_, r)| r.log_id);
 
   let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
-  let mut commited = HashMap::<usize, Vec<(usize, Page)>>::new();
+  let mut commited = Vec::<(usize, usize, Page)>::new();
   if let Some((i, record)) = records.last() {
     index = *i;
     log_id = record.log_id;
@@ -182,11 +181,7 @@ fn replay(
       Operation::Commit => {
         apply
           .remove(&record.tx_id)
-          .map(|mut pages| {
-            pages.sort_by_key(|(i, _, _)| *i);
-            pages.into_iter().map(|(_, i, p)| (i, p)).collect()
-          })
-          .and_then(|pages| commited.insert(record.tx_id, pages));
+          .map(|pages| commited.extend(pages));
       }
       Operation::Abort => {
         apply.remove(&record.tx_id);
@@ -198,5 +193,6 @@ fn replay(
     };
   }
 
+  commited.sort_by_key(|(i, _, _)| *i);
   Ok((index, log_id, tx_id, commited))
 }
