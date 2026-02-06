@@ -58,8 +58,7 @@ impl BufferPool {
 
   pub fn flush(&self) -> Result<()> {
     for shard in &self.shards {
-      let mut s = shard.l();
-      s.flush()?;
+      shard.l().flush()?;
     }
     Ok(())
   }

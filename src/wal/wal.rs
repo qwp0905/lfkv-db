@@ -9,7 +9,7 @@ use std::{
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use crate::{
-  disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
+  disk::{DiskController, DiskControllerConfig, PagePool, PageRef},
   wal::{
     record::{LogRecord, Operation},
     LogEntry, WAL_BLOCK_SIZE,
@@ -53,6 +53,8 @@ impl WAL {
     let buffer = LogEntry::new(last_index).to_arc_mutex();
     let waits = ArrayQueue::new(config.group_commit_count);
     let disk_cloned = disk.clone();
+    let buffer_cloned = buffer.clone();
+    let pool_cloned = page_pool.clone();
     let flush_th = WorkBuilder::new()
       .name("wal flush")
       .stack_size(1)
@@ -66,6 +68,15 @@ impl WAL {
               return false;
             }
           }
+
+          if let Err(_) =
+            disk_cloned.write(&entry_to_page(&pool_cloned, &buffer_cloned.l()))
+          {
+            while let Some(done) = waits.pop() {
+              let _ = done.send(Ok(false));
+            }
+            return true;
+          };
 
           let result = disk_cloned.fsync().is_ok();
           while let Some(done) = waits.pop() {
@@ -88,7 +99,7 @@ impl WAL {
     ))
   }
 
-  fn flush(&self) -> Result<()> {
+  pub fn flush(&self) -> Result<()> {
     self
       .flush_th
       .send_await(())?
@@ -96,50 +107,27 @@ impl WAL {
       .unwrap_or(Err(Error::FlushFailed))
   }
 
-  fn entry_to_page(&self, buffer: &LogEntry) -> PageRef<WAL_BLOCK_SIZE> {
-    let mut page = self.page_pool.acquire(buffer.get_index());
-    page.as_mut().writer().write(buffer.as_ref());
-    page
-  }
-
-  pub fn append_insert(
-    &self,
-    tx_id: usize,
-    log_id: usize,
-    page: &PageRef<PAGE_SIZE>,
-  ) -> Result<()> {
-    let log =
-      LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy());
+  #[inline]
+  pub fn append(&self, record: LogRecord) -> Result {
     let mut buffer = self.buffer.l();
-    if let Err(Error::EOF) = buffer.append(&log) {
-      self.disk.write(&self.entry_to_page(&buffer))?;
-      let index = buffer.get_index().add(1);
-      if index == self.max_index {
-        *buffer = LogEntry::new(0);
-        let _ = buffer.append(&log);
-        return Err(Error::WALCapacityExceeded);
-      }
-
-      *buffer = LogEntry::new(index);
-      let _ = buffer.append(&log);
+    match buffer.append(&record) {
+      Ok(_) => return Ok(()),
+      Err(Error::EOF) => {}
+      Err(err) => return Err(err),
     }
+
+    self.disk.write(&entry_to_page(&self.page_pool, &buffer))?;
+    let index = buffer.get_index().add(1);
+    if index == self.max_index {
+      *buffer = LogEntry::new(0);
+      let _ = buffer.append(&record);
+      return Err(Error::WALCapacityExceeded);
+    }
+
+    *buffer = LogEntry::new(index);
+    let _ = buffer.append(&record);
+
     Ok(())
-  }
-
-  pub fn append_checkpoint(&self, log_id: usize) -> Result {
-    let log = LogRecord::new_checkpoint(log_id, 0);
-    let mut buffer = self.buffer.l();
-    if let Err(Error::EOF) = buffer.append(&log) {}
-    let page = {
-      let mut buffer = self.buffer.l();
-      self.disk.write(&self.entry_to_page(&buffer))?;
-      *buffer = LogEntry::new(buffer.get_index().add(1).rem_euclid(self.max_index));
-      let _ = buffer.append(&log);
-      self.entry_to_page(&buffer)
-    };
-
-    self.disk.write(&page)?;
-    self.flush()
   }
 }
 
@@ -195,4 +183,13 @@ fn replay(
 
   commited.sort_by_key(|(i, _, _)| *i);
   Ok((index, log_id, tx_id, commited))
+}
+
+fn entry_to_page(
+  page_pool: &PagePool<WAL_BLOCK_SIZE>,
+  buffer: &LogEntry,
+) -> PageRef<WAL_BLOCK_SIZE> {
+  let mut page = page_pool.acquire(buffer.get_index());
+  page.as_mut().writer().write(buffer.as_ref());
+  page
 }
