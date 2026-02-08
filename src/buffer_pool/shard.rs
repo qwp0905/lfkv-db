@@ -110,12 +110,12 @@ impl BufferPoolShard {
     Ok((id, self.dirty.contains(id), &mut self.frame[id]))
   }
 
-  pub fn flush(&mut self) -> Result {
+  pub fn flush(&self) -> Result {
     for i in self.dirty.iter() {
       self.disk.write(&self.frame[i])?;
+      self.dirty.remove(i);
     }
     self.disk.fsync()?;
-    self.dirty.clear();
     Ok(())
   }
 }

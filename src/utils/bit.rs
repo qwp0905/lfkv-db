@@ -1,72 +1,54 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 const SHIFT: usize = 6;
 const MAX_BIT: usize = 1 << SHIFT;
 const MASK: usize = MAX_BIT - 1;
 
 pub struct Bitmap {
-  bits: Vec<u64>,
-  len_: usize,
+  bits: Vec<AtomicU64>,
 }
 impl Bitmap {
   pub fn new(capacity: usize) -> Self {
-    Bitmap {
-      bits: vec![0; capacity],
-      len_: 0,
+    let mut bits = Vec::with_capacity(capacity);
+    for _ in 0..capacity {
+      bits.push(AtomicU64::new(0))
     }
+    Bitmap { bits }
   }
 
   pub fn clear(&mut self) {
-    self.bits.fill(0)
+    self.bits.fill_with(Default::default);
   }
 
-  pub fn insert(&mut self, n: usize) -> bool {
+  pub fn insert(&self, n: usize) -> bool {
     let i = n >> SHIFT;
-    let j = n & MASK;
     if i >= self.bits.len() {
       return false;
     };
-
-    let prev = self.bits[i];
-    self.bits[i] |= 1 << j;
-    if prev == self.bits[i] {
-      return false;
-    };
-
-    self.len_ += 1;
-    true
+    let j = n & MASK;
+    let b = 1 << j;
+    let prev = self.bits[i].fetch_or(b, Ordering::Release);
+    prev & b == 0
   }
 
-  pub fn contains(&mut self, n: usize) -> bool {
+  pub fn contains(&self, n: usize) -> bool {
     let i = n >> SHIFT;
-    let j = n & MASK;
     if i >= self.bits.len() {
       return false;
     };
-    self.bits[i] & (1 << j) != 0
+    let j = n & MASK;
+    self.bits[i].load(Ordering::Acquire) & (1 << j) != 0
   }
 
-  pub fn remove(&mut self, n: usize) -> bool {
+  pub fn remove(&self, n: usize) -> bool {
     let i = n >> SHIFT;
-    let j = n & MASK;
     if i >= self.bits.len() {
       return false;
     };
-
-    let prev = self.bits[i];
-    self.bits[i] &= !(1 << j);
-    if prev == self.bits[i] {
-      return false;
-    }
-
-    self.len_ -= 1;
-    true
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.len_ == 0
-  }
-
-  pub fn len(&self) -> usize {
-    self.len_
+    let j = n & MASK;
+    let b = 1 << j;
+    let prev = self.bits[i].fetch_and(!b, Ordering::Release);
+    prev & b != 0
   }
 
   pub fn iter(&self) -> BitMapIter<'_> {
@@ -75,13 +57,13 @@ impl Bitmap {
 }
 
 pub struct BitMapIter<'a> {
-  bits: &'a [u64],
+  bits: &'a [AtomicU64],
   index: usize,
   remaining: u64,
 }
 impl<'a> BitMapIter<'a> {
-  pub fn new(bits: &'a Vec<u64>) -> Self {
-    let remaining = *bits.first().unwrap_or(&0);
+  pub fn new(bits: &'a Vec<AtomicU64>) -> Self {
+    let remaining = bits.first().map(|i| i.load(Ordering::Acquire)).unwrap_or(0);
     Self {
       bits,
       index: 0,
@@ -99,7 +81,7 @@ impl<'a> Iterator for BitMapIter<'a> {
       if self.index >= self.bits.len() {
         return None;
       };
-      self.remaining = self.bits[self.index];
+      self.remaining = self.bits[self.index].load(Ordering::Acquire);
     }
 
     let bit = self.remaining.trailing_zeros() as usize;
@@ -114,7 +96,7 @@ mod tests {
 
   #[test]
   fn test_insert() {
-    let mut bits = Bitmap::new(100);
+    let bits = Bitmap::new(100);
     assert!(bits.insert(0));
     assert!(bits.insert(1));
     assert!(bits.insert(63));
@@ -124,7 +106,7 @@ mod tests {
 
   #[test]
   fn test_contains() {
-    let mut bits = Bitmap::new(100);
+    let bits = Bitmap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
@@ -142,21 +124,21 @@ mod tests {
 
   #[test]
   fn test_remove() {
-    let mut bits = Bitmap::new(100);
+    let bits = Bitmap::new(100);
     assert!(bits.insert(0));
     assert!(bits.insert(1));
     assert!(bits.insert(63));
     assert!(bits.insert(64));
     assert!(bits.insert(65));
-    assert_eq!(bits.len(), 5);
+    // assert_eq!(bits.len(), 5);
     assert!(bits.remove(0));
-    assert_eq!(bits.len(), 4);
+    // assert_eq!(bits.len(), 4);
     assert!(!bits.contains(0));
   }
 
   #[test]
   fn test_iter() {
-    let mut bits = Bitmap::new(100);
+    let bits = Bitmap::new(100);
     bits.insert(0);
     bits.insert(1);
     bits.insert(63);
@@ -169,15 +151,5 @@ mod tests {
     assert_eq!(iter.next(), Some(64));
     assert_eq!(iter.next(), Some(65));
     assert_eq!(iter.next(), None);
-  }
-
-  #[test]
-  fn test_is_empty() {
-    let mut bits = Bitmap::new(100);
-    assert!(bits.is_empty());
-    bits.insert(0);
-    assert!(!bits.is_empty());
-    bits.remove(0);
-    assert!(bits.is_empty());
   }
 }
