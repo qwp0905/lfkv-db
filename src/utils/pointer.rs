@@ -1,7 +1,7 @@
 use std::{
   ops::Deref,
   ptr::NonNull,
-  sync::{Arc, Mutex},
+  sync::{Arc, Mutex, RwLock},
 };
 
 pub trait Pointer<T> {
@@ -88,5 +88,14 @@ impl<T> ToArcMutex for T {
   #[inline]
   fn to_arc_mutex(self) -> Arc<Mutex<Self>> {
     Mutex::new(self).to_arc()
+  }
+}
+
+pub trait ToArcRwLock {
+  fn to_arc_rwlock(self) -> Arc<RwLock<Self>>;
+}
+impl<T> ToArcRwLock for T {
+  fn to_arc_rwlock(self) -> Arc<RwLock<Self>> {
+    RwLock::new(self).to_arc()
   }
 }

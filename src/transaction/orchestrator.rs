@@ -1,29 +1,22 @@
 use std::{
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
+  mem::replace,
+  sync::{Arc, RwLock},
   time::Duration,
 };
 
 use crate::{
   buffer_pool::BufferPoolConfig,
   disk::{PageRef, PAGE_SIZE},
-  wal::{LogRecord, WALConfig, WAL},
+  utils::{ShortenedRwLock, ToArcRwLock},
+  wal::{WALConfig, WAL},
   BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
-struct TxStatus {
-  last_tx_id: AtomicUsize,
-  last_log_id: Arc<AtomicUsize>,
-  last_free: AtomicUsize,
-}
-
 pub struct TxOrchestrator {
-  status: TxStatus,
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   checkpoint: SingleWorkThread<(), Result>,
+  last_free: Arc<RwLock<usize>>,
 }
 impl TxOrchestrator {
   pub fn new(
@@ -31,14 +24,9 @@ impl TxOrchestrator {
     wal_config: WALConfig,
   ) -> Result<Self> {
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
-    let (wal, last_log_id, last_tx_id, redo) = WAL::replay(wal_config)?;
+    let (wal, last_free, redo) = WAL::replay(wal_config)?;
     let wal = wal.to_arc();
-    let last_log_id = AtomicUsize::new(last_log_id).to_arc();
-    let status = TxStatus {
-      last_tx_id: AtomicUsize::new(last_tx_id),
-      last_log_id: last_log_id.clone(),
-      last_free: AtomicUsize::new(last_tx_id),
-    };
+    let last_free = last_free.to_arc_rwlock();
     for (_, i, page) in redo {
       buffer_pool
         .read(i)?
@@ -50,14 +38,14 @@ impl TxOrchestrator {
 
     let b = buffer_pool.clone();
     let w = wal.clone();
+    let f = last_free.clone();
     let checkpoint = WorkBuilder::new()
       .name("")
       .stack_size(1)
       .single()
       .with_timeout(Duration::new(1, 1), move |_| {
-        let log_id = last_log_id.fetch_add(1, Ordering::SeqCst);
         b.flush()?;
-        match w.append(LogRecord::new_checkpoint(log_id, 0)) {
+        match w.append_checkpoint(*f.rl()) {
           Ok(_) => {}
           Err(Error::WALCapacityExceeded) => {}
           Err(err) => return Err(err),
@@ -67,7 +55,7 @@ impl TxOrchestrator {
 
     Ok(Self {
       checkpoint,
-      status,
+      last_free,
       wal,
       buffer_pool,
     })
@@ -76,51 +64,71 @@ impl TxOrchestrator {
     self.buffer_pool.read(index)
   }
   pub fn log<P: AsRef<PageRef<PAGE_SIZE>>>(&self, tx_id: usize, page: &P) -> Result {
-    let log_id = self.status.last_log_id.fetch_add(1, Ordering::SeqCst);
-    let page = page.as_ref();
-    let record =
-      LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy());
-    match self.wal.append(record) {
-      Ok(_) => return Ok(()),
-      Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(()),
+    match self.wal.append_insert(tx_id, page.as_ref()) {
+      Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
+      result => return result,
+    };
+    self.wal.append_insert(tx_id, page.as_ref())
+  }
+  pub fn alloc(&self) -> Result<CachedPage<'_>> {
+    let mut index = self.last_free.wl();
+    let page = self.buffer_pool.read(*index)?;
+    let next = page.as_ref().as_ref().scanner().read_usize()?;
+    match self.wal.append_free(next) {
+      Ok(_) => {}
+      Err(Error::WALCapacityExceeded) => self
+        .checkpoint
+        .send_await(())?
+        .and_then(|_| self.wal.append_free(next))?,
       Err(err) => return Err(err),
     };
-    Ok(())
+    *index = next;
+    Ok(page)
   }
-
-  pub fn alloc(&self) -> Result<CachedPage<'_>> {
-    loop {
-      let f = self.status.last_free.load(Ordering::SeqCst);
-      let page = self.buffer_pool.read(f)?;
-      let next = page.as_ref().as_ref().scanner().read_usize()?;
-      if let Ok(_) = self.status.last_free.compare_exchange(
-        f,
-        next,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-      ) {
-        return Ok(page);
-      }
-    }
-  }
-  pub fn release(&self, mut page: CachedPage<'_>) {
-    let f = page.as_ref().get_index();
+  pub fn release(&self, mut page: CachedPage<'_>) -> Result {
+    let index = page.as_ref().get_index();
+    let mut prev = self.last_free.wl();
+    match self.wal.append_free(index) {
+      Ok(_) => {}
+      Err(Error::WALCapacityExceeded) => self
+        .checkpoint
+        .send_await(())?
+        .and_then(|_| self.wal.append_free(index))?,
+      Err(err) => return Err(err),
+    };
     page
       .as_mut()
       .as_mut()
       .writer()
-      .write_usize(self.status.last_free.swap(f, Ordering::SeqCst));
+      .write_usize(replace(&mut prev, index));
+    Ok(())
   }
 
   pub fn start_tx(&self) -> Result<usize> {
-    let tx_id = self.status.last_tx_id.fetch_add(1, Ordering::SeqCst);
-    let log_id = self.status.last_log_id.fetch_add(1, Ordering::SeqCst);
-    let record = LogRecord::new_start(tx_id, log_id);
-    match self.wal.append(record) {
-      Ok(_) => return Ok(tx_id),
-      Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(()),
+    match self.wal.append_start() {
+      Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
+      result => return result,
+    }
+    self.wal.append_start()
+  }
+
+  pub fn commit_tx(&self, tx_id: usize) -> Result {
+    match self.wal.append_commit(tx_id) {
+      Ok(_) => {}
+      Err(Error::WALCapacityExceeded) => self
+        .checkpoint
+        .send_await(())?
+        .and_then(|_| self.wal.append_commit(tx_id))?,
       Err(err) => return Err(err),
-    };
-    Ok(tx_id)
+    }
+    self.wal.flush()
+  }
+
+  pub fn abort_tx(&self, tx_id: usize) -> Result {
+    match self.wal.append_abort(tx_id) {
+      Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
+      result => return result,
+    }
+    self.wal.append_abort(tx_id)
   }
 }

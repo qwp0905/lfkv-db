@@ -12,7 +12,33 @@ pub enum Operation {
   Start,
   Commit,
   Abort,
-  Checkpoint,
+  Checkpoint(usize),
+  Free(usize),
+}
+impl Operation {
+  fn to_bytes(&self) -> Vec<u8> {
+    match self {
+      Operation::Insert(index, page) => {
+        let mut v = vec![0];
+        v.extend_from_slice(&index.to_le_bytes());
+        v.extend_from_slice(page.as_ref());
+        v
+      }
+      Operation::Start => vec![1],
+      Operation::Commit => vec![2],
+      Operation::Abort => vec![3],
+      Operation::Checkpoint(index) => {
+        let mut v = vec![4];
+        v.extend_from_slice(&index.to_le_bytes());
+        v
+      }
+      Operation::Free(index) => {
+        let mut v = vec![5];
+        v.extend_from_slice(&index.to_le_bytes());
+        v
+      }
+    }
+  }
 }
 
 pub struct LogRecord {
@@ -45,8 +71,11 @@ impl LogRecord {
     LogRecord::new(log_id, tx_id, Operation::Abort)
   }
 
-  pub fn new_checkpoint(log_id: usize, tx_id: usize) -> Self {
-    LogRecord::new(log_id, tx_id, Operation::Checkpoint)
+  pub fn new_checkpoint(log_id: usize, last_free: usize) -> Self {
+    LogRecord::new(log_id, 0, Operation::Checkpoint(last_free))
+  }
+  pub fn new_free(log_id: usize, page_index: usize) -> Self {
+    LogRecord::new(log_id, 0, Operation::Free(page_index))
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
@@ -54,18 +83,7 @@ impl LogRecord {
 
     vec.extend_from_slice(&self.log_id.to_le_bytes());
     vec.extend_from_slice(&self.tx_id.to_le_bytes());
-
-    match &self.operation {
-      Operation::Insert(index, page) => {
-        vec.push(0);
-        vec.extend_from_slice(&index.to_le_bytes());
-        vec.extend_from_slice(page.as_ref());
-      }
-      Operation::Start => vec.push(1),
-      Operation::Commit => vec.push(2),
-      Operation::Abort => vec.push(3),
-      Operation::Checkpoint => vec.push(4),
-    }
+    vec.extend_from_slice(&self.operation.to_bytes());
     vec
   }
 }
@@ -80,27 +98,45 @@ impl TryFrom<Vec<u8>> for LogRecord {
   fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
     let len = value.len();
     if len.lt(&17) {
-      return Err(Error::Invalid);
+      return Err(Error::InvalidFormat);
     }
     let log_id =
-      usize::from_le_bytes(value[0..8].try_into().map_err(|_| Error::Invalid)?);
+      usize::from_le_bytes(value[0..8].try_into().map_err(|_| Error::InvalidFormat)?);
     let tx_id =
-      usize::from_le_bytes(value[8..16].try_into().map_err(|_| Error::Invalid)?);
+      usize::from_le_bytes(value[8..16].try_into().map_err(|_| Error::InvalidFormat)?);
     let operation = match value[16] {
       0 => {
         if len.ne(&PAGE_SIZE.add(17).add(8)) {
-          return Err(Error::Invalid);
+          return Err(Error::InvalidFormat);
         }
-        let index =
-          usize::from_le_bytes(value[17..25].try_into().map_err(|_| Error::Invalid)?);
-        let data = value[25..].try_into().map_err(|_| Error::Invalid)?;
+        let index = usize::from_le_bytes(
+          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+        );
+        let data = value[25..].try_into().map_err(|_| Error::InvalidFormat)?;
         Operation::Insert(index, data)
       }
       1 => Operation::Start,
       2 => Operation::Commit,
       3 => Operation::Abort,
-      4 => Operation::Checkpoint,
-      _ => return Err(Error::Invalid),
+      4 => {
+        if len.lt(&25) {
+          return Err(Error::InvalidFormat);
+        }
+        let index = usize::from_le_bytes(
+          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+        );
+        Operation::Checkpoint(index)
+      }
+      5 => {
+        if len.lt(&25) {
+          return Err(Error::InvalidFormat);
+        }
+        let index = usize::from_le_bytes(
+          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+        );
+        Operation::Free(index)
+      }
+      _ => return Err(Error::InvalidFormat),
     };
     Ok(LogRecord::new(log_id, tx_id, operation))
   }

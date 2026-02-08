@@ -5,8 +5,8 @@ pub enum Error {
   #[error("not found")]
   NotFound,
 
-  #[error("invalid")]
-  Invalid,
+  #[error("invalid format")]
+  InvalidFormat,
 
   #[error("unknown")]
   Unknown(Box<dyn std::error::Error + Send + Sync>),

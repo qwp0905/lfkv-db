@@ -15,7 +15,14 @@ use crate::{
     LogEntry, WAL_BLOCK_SIZE,
   },
   Error, Page, Result, ShortenedMutex, SingleWorkThread, ToArc, ToArcMutex, WorkBuilder,
+  PAGE_SIZE,
 };
+
+struct WALBuffer {
+  last_log_id: usize,
+  last_tx_id: usize,
+  entry: LogEntry,
+}
 
 pub struct WALConfig {
   pub path: PathBuf,
@@ -30,14 +37,13 @@ pub struct WALConfig {
 pub struct WAL {
   disk: Arc<DiskController<WAL_BLOCK_SIZE>>,
   flush_th: SingleWorkThread<(), bool>,
-  buffer: Arc<Mutex<LogEntry>>,
+  // buffer: Arc<Mutex<LogEntry>>,
+  buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
 }
 impl WAL {
-  pub fn replay(
-    config: WALConfig,
-  ) -> Result<(Self, usize, usize, Vec<(usize, usize, Page)>)> {
+  pub fn replay(config: WALConfig) -> Result<(Self, usize, Vec<(usize, usize, Page)>)> {
     let page_pool = PagePool::new(1).to_arc();
     let disk = DiskController::open(
       DiskControllerConfig {
@@ -49,8 +55,13 @@ impl WAL {
     )?
     .to_arc();
 
-    let (last_index, last_log_id, last_transaction_id, redo) = replay(&disk)?;
-    let buffer = LogEntry::new(last_index).to_arc_mutex();
+    let (last_index, last_log_id, last_tx_id, last_free, redo) = replay(&disk)?;
+    let buffer = WALBuffer {
+      last_log_id,
+      last_tx_id,
+      entry: LogEntry::new(last_index),
+    }
+    .to_arc_mutex();
     let waits = ArrayQueue::new(config.group_commit_count);
     let disk_cloned = disk.clone();
     let buffer_cloned = buffer.clone();
@@ -70,7 +81,7 @@ impl WAL {
           }
 
           if let Err(_) =
-            disk_cloned.write(&entry_to_page(&pool_cloned, &buffer_cloned.l()))
+            disk_cloned.write(&entry_to_page(&pool_cloned, &buffer_cloned.l().entry))
           {
             while let Some(done) = waits.pop() {
               let _ = done.send(Ok(false));
@@ -93,8 +104,7 @@ impl WAL {
         flush_th,
         max_index: config.max_file_size.div(WAL_BLOCK_SIZE),
       },
-      last_log_id,
-      last_transaction_id,
+      last_free,
       redo,
     ))
   }
@@ -108,36 +118,76 @@ impl WAL {
   }
 
   #[inline]
-  pub fn append(&self, record: LogRecord) -> Result {
+  fn append<F>(&self, mut f: F) -> Result<LogRecord>
+  where
+    F: FnMut(usize, usize) -> LogRecord,
+  {
     let mut buffer = self.buffer.l();
-    match buffer.append(&record) {
-      Ok(_) => return Ok(()),
+    let log_id = buffer.last_log_id;
+    let record = f(log_id, buffer.last_tx_id);
+    match buffer.entry.append(&record) {
+      Ok(_) => {
+        buffer.last_log_id += 1;
+        buffer.last_tx_id += buffer.last_tx_id.eq(&record.tx_id).then(|| 1).unwrap_or(0);
+        return Ok(record);
+      }
       Err(Error::EOF) => {}
       Err(err) => return Err(err),
     }
 
-    self.disk.write(&entry_to_page(&self.page_pool, &buffer))?;
-    let index = buffer.get_index().add(1);
+    self
+      .disk
+      .write(&entry_to_page(&self.page_pool, &buffer.entry))?;
+    let index = buffer.entry.get_index().add(1);
     if index == self.max_index {
-      *buffer = LogEntry::new(0);
-      let _ = buffer.append(&record);
+      buffer.entry = LogEntry::new(0);
       return Err(Error::WALCapacityExceeded);
     }
 
-    *buffer = LogEntry::new(index);
-    let _ = buffer.append(&record);
+    buffer.entry = LogEntry::new(index);
+    let _ = buffer.entry.append(&record);
 
+    buffer.last_log_id += 1;
+    buffer.last_tx_id += buffer.last_tx_id.eq(&record.tx_id).then(|| 1).unwrap_or(0);
+    Ok(record)
+  }
+
+  pub fn append_insert(&self, tx_id: usize, page: &PageRef<PAGE_SIZE>) -> Result {
+    self.append(move |log_id, _| {
+      LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy())
+    })?;
+    Ok(())
+  }
+  pub fn append_checkpoint(&self, last_free: usize) -> Result {
+    self.append(move |log_id, _| LogRecord::new_checkpoint(log_id, last_free))?;
+    Ok(())
+  }
+  pub fn append_start(&self) -> Result<usize> {
+    let record = self.append(LogRecord::new_start)?;
+    Ok(record.tx_id)
+  }
+  pub fn append_free(&self, last_free: usize) -> Result {
+    self.append(move |log_id, _| LogRecord::new_free(log_id, last_free))?;
+    Ok(())
+  }
+  pub fn append_commit(&self, tx_id: usize) -> Result {
+    self.append(|log_id, _| LogRecord::new_commit(log_id, tx_id))?;
+    Ok(())
+  }
+  pub fn append_abort(&self, tx_id: usize) -> Result {
+    self.append(|log_id, _| LogRecord::new_abort(log_id, tx_id))?;
     Ok(())
   }
 }
 
 fn replay(
   wal: &DiskController<WAL_BLOCK_SIZE>,
-) -> Result<(usize, usize, usize, Vec<(usize, usize, Page)>)> {
+) -> Result<(usize, usize, usize, usize, Vec<(usize, usize, Page)>)> {
   let len = wal.len()?;
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
+  let mut free_index = 0;
 
   let mut records = vec![];
   for i in 0..len.div(WAL_BLOCK_SIZE) {
@@ -174,15 +224,19 @@ fn replay(
       Operation::Abort => {
         apply.remove(&record.tx_id);
       }
-      Operation::Checkpoint => {
+      Operation::Checkpoint(index) => {
         apply.clear();
         commited.clear();
+        free_index = index;
+      }
+      Operation::Free(index) => {
+        free_index = index;
       }
     };
   }
 
   commited.sort_by_key(|(i, _, _)| *i);
-  Ok((index, log_id, tx_id, commited))
+  Ok((index, log_id, tx_id, free_index, commited))
 }
 
 fn entry_to_page(

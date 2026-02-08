@@ -25,7 +25,7 @@ impl Serializable for CursorEntry {
     match sc.read()? {
       1 => Ok(Self::Leaf(value.deserialize()?)),
       2 => Ok(Self::Internal(value.deserialize()?)),
-      _ => Err(Error::Invalid),
+      _ => Err(Error::InvalidFormat),
     }
   }
 }
