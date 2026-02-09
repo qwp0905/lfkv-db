@@ -37,7 +37,6 @@ pub struct WALConfig {
 pub struct WAL {
   disk: Arc<DiskController<WAL_BLOCK_SIZE>>,
   flush_th: SingleWorkThread<(), bool>,
-  // buffer: Arc<Mutex<LogEntry>>,
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
@@ -80,9 +79,8 @@ impl WAL {
             }
           }
 
-          if let Err(_) =
-            disk_cloned.write(&entry_to_page(&pool_cloned, &buffer_cloned.l().entry))
-          {
+          let (i, p) = entry_to_page(&pool_cloned, &buffer_cloned.l().entry);
+          if let Err(_) = disk_cloned.write(i, &p) {
             while let Some(done) = waits.pop() {
               let _ = done.send(Ok(false));
             }
@@ -135,9 +133,8 @@ impl WAL {
       Err(err) => return Err(err),
     }
 
-    self
-      .disk
-      .write(&entry_to_page(&self.page_pool, &buffer.entry))?;
+    let (i, p) = entry_to_page(&self.page_pool, &buffer.entry);
+    self.disk.write(i, &p)?;
     let index = buffer.entry.get_index().add(1);
     if index == self.max_index {
       buffer.entry = LogEntry::new(0);
@@ -152,9 +149,14 @@ impl WAL {
     Ok(record)
   }
 
-  pub fn append_insert(&self, tx_id: usize, page: &PageRef<PAGE_SIZE>) -> Result {
+  pub fn append_insert(
+    &self,
+    tx_id: usize,
+    index: usize,
+    page: &Page<PAGE_SIZE>,
+  ) -> Result {
     self.append(move |log_id, _| {
-      LogRecord::new_insert(log_id, tx_id, page.get_index(), page.as_ref().copy())
+      LogRecord::new_insert(log_id, tx_id, index, page.copy())
     })?;
     Ok(())
   }
@@ -242,8 +244,8 @@ fn replay(
 fn entry_to_page(
   page_pool: &PagePool<WAL_BLOCK_SIZE>,
   buffer: &LogEntry,
-) -> PageRef<WAL_BLOCK_SIZE> {
-  let mut page = page_pool.acquire(buffer.get_index());
+) -> (usize, PageRef<WAL_BLOCK_SIZE>) {
+  let mut page = page_pool.acquire();
   page.as_mut().writer().write(buffer.as_ref());
-  page
+  (buffer.get_index(), page)
 }

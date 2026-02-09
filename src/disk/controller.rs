@@ -24,7 +24,7 @@ pub struct DiskControllerConfig {
 }
 
 pub struct DiskController<const N: usize> {
-  read_ths: Arc<SharedWorkThread<PageRef<N>, std::io::Result<PageRef<N>>>>,
+  read_ths: Arc<SharedWorkThread<(usize, PageRef<N>), std::io::Result<PageRef<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
   meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
@@ -65,14 +65,14 @@ impl<const N: usize> DiskController<N> {
   pub fn read(&self, index: usize) -> Result<PageRef<N>> {
     self
       .read_ths
-      .send_await(self.page_pool.acquire(index))?
+      .send_await((index, self.page_pool.acquire()))?
       .map_err(Error::IO)
   }
 
-  pub fn write<'a>(&self, page: &'a PageRef<N>) -> Result {
+  pub fn write<'a>(&self, index: usize, page: &'a PageRef<N>) -> Result {
     self
       .write_ths
-      .send_await((page.get_index(), page.as_ref().copy()))?
+      .send_await((index, page.as_ref().copy()))?
       .map_err(Error::IO)
   }
 
@@ -117,10 +117,10 @@ mod tests {
     assert_eq!(finder.len()?, 0);
 
     // Write a page
-    let mut page = page_pool.acquire(0);
+    let mut page = page_pool.acquire();
     let test_data = [1u8, 2u8, 3u8, 4u8];
     page.as_mut().as_mut()[..test_data.len()].copy_from_slice(&test_data);
-    finder.write(&page)?;
+    finder.write(0, &page)?;
 
     // Immediately write to disk with fsync
     finder.fsync()?;
@@ -168,10 +168,10 @@ mod tests {
 
     // Write multiple pages
     for i in 0..3 {
-      let mut page = page_pool.acquire(i);
+      let mut page = page_pool.acquire();
       let value = (i + 1) as u8;
       page.as_mut().as_mut()[0] = value;
-      co.write(&page)?;
+      co.write(i, &page)?;
     }
     co.fsync()?;
 
@@ -215,13 +215,13 @@ mod tests {
 
         for i in 0..PAGES_PER_THREAD {
           let page_idx = base_idx + i;
-          let mut page = pool_clone.acquire(page_idx);
+          let mut page = pool_clone.acquire();
 
           for j in 0..TEST_PAGE_SIZE {
             page.as_mut().as_mut()[j] = ((page_idx + j) % 256) as u8;
           }
 
-          finder_clone.write(&page)?;
+          finder_clone.write(page_idx, &page)?;
         }
         Ok(())
       }));
@@ -298,12 +298,12 @@ mod tests {
 
           if rng.gen_bool(0.7) {
             // 70% chance of write operation
-            let mut page = pool_clone.acquire(page_idx);
+            let mut page = pool_clone.acquire();
             let value = rng.gen::<u8>();
             for j in 0..TEST_PAGE_SIZE {
               page.as_mut().as_mut()[j] = value.wrapping_add((j % 256) as u8);
             }
-            co_clone.write(&page)?;
+            co_clone.write(page_idx, &page)?;
 
             if rng.gen_bool(0.2) {
               // 20% chance of fsync

@@ -7,8 +7,8 @@ use list::*;
 mod lru;
 use lru::*;
 
-mod shard;
-pub use shard::*;
+mod table;
+use table::*;
 
 mod pool;
 pub use pool::*;

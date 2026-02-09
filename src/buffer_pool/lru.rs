@@ -24,7 +24,7 @@ where
   move |&ptr| hash_builder.hash_one(unsafe { ptr.as_ref() }.get_key())
 }
 
-pub struct LRUTable<K, V> {
+pub struct LRUShard<K, V> {
   old_entries: RawTable<NonNull<Bucket<K, V>>>,
   old_sub_list: LRUList<K, V>,
   new_entries: RawTable<NonNull<Bucket<K, V>>>,
@@ -32,7 +32,7 @@ pub struct LRUTable<K, V> {
   capacity: usize,
 }
 
-impl<K, V> LRUTable<K, V> {
+impl<K, V> LRUShard<K, V> {
   pub fn new(capacity: usize) -> Self {
     Self {
       old_entries: RawTable::new(),
@@ -50,7 +50,7 @@ impl<K, V> LRUTable<K, V> {
     self.new_sub_list.clear();
   }
 }
-impl<K, V> LRUTable<K, V>
+impl<K, V> LRUShard<K, V>
 where
   K: Eq + Hash,
 {

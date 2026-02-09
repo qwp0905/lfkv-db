@@ -7,24 +7,17 @@ use crate::Page;
 pub struct PageRef<const N: usize> {
   page: ManuallyDrop<Page<N>>,
   store: Arc<PageStore<N>>,
-  index: usize,
 }
 impl<const N: usize> PageRef<N> {
-  fn with(store: Arc<PageStore<N>>, page: Page<N>, index: usize) -> Self {
+  fn with(store: Arc<PageStore<N>>, page: Page<N>) -> Self {
     Self {
       page: ManuallyDrop::new(page),
       store,
-      index,
     }
   }
 
-  fn new(store: Arc<PageStore<N>>, index: usize) -> Self {
-    Self::with(store, Page::new(), index)
-  }
-
-  #[inline]
-  pub fn get_index(&self) -> usize {
-    self.index
+  fn new(store: Arc<PageStore<N>>) -> Self {
+    Self::with(store, Page::new())
   }
 }
 impl<const N: usize> AsRef<Page<N>> for PageRef<N> {
@@ -60,14 +53,14 @@ impl<const N: usize> PagePool<N> {
     }
   }
 
-  pub fn acquire(&self, index: usize) -> PageRef<N> {
+  pub fn acquire(&self) -> PageRef<N> {
     self
       .store
       .as_ref()
       .data
       .pop()
-      .map(|p| PageRef::with(self.store.clone(), p, index))
-      .unwrap_or_else(|| PageRef::new(self.store.clone(), index))
+      .map(|p| PageRef::with(self.store.clone(), p))
+      .unwrap_or_else(|| PageRef::new(self.store.clone()))
   }
 }
 

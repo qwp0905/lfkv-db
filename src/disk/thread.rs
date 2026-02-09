@@ -12,12 +12,11 @@ use super::{Pread, Pwrite};
 
 pub fn create_read_thread<'a, const N: usize>(
   file: &'a File,
-) -> impl Fn(usize) -> Result<SafeWork<PageRef<N>, std::io::Result<PageRef<N>>>> + use<'a, N>
-{
+) -> impl Fn(usize) -> Result<SafeWork<(usize, PageRef<N>), std::io::Result<PageRef<N>>>>
+     + use<'a, N> {
   |_| {
     let fd = file.try_clone().map_err(Error::IO)?;
-    let work = SafeWork::no_timeout(move |mut page: PageRef<N>| {
-      let index = page.get_index();
+    let work = SafeWork::no_timeout(move |(index, mut page): (usize, PageRef<N>)| {
       fd.pread(page.as_mut().as_mut(), index.mul(N) as u64)?;
       Ok(page)
     });

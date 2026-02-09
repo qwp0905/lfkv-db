@@ -6,10 +6,10 @@ use std::{
 
 use crate::{
   buffer_pool::BufferPoolConfig,
-  disk::{PageRef, PAGE_SIZE},
+  disk::PAGE_SIZE,
   utils::{ShortenedRwLock, ToArcRwLock},
   wal::{WALConfig, WAL},
-  BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
+  BufferPool, CachedPage, Error, Page, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 pub struct TxOrchestrator {
@@ -30,7 +30,7 @@ impl TxOrchestrator {
     for (_, i, page) in redo {
       buffer_pool
         .read(i)?
-        .as_mut()
+        .for_write()
         .as_mut()
         .writer()
         .write(page.as_ref());
@@ -63,17 +63,23 @@ impl TxOrchestrator {
   pub fn fetch(&self, index: usize) -> Result<CachedPage<'_>> {
     self.buffer_pool.read(index)
   }
-  pub fn log<P: AsRef<PageRef<PAGE_SIZE>>>(&self, tx_id: usize, page: &P) -> Result {
-    match self.wal.append_insert(tx_id, page.as_ref()) {
+  pub fn log<P: AsRef<Page<PAGE_SIZE>>>(
+    &self,
+    tx_id: usize,
+    page: CachedPage<'_>,
+  ) -> Result {
+    let index = page.get_index();
+    let page = page.for_read();
+    match self.wal.append_insert(tx_id, index, page.as_ref()) {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
       result => return result,
     };
-    self.wal.append_insert(tx_id, page.as_ref())
+    self.wal.append_insert(tx_id, index, page.as_ref())
   }
   pub fn alloc(&self) -> Result<CachedPage<'_>> {
     let mut index = self.last_free.wl();
     let page = self.buffer_pool.read(*index)?;
-    let next = page.as_ref().as_ref().scanner().read_usize()?;
+    let next = page.for_read().as_ref().scanner().read_usize()?;
     match self.wal.append_free(next) {
       Ok(_) => {}
       Err(Error::WALCapacityExceeded) => self
@@ -85,8 +91,8 @@ impl TxOrchestrator {
     *index = next;
     Ok(page)
   }
-  pub fn release(&self, mut page: CachedPage<'_>) -> Result {
-    let index = page.as_ref().get_index();
+  pub fn release(&self, page: CachedPage<'_>) -> Result {
+    let index = page.get_index();
     let mut prev = self.last_free.wl();
     match self.wal.append_free(index) {
       Ok(_) => {}
@@ -97,7 +103,7 @@ impl TxOrchestrator {
       Err(err) => return Err(err),
     };
     page
-      .as_mut()
+      .for_write()
       .as_mut()
       .writer()
       .write_usize(replace(&mut prev, index));
