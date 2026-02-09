@@ -1,6 +1,5 @@
 use std::{
   hash::{BuildHasher, RandomState},
-  // ops::{Add, Div, Mul, Sub},
   sync::{Mutex, MutexGuard},
 };
 
