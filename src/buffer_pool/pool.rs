@@ -84,7 +84,6 @@ pub struct BufferPool {
   table: LRUTable,
   frame: Vec<RwLock<PageRef<PAGE_SIZE>>>,
   dirty: Bitmap,
-
   disk: Arc<DiskController<PAGE_SIZE>>,
 }
 impl BufferPool {
