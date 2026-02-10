@@ -53,17 +53,29 @@ impl<'a> CachedPage<'a> {
       guard: self.page.wl(),
       dirty: self.dirty,
       frame_id: self.frame_id,
+      index: self.index,
     }
   }
 }
 pub struct CachedPageWrite<'a> {
   guard: RwLockWriteGuard<'a, PageRef<PAGE_SIZE>>,
+  index: usize,
   dirty: &'a Bitmap,
   frame_id: usize,
+}
+impl<'a> CachedPageWrite<'a> {
+  pub fn get_index(&self) -> usize {
+    self.index
+  }
 }
 impl<'a> AsMut<Page<PAGE_SIZE>> for CachedPageWrite<'a> {
   fn as_mut(&mut self) -> &mut Page<PAGE_SIZE> {
     self.guard.as_mut()
+  }
+}
+impl<'a> AsRef<Page<PAGE_SIZE>> for CachedPageWrite<'a> {
+  fn as_ref(&self) -> &Page<PAGE_SIZE> {
+    self.guard.as_ref()
   }
 }
 impl<'a> Drop for CachedPageWrite<'a> {

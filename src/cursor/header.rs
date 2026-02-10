@@ -3,9 +3,10 @@ use std::ops::Add;
 use crate::{
   disk::{Page, Serializable},
   error::Error,
+  PAGE_SIZE,
 };
 
-pub static HEADER_INDEX: usize = 0;
+pub const HEADER_INDEX: usize = 0;
 
 #[derive(Debug)]
 pub struct TreeHeader {
@@ -29,16 +30,12 @@ impl TreeHeader {
 }
 
 impl Serializable for TreeHeader {
-  fn serialize(&self, p: &mut Page) -> Result<(), Error> {
-    let mut wt = p.writer();
-    wt.write(&self.root.to_be_bytes())?;
-    Ok(())
+  fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> Result<(), Error> {
+    page.writer().write_usize(self.root)
   }
 
-  fn deserialize(value: &Page) -> Result<Self, Error> {
-    let mut s = value.scanner();
-    let root = s.read_usize()?;
-
-    Ok(TreeHeader { root })
+  fn deserialize(page: &Page<PAGE_SIZE>) -> Result<Self, Error> {
+    let root = page.scanner().read_usize()?;
+    Ok(Self { root })
   }
 }

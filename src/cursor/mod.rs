@@ -1,11 +1,8 @@
 mod header;
 use header::*;
 
-mod entry;
-use entry::*;
-
-mod writer;
-use writer::*;
+mod node;
+use node::*;
 
 mod cursor;
 pub use cursor::*;

@@ -64,6 +64,11 @@ impl<const T: usize> From<Page<T>> for Vec<u8> {
     value.bytes.into()
   }
 }
+impl<const T: usize> From<&Page<T>> for Vec<u8> {
+  fn from(value: &Page<T>) -> Self {
+    value.bytes.into()
+  }
+}
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
     let mut page = Page::new();

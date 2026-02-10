@@ -66,10 +66,9 @@ impl TxOrchestrator {
   pub fn log<P: AsRef<Page<PAGE_SIZE>>>(
     &self,
     tx_id: usize,
-    page: CachedPage<'_>,
+    index: usize,
+    page: &P,
   ) -> Result {
-    let index = page.get_index();
-    let page = page.for_read();
     match self.wal.append_insert(tx_id, index, page.as_ref()) {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
       result => return result,
@@ -136,5 +135,10 @@ impl TxOrchestrator {
       result => return result,
     }
     self.wal.append_abort(tx_id)
+  }
+
+  pub fn is_available(&self, tx_id: usize) -> bool {
+    // version visibility check
+    true
   }
 }

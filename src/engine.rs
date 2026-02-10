@@ -1,6 +1,5 @@
 use std::{
   fs,
-  ops::Mul,
   path::Path,
   sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,16 +11,8 @@ use std::{
 use sysinfo::System;
 
 use crate::{
-  buffer_pool::BufferPoolConfig,
-  disk::{DiskController, DiskControllerConfig},
-  logger,
-  transaction::TxOrchestrator,
-  utils::ToArc,
-  wal::WALConfig,
-  // buffer::{BufferPool, RollbackStorage, RollbackStorageConfig, BLOCK_SIZE},
-  Cursor,
-  Error,
-  Result,
+  buffer_pool::BufferPoolConfig, logger, transaction::TxOrchestrator, utils::ToArc,
+  wal::WALConfig, Cursor, Error, Result,
 };
 
 pub struct EngineConfig<T>
@@ -47,9 +38,6 @@ const UNDO_PATH: &str = "undo.db";
 const DISK_PATH: &str = "data.db";
 
 pub struct Engine {
-  // wal: Arc<WriteAheadLog>,
-  // buffer_pool: Arc<BufferPool>,
-  // freelist: Arc<FreeList<BLOCK_SIZE>>,
   orchestrator: Arc<TxOrchestrator>,
   available: AtomicBool,
 }
@@ -62,8 +50,22 @@ impl Engine {
     logger::info(format!("{} system memory", mem_size));
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
-    let wal_config = WALConfig {};
-    let buffer_pool_config = BufferPoolConfig {};
+    let wal_config = WALConfig {
+      path: todo!(),
+      max_buffer_size: todo!(),
+      checkpoint_interval: todo!(),
+      checkpoint_count: todo!(),
+      group_commit_delay: todo!(),
+      group_commit_count: todo!(),
+      max_file_size: todo!(),
+    };
+    let buffer_pool_config = BufferPoolConfig {
+      shard_count: todo!(),
+      capacity: todo!(),
+      path: todo!(),
+      read_threads: todo!(),
+      write_threads: todo!(),
+    };
     let orchestrator = TxOrchestrator::new(buffer_pool_config, wal_config)?.to_arc();
 
     let engine = Self {
@@ -80,9 +82,10 @@ impl Engine {
   }
 
   pub fn new_transaction(&self) -> Result<Cursor> {
-    if !self.available.load(Ordering::Release) {
+    if !self.available.load(Ordering::Acquire) {
       return Err(Error::EngineUnavailable);
     }
+    let tx_id = self.orchestrator.start_tx()?;
     Ok(Cursor::new(self.orchestrator.clone(), tx_id))
   }
 }
