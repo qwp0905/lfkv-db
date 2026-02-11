@@ -77,5 +77,3 @@ impl BufferPool {
     Ok(())
   }
 }
-unsafe impl Send for BufferPool {}
-unsafe impl Sync for BufferPool {}

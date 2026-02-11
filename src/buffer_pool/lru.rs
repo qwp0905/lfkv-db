@@ -213,3 +213,5 @@ where
     self.len() == self.capacity
   }
 }
+unsafe impl<K, V> Sync for LRUShard<K, V> {}
+unsafe impl<K, V> Send for LRUShard<K, V> {}
