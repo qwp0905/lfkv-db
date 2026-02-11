@@ -1,7 +1,7 @@
 use crate::{Error, Page, Result, Serializable, PAGE_SIZE};
 
 pub type Key = Vec<u8>;
-type Pointer = usize;
+pub type Pointer = usize;
 
 pub enum CursorNode {
   Internal(InternalNode),
@@ -11,13 +11,53 @@ impl CursorNode {
   pub fn as_leaf(self) -> Result<LeafNode> {
     match self {
       CursorNode::Internal(_) => Err(Error::InvalidFormat),
-      CursorNode::Leaf(leaf) => Ok(leaf),
+      CursorNode::Leaf(node) => Ok(node),
+    }
+  }
+  pub fn as_internal(self) -> Result<InternalNode> {
+    match self {
+      CursorNode::Internal(node) => Ok(node),
+      CursorNode::Leaf(_) => Err(Error::InvalidFormat),
     }
   }
 }
 impl Serializable for CursorNode {
   fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> Result {
-    todo!()
+    let mut writer = page.writer();
+    match self {
+      CursorNode::Internal(node) => {
+        writer.write(&[0])?;
+        match &node.right {
+          Some((pointer, key)) => {
+            writer.write(&[1])?;
+            writer.write_usize(*pointer)?;
+            writer.write_usize(key.len())?;
+            writer.write(key)
+          }
+          None => writer.write(&[0]),
+        }?;
+        writer.write_usize(node.keys.len())?;
+        for key in &node.keys {
+          writer.write_usize(key.len())?;
+          writer.write(key)?;
+        }
+        for ptr in &node.children {
+          writer.write_usize(*ptr)?;
+        }
+      }
+      CursorNode::Leaf(node) => {
+        writer.write(&[1])?;
+        writer.write_usize(node.prev.unwrap_or(0))?;
+        writer.write_usize(node.next.unwrap_or(0))?;
+        writer.write_usize(node.entries.len())?;
+        for (key, pointer) in &node.entries {
+          writer.write_usize(key.len())?;
+          writer.write(&key)?;
+          writer.write_usize(*pointer)?;
+        }
+      }
+    }
+    Ok(())
   }
 
   fn deserialize(page: &Page<PAGE_SIZE>) -> Result<Self> {
@@ -27,20 +67,75 @@ impl Serializable for CursorNode {
 pub struct InternalNode {
   keys: Vec<Key>,
   children: Vec<Pointer>,
-  high: Key,
-  right: Option<Pointer>,
+  right: Option<(Pointer, Key)>,
 }
 impl InternalNode {
-  pub fn find(&self, key: &Key) -> Pointer {
-    if let Some(right) = self.right {
-      if &self.high < key {
-        return right;
+  pub fn inialialize(key: Key, left: Pointer, right: Pointer) -> Self {
+    Self::new(vec![key], vec![left, right], None)
+  }
+  fn new(keys: Vec<Key>, children: Vec<Pointer>, right: Option<(Pointer, Key)>) -> Self {
+    Self {
+      keys,
+      children,
+      right,
+    }
+  }
+  pub fn find(&self, key: &Key) -> std::result::Result<Pointer, Pointer> {
+    if let Some((right, high)) = &self.right {
+      if high <= key {
+        return Err(*right);
       }
     };
     match self.keys.binary_search_by(|k| k.cmp(key)) {
-      Ok(i) => self.children[i + 1],
-      Err(i) => self.children[i],
+      Ok(i) => Ok(self.children[i + 1]),
+      Err(i) => Ok(self.children[i]),
     }
+  }
+  pub fn insert_or_next(
+    &mut self,
+    key: &Key,
+    pointer: Pointer,
+  ) -> std::result::Result<(), Pointer> {
+    if let Some((right, high)) = &self.right {
+      if high <= key {
+        return Err(*right);
+      }
+    };
+    let at = self
+      .keys
+      .binary_search_by(|k| k.cmp(key))
+      .unwrap_or_else(|i| i);
+
+    let tmp = self.keys.split_off(at);
+    self.keys.push(key.clone());
+    self.keys.extend(tmp);
+    let tmp = self.children.split_off(at + 1);
+    self.children.push(pointer);
+    self.children.extend(tmp);
+    Ok(())
+  }
+
+  pub fn split_if_needed(&mut self) -> Option<(InternalNode, Key)> {
+    let mut byte_len = 1 + 1 + 8 + self.children.len() * 8;
+    for i in 0..self.keys.len() {
+      byte_len += 8 * 2 + self.keys[i].len();
+      if byte_len >= PAGE_SIZE {
+        let mid = self.keys.len() >> 1;
+        let keys = self.keys.split_off(mid + 1);
+        let mid_key = self.keys.pop().unwrap();
+        let children = self.children.split_off(mid + 1);
+
+        return Some((
+          InternalNode::new(keys, children, self.right.take()),
+          mid_key,
+        ));
+      }
+    }
+    None
+  }
+
+  pub fn set_right(&mut self, key: &Key, ptr: Pointer) -> Option<(Pointer, Key)> {
+    self.right.replace((ptr, key.clone()))
   }
 }
 
@@ -55,6 +150,13 @@ pub struct LeafNode {
   next: Option<Pointer>,
 }
 impl LeafNode {
+  fn new(entries: Vec<(Key, Pointer)>, next: Option<Pointer>) -> Self {
+    Self {
+      entries,
+      prev: Default::default(),
+      next,
+    }
+  }
   pub fn find(&self, key: &Key) -> NodeFindResult {
     match self.entries.binary_search_by(|(k, _)| k.cmp(key)) {
       Ok(i) => NodeFindResult::Found(self.entries[i].1),
@@ -70,358 +172,37 @@ impl LeafNode {
     }
   }
 
-  pub fn insert_at(&mut self, index: usize, key: Key, pointer: Pointer) {
+  pub fn set_next(&mut self, pointer: Pointer) -> Option<Pointer> {
+    self.next.replace(pointer)
+  }
+  pub fn set_prev(&mut self, pointer: Pointer) -> Option<Pointer> {
+    self.prev.replace(pointer)
+  }
+
+  pub fn insert_at(
+    &mut self,
+    index: usize,
+    key: Key,
+    pointer: Pointer,
+  ) -> Option<LeafNode> {
     let tmp = self.entries.split_off(index);
-    self.entries.extend_from_slice(&[(key, pointer)]);
+    self.entries.push((key, pointer));
     self.entries.extend(tmp);
-  }
-}
 
-pub struct DataEntry {
-  next: Option<Pointer>,
-  pub versions: Vec<(usize, Vec<u8>)>,
-}
-impl DataEntry {
-  pub fn new() -> Self {
-    Self {
-      next: None,
-      versions: Default::default(),
+    let mut byte_len = 1 + 8 + 8 + 8;
+    for i in 0..self.entries.len() {
+      byte_len += 8 * 2 + self.entries[i].0.len();
+      if byte_len >= PAGE_SIZE {
+        return Some(LeafNode::new(
+          self.entries.split_off(self.entries.len() >> 1),
+          self.next.take(),
+        ));
+      }
     }
-  }
-  pub fn find(
-    &self,
-    tx_id: usize,
-  ) -> std::result::Result<&Vec<u8>, impl Iterator<Item = &(usize, Vec<u8>)>> {
-    let s = match self
-      .versions
-      .binary_search_by(|(version, _)| tx_id.cmp(version))
-    {
-      Ok(i) => return Ok(&self.versions[i].1),
-      Err(i) => i,
-    };
-    Err((s..self.versions.len()).map(|i| &self.versions[i]))
-  }
-
-  pub fn get_next(&self) -> Option<Pointer> {
-    self.next
-  }
-
-  pub fn is_available(&mut self) -> Option<DataEntry> {
-    // split if full
     None
   }
-}
-impl Serializable for DataEntry {
-  fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> std::result::Result<(), Error> {
-    let mut writer = page.writer();
-    writer.write_usize(self.next.unwrap_or(0));
-    writer.write_usize(self.versions.len())?;
 
-    for (id, data) in &self.versions {
-      writer.write_usize(*id)?;
-      writer.write_usize(data.len())?;
-      writer.write(data.as_ref())?;
-    }
-    Ok(())
-  }
-
-  fn deserialize(page: &Page<PAGE_SIZE>) -> std::result::Result<Self, Error> {
-    let mut reader = page.scanner();
-    let next = reader.read_usize()?;
-    let len = reader.read_usize()?;
-    let mut versions = Vec::new();
-    for _ in 0..len {
-      let id = reader.read_usize()?;
-      let l = reader.read_usize()?;
-      let data = reader.read_n(l)?.to_vec();
-      versions.push((id, data))
-    }
-    Ok(Self {
-      versions,
-      next: (next != 0).then_some(next),
-    })
+  pub fn top(&self) -> &Key {
+    &self.entries[0].0
   }
 }
-
-// use std::ops::{Add, Sub};
-
-// use crate::{
-//   disk::{Page, Serializable},
-//   error::Error,
-// };
-
-// pub static MAX_NODE_LEN: usize = 12;
-// pub static MIN_NODE_LEN: usize = 6;
-
-// #[derive(Debug)]
-// pub enum CursorEntry {
-//   Internal(InternalNode),
-//   Leaf(LeafNode),
-// }
-// impl Serializable for CursorEntry {
-//   fn serialize(&self) -> Result<Page, Error> {
-//     match self {
-//       Self::Leaf(node) => node.serialize(),
-//       Self::Internal(node) => node.serialize(),
-//     }
-//   }
-//   fn deserialize(value: &Page) -> Result<Self, Error> {
-//     let mut sc = value.scanner();
-//     match sc.read()? {
-//       1 => Ok(Self::Leaf(value.deserialize()?)),
-//       2 => Ok(Self::Internal(value.deserialize()?)),
-//       _ => Err(Error::InvalidFormat),
-//     }
-//   }
-// }
-// impl CursorEntry {
-//   pub fn find_or_next(&self, key: &Vec<u8>) -> Result<usize, Option<usize>> {
-//     match self {
-//       Self::Internal(node) => Err(Some(node.next(key))),
-//       Self::Leaf(node) => match node.find(key) {
-//         Some(i) => Ok(i),
-//         None => Err(None),
-//       },
-//     }
-//   }
-
-//   pub fn as_leaf(&mut self) -> &mut LeafNode {
-//     match self {
-//       Self::Leaf(node) => node,
-//       _ => unreachable!(),
-//     }
-//   }
-
-//   pub fn as_internal(&mut self) -> &mut InternalNode {
-//     match self {
-//       Self::Internal(node) => node,
-//       _ => unreachable!(),
-//     }
-//   }
-
-//   pub fn top(&self) -> Vec<u8> {
-//     match self {
-//       Self::Leaf(node) => node.keys[0].0.clone(),
-//       Self::Internal(node) => node.keys[0].clone(),
-//     }
-//   }
-// }
-
-// #[derive(Debug)]
-// pub struct InternalNode {
-//   pub keys: Vec<Vec<u8>>,
-//   pub children: Vec<usize>,
-// }
-// impl InternalNode {
-//   pub fn split(&mut self) -> (CursorEntry, Vec<u8>) {
-//     let c = self.keys.len().div_ceil(2);
-//     let mut keys = self.keys.split_off(c);
-//     let m = keys.remove(0);
-//     let children = self.children.split_off(c.add(1));
-//     (CursorEntry::Internal(InternalNode { keys, children }), m)
-//   }
-
-//   pub fn pop_back(&mut self) -> Option<(Vec<u8>, usize)> {
-//     Some((self.keys.pop()?, self.children.pop()?))
-//   }
-//   pub fn pop_front(&mut self) -> Option<(Vec<u8>, usize)> {
-//     if self.len().eq(&0) {
-//       return None;
-//     }
-//     Some((self.keys.remove(0), self.children.remove(0)))
-//   }
-//   pub fn push_back(&mut self, key: Vec<u8>, child: usize) {
-//     self.keys.push(key);
-//     self.children.push(child);
-//   }
-//   pub fn push_front(&mut self, key: Vec<u8>, child: usize) {
-//     self.keys.insert(0, key);
-//     self.children.insert(0, child);
-//   }
-
-//   pub fn merge(&mut self, key: Vec<u8>, node: &mut InternalNode) {
-//     self.keys.push(key);
-//     self.keys.append(node.keys.as_mut());
-//     self.children.append(node.children.as_mut());
-//   }
-
-//   pub fn len(&self) -> usize {
-//     self.keys.len()
-//   }
-
-//   pub fn next(&self, key: &Vec<u8>) -> usize {
-//     let i = self
-//       .keys
-//       .binary_search_by(|k| k.cmp(key))
-//       .map(|i| i.add(1))
-//       .unwrap_or_else(|i| i);
-//     self.children[i]
-//   }
-
-//   pub fn find_family(
-//     &self,
-//     key: &Vec<u8>,
-//   ) -> ((usize, usize), Option<usize>, Option<usize>) {
-//     match self.keys.binary_search_by(|k| k.cmp(key)) {
-//       Ok(i) => (
-//         (i, self.children[i.add(1)]),
-//         self.children.get(i).copied(),
-//         self.children.get(i.add(2)).copied(),
-//       ),
-//       Err(i) => (
-//         (i.sub(1), self.children[i]),
-//         self.children.get(i.sub(1)).copied(),
-//         self.children.get(i.add(1)).copied(),
-//       ),
-//     }
-//   }
-// }
-
-// impl Serializable for InternalNode {
-//   fn serialize(&self) -> Result<Page, Error> {
-//     let mut p = Page::new();
-//     let mut wt = p.writer();
-//     wt.write(&[2])?;
-//     wt.write(&[self.keys.len() as u8])?;
-//     for k in &self.keys {
-//       wt.write(&[k.len() as u8])?;
-//       wt.write(k.as_ref())?;
-//     }
-//     for &i in &self.children {
-//       wt.write(&i.to_be_bytes())?;
-//     }
-//     Ok(p)
-//   }
-
-//   fn deserialize(value: &Page) -> Result<Self, Error> {
-//     let mut sc = value.scanner();
-//     sc.read()?;
-//     let kl = sc.read()?;
-//     let mut keys = vec![];
-//     let mut children = vec![];
-//     for _ in 0..kl {
-//       let n = sc.read()?;
-//       keys.push(sc.read_n(n as usize)?.to_vec());
-//     }
-//     for _ in 0..(kl + 1) {
-//       children.push(sc.read_usize()?);
-//     }
-
-//     Ok(InternalNode { keys, children })
-//   }
-// }
-
-// #[derive(Debug)]
-// pub struct LeafNode {
-//   pub keys: Vec<(Vec<u8>, usize)>,
-//   pub next: Option<usize>,
-//   pub prev: Option<usize>,
-// }
-// impl LeafNode {
-//   pub fn empty() -> Self {
-//     Self {
-//       keys: vec![],
-//       prev: None,
-//       next: None,
-//     }
-//   }
-
-//   pub fn top(&self) -> Vec<u8> {
-//     self.keys[0].0.clone()
-//   }
-
-//   pub fn split(&mut self, current: usize) -> (CursorEntry, Vec<u8>) {
-//     let c = self.keys.len().div_ceil(2);
-//     let keys = self.keys.split_off(c);
-//     let m = keys[0].0.clone();
-//     let next = self.next.take();
-//     (
-//       CursorEntry::Leaf(LeafNode {
-//         keys,
-//         next,
-//         prev: Some(current),
-//       }),
-//       m,
-//     )
-//   }
-
-//   pub fn set_next(&mut self, next: usize) {
-//     self.next = Some(next);
-//   }
-
-//   pub fn delete(&mut self, key: &Vec<u8>) -> Option<usize> {
-//     if let Ok(i) = self.keys.binary_search_by(|(k, _)| k.cmp(key)) {
-//       return Some(self.keys.remove(i).1);
-//     }
-//     None
-//   }
-
-//   pub fn merge(&mut self, node: &mut LeafNode) {
-//     self.keys.append(node.keys.as_mut());
-//     self.next = node.next;
-//   }
-
-//   pub fn len(&self) -> usize {
-//     self.keys.len()
-//   }
-
-//   pub fn find(&self, key: &Vec<u8>) -> Option<usize> {
-//     self
-//       .keys
-//       .binary_search_by(|(k, _)| k.cmp(key))
-//       .ok()
-//       .map(|i| self.keys[i].1)
-//   }
-
-//   pub fn pop_front(&mut self) -> Option<(Vec<u8>, usize)> {
-//     if self.len().eq(&0) {
-//       return None;
-//     }
-//     Some(self.keys.remove(0))
-//   }
-//   pub fn pop_back(&mut self) -> Option<(Vec<u8>, usize)> {
-//     self.keys.pop()
-//   }
-//   pub fn push_front(&mut self, key: Vec<u8>, index: usize) {
-//     self.keys.insert(0, (key, index));
-//   }
-//   pub fn push_back(&mut self, key: Vec<u8>, index: usize) {
-//     self.keys.push((key, index));
-//   }
-// }
-// impl Serializable for LeafNode {
-//   fn serialize(&self) -> Result<Page, Error> {
-//     let mut p = Page::new();
-//     let mut wt = p.writer();
-//     wt.write(&[1])?;
-//     wt.write(&[self.keys.len() as u8])?;
-//     for (k, i) in &self.keys {
-//       wt.write(&[k.len() as u8])?;
-//       wt.write(k.as_ref())?;
-//       wt.write(&i.to_be_bytes())?;
-//     }
-//     let prev = self.prev.unwrap_or(0);
-//     wt.write(&prev.to_be_bytes())?;
-//     let next = self.next.unwrap_or(0);
-//     wt.write(&next.to_be_bytes())?;
-//     Ok(p)
-//   }
-
-//   fn deserialize(value: &Page) -> Result<Self, Error> {
-//     let mut sc = value.scanner();
-//     sc.read()?;
-//     let mut keys = vec![];
-//     let kl = sc.read()?;
-//     for _ in 0..kl {
-//       let n = sc.read()?;
-//       let k = sc.read_n(n as usize)?.to_vec();
-//       let i = sc.read_usize()?;
-//       keys.push((k, i));
-//     }
-//     let prev = sc.read_usize()?;
-//     let prev = if prev.eq(&0) { None } else { Some(prev) };
-//     let next = sc.read_usize()?;
-//     let next = if next.eq(&0) { None } else { Some(next) };
-//     Ok(Self { keys, prev, next })
-//   }
-// }

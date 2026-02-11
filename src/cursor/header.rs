@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 use crate::{
   disk::{Page, Serializable},
   error::Error,
@@ -16,7 +14,7 @@ pub struct TreeHeader {
 impl TreeHeader {
   pub fn initial_state() -> Self {
     Self {
-      root: HEADER_INDEX.add(1),
+      root: HEADER_INDEX + 1,
     }
   }
 

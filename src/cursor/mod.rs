@@ -4,5 +4,8 @@ use header::*;
 mod node;
 use node::*;
 
+mod entry;
+use entry::*;
+
 mod cursor;
 pub use cursor::*;

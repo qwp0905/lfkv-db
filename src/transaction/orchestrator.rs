@@ -5,11 +5,10 @@ use std::{
 };
 
 use crate::{
-  buffer_pool::BufferPoolConfig,
-  disk::PAGE_SIZE,
+  buffer_pool::{BufferPoolConfig, CachedPageWrite},
   utils::{ShortenedRwLock, ToArcRwLock},
   wal::{WALConfig, WAL},
-  BufferPool, CachedPage, Error, Page, Result, SingleWorkThread, ToArc, WorkBuilder,
+  BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 pub struct TxOrchestrator {
@@ -33,7 +32,7 @@ impl TxOrchestrator {
         .for_write()
         .as_mut()
         .writer()
-        .write(page.as_ref());
+        .write(page.as_ref())?;
     }
 
     let b = buffer_pool.clone();
@@ -63,12 +62,8 @@ impl TxOrchestrator {
   pub fn fetch(&self, index: usize) -> Result<CachedPage<'_>> {
     self.buffer_pool.read(index)
   }
-  pub fn log<P: AsRef<Page<PAGE_SIZE>>>(
-    &self,
-    tx_id: usize,
-    index: usize,
-    page: &P,
-  ) -> Result {
+  pub fn log(&self, tx_id: usize, page: &CachedPageWrite<'_>) -> Result {
+    let index = page.get_index();
     match self.wal.append_insert(tx_id, index, page.as_ref()) {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
       result => return result,
@@ -101,7 +96,7 @@ impl TxOrchestrator {
         .and_then(|_| self.wal.append_free(index))?,
       Err(err) => return Err(err),
     };
-    page
+    let _ = page
       .for_write()
       .as_mut()
       .writer()
@@ -126,7 +121,10 @@ impl TxOrchestrator {
         .and_then(|_| self.wal.append_commit(tx_id))?,
       Err(err) => return Err(err),
     }
-    self.wal.flush()
+    self.wal.flush()?;
+
+    // mark tx id committed
+    Ok(())
   }
 
   pub fn abort_tx(&self, tx_id: usize) -> Result {

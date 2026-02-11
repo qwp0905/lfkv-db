@@ -246,6 +246,6 @@ fn entry_to_page(
   buffer: &LogEntry,
 ) -> (usize, PageRef<WAL_BLOCK_SIZE>) {
   let mut page = page_pool.acquire();
-  page.as_mut().writer().write(buffer.as_ref());
+  let _ = page.as_mut().writer().write(buffer.as_ref());
   (buffer.get_index(), page)
 }

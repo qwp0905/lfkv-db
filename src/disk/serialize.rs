@@ -14,3 +14,12 @@ impl<const N: usize> Page<N> {
     T::deserialize(self)
   }
 }
+
+pub trait SerializeFrom<const N: usize, E, T: Serializable<E, N>> {
+  fn serialize_from(&mut self, target: &T) -> Result<(), E>;
+}
+impl<const N: usize, E, T: Serializable<E, N>> SerializeFrom<N, E, T> for Page<N> {
+  fn serialize_from(&mut self, target: &T) -> Result<(), E> {
+    target.serialize(self)
+  }
+}
