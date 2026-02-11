@@ -14,14 +14,14 @@ struct Shard {
 pub struct EvictionGuard<'a> {
   frame_id: usize,
   evicted: Option<usize>,
-  guard: MutexGuard<'a, Shard>,
+  _guard: MutexGuard<'a, Shard>,
 }
 impl<'a> EvictionGuard<'a> {
-  fn new(frame_id: usize, evicted: Option<usize>, guard: MutexGuard<'a, Shard>) -> Self {
+  fn new(frame_id: usize, evicted: Option<usize>, _guard: MutexGuard<'a, Shard>) -> Self {
     Self {
       frame_id,
       evicted,
-      guard,
+      _guard,
     }
   }
 
