@@ -61,7 +61,51 @@ impl Serializable for CursorNode {
   }
 
   fn deserialize(page: &Page<PAGE_SIZE>) -> Result<Self> {
-    todo!()
+    let mut scanner = page.scanner();
+    match scanner.read()? {
+      0 => {
+        //internal
+        let mut right = None;
+        if scanner.read()? == 1 {
+          let ptr = scanner.read_usize()?;
+          let len = scanner.read_usize()?;
+          let key = scanner.read_n(len)?.to_vec();
+          right = Some((ptr, key));
+        };
+
+        let len = scanner.read_usize()?;
+        let mut keys = Vec::new();
+        for _ in 0..len {
+          let l = scanner.read_usize()?;
+          keys.push(scanner.read_n(l)?.to_vec());
+        }
+
+        let mut children = Vec::new();
+        for _ in 0..=len {
+          children.push(scanner.read_usize()?);
+        }
+        Ok(Self::Internal(InternalNode::new(keys, children, right)))
+      }
+      1 => {
+        // leaf
+        let prev = scanner.read_usize()?;
+        let next = scanner.read_usize()?;
+        let len = scanner.read_usize()?;
+        let mut entries = Vec::new();
+        for _ in 0..len {
+          let l = scanner.read_usize()?;
+          let key = scanner.read_n(l)?.to_vec();
+          let ptr = scanner.read_usize()?;
+          entries.push((key, ptr));
+        }
+        Ok(Self::Leaf(LeafNode::new(
+          entries,
+          (next != 0).then(|| next),
+          (prev != 0).then(|| prev),
+        )))
+      }
+      _ => Err(Error::InvalidFormat),
+    }
   }
 }
 pub struct InternalNode {
@@ -150,10 +194,14 @@ pub struct LeafNode {
   next: Option<Pointer>,
 }
 impl LeafNode {
-  fn new(entries: Vec<(Key, Pointer)>, next: Option<Pointer>) -> Self {
+  fn new(
+    entries: Vec<(Key, Pointer)>,
+    next: Option<Pointer>,
+    prev: Option<Pointer>,
+  ) -> Self {
     Self {
       entries,
-      prev: Default::default(),
+      prev,
       next,
     }
   }
@@ -196,6 +244,7 @@ impl LeafNode {
         return Some(LeafNode::new(
           self.entries.split_off(self.entries.len() >> 1),
           self.next.take(),
+          None,
         ));
       }
     }
