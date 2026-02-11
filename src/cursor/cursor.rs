@@ -221,6 +221,7 @@ impl Cursor {
     header.set_root(new_root_index);
     let mut header_latch = header_slot.for_write();
     header_latch.as_mut().serialize_from(&header)?;
+    self.orchestrator.log(self.tx_id, &header_latch)?;
     Ok((latch, entry))
   }
 
