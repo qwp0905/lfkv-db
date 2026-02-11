@@ -34,7 +34,6 @@ where
 }
 
 const WAL_PATH: &str = "wal.db";
-const UNDO_PATH: &str = "undo.db";
 const DISK_PATH: &str = "data.db";
 
 pub struct Engine {

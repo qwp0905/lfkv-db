@@ -12,3 +12,6 @@ use table::*;
 
 mod pool;
 pub use pool::*;
+
+mod slot;
+pub use slot::*;

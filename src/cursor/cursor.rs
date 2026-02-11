@@ -1,7 +1,7 @@
 use std::{mem::replace, sync::Arc};
 
 use crate::{
-  buffer_pool::CachedPageWrite,
+  buffer_pool::CachedSlotWrite,
   cursor::{
     node::InternalNode, CursorNode, DataEntry, DataVersion, NodeFindResult, TreeHeader,
     HEADER_INDEX,
@@ -95,9 +95,9 @@ impl Cursor {
     }
   }
 
-  fn alloc_entry(&self, key: &Vec<u8>) -> Result<(CachedPageWrite<'_>, DataEntry)> {
-    let header_page = self.orchestrator.fetch(HEADER_INDEX)?;
-    let mut header: TreeHeader = header_page.for_read().as_ref().deserialize()?;
+  fn alloc_entry(&self, key: &Vec<u8>) -> Result<(CachedSlotWrite<'_>, DataEntry)> {
+    let header_slot = self.orchestrator.fetch(HEADER_INDEX)?;
+    let mut header: TreeHeader = header_slot.for_read().as_ref().deserialize()?;
 
     let mut index = header.get_root();
     let mut stack = vec![];
@@ -119,13 +119,13 @@ impl Cursor {
     }
 
     let (latch, entry, mid_key, right_ptr): (
-      CachedPageWrite<'_>,
+      CachedSlotWrite<'_>,
       DataEntry,
       Vec<u8>,
       usize,
     ) = loop {
-      let mut page = self.orchestrator.fetch(index)?.for_write();
-      let mut leaf = page
+      let mut slot = self.orchestrator.fetch(index)?.for_write();
+      let mut leaf = slot
         .as_ref()
         .deserialize::<CursorNode, Error>()?
         .as_leaf()?;
@@ -145,24 +145,24 @@ impl Cursor {
           let mut split = match leaf.insert_at(i, key.clone(), latch.get_index()) {
             Some(s) => s,
             None => {
-              page.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-              self.orchestrator.log(self.tx_id, &page)?;
+              slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+              self.orchestrator.log(self.tx_id, &slot)?;
               return Ok((latch, DataEntry::new()));
             }
           };
 
-          let mut split_page = self.orchestrator.alloc()?.for_write();
-          split.set_prev(page.get_index());
-          leaf.set_next(split_page.get_index());
-          page.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-          self.orchestrator.log(self.tx_id, &page)?;
+          let mut split_slot = self.orchestrator.alloc()?.for_write();
+          split.set_prev(slot.get_index());
+          leaf.set_next(split_slot.get_index());
+          slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+          self.orchestrator.log(self.tx_id, &slot)?;
 
           let mid_key = split.top().clone();
-          split_page
+          split_slot
             .as_mut()
             .serialize_from(&CursorNode::Leaf(split))?;
-          self.orchestrator.log(self.tx_id, &split_page)?;
-          break (latch, DataEntry::new(), mid_key, split_page.get_index());
+          self.orchestrator.log(self.tx_id, &split_slot)?;
+          break (latch, DataEntry::new(), mid_key, split_slot.get_index());
         }
       };
     };
@@ -170,38 +170,42 @@ impl Cursor {
     let mut split_key = mid_key;
     let mut split_pointer = right_ptr;
     while let Some(mut index) = stack.pop() {
-      let (mut page, mut internal) = loop {
-        let page = self.orchestrator.fetch(index)?.for_write();
-        let mut internal = page
+      let (mut slot, mut internal) = loop {
+        let slot = self.orchestrator.fetch(index)?.for_write();
+        let mut internal = slot
           .as_ref()
           .deserialize::<CursorNode, Error>()?
           .as_internal()?;
         match internal.insert_or_next(&split_key, split_pointer) {
-          Ok(_) => break (page, internal),
+          Ok(_) => break (slot, internal),
           Err(i) => index = i,
         }
       };
       let (split_node, key) = match internal.split_if_needed() {
         Some(split) => split,
         None => {
-          page
+          slot
             .as_mut()
             .serialize_from(&CursorNode::Internal(internal))?;
           return Ok((latch, entry));
         }
       };
 
-      let mut split_page = self.orchestrator.alloc()?.for_write();
-      internal.set_right(&key, split_page.get_index());
-      split_page
-        .as_mut()
-        .serialize_from(&CursorNode::Internal(split_node))?;
-      page
+      let split_index = {
+        let mut split_slot = self.orchestrator.alloc()?.for_write();
+        internal.set_right(&key, split_slot.get_index());
+        split_slot
+          .as_mut()
+          .serialize_from(&CursorNode::Internal(split_node))?;
+        split_slot.get_index()
+      };
+
+      slot
         .as_mut()
         .serialize_from(&CursorNode::Internal(internal))?;
 
       split_key = key;
-      split_pointer = split_page.get_index();
+      split_pointer = split_index;
     }
 
     let new_root_index = {
@@ -215,7 +219,7 @@ impl Cursor {
     }?;
 
     header.set_root(new_root_index);
-    let mut header_latch = header_page.for_write();
+    let mut header_latch = header_slot.for_write();
     header_latch.as_mut().serialize_from(&header)?;
     Ok((latch, entry))
   }

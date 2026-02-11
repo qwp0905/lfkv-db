@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
-  buffer_pool::{BufferPoolConfig, CachedPageWrite},
+  buffer_pool::{BufferPoolConfig, CachedSlotWrite},
   utils::{ShortenedRwLock, ToArcRwLock},
   wal::{WALConfig, WAL},
-  BufferPool, CachedPage, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
+  BufferPool, CachedSlot, Error, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 pub struct TxOrchestrator {
@@ -59,10 +59,10 @@ impl TxOrchestrator {
       buffer_pool,
     })
   }
-  pub fn fetch(&self, index: usize) -> Result<CachedPage<'_>> {
+  pub fn fetch(&self, index: usize) -> Result<CachedSlot<'_>> {
     self.buffer_pool.read(index)
   }
-  pub fn log(&self, tx_id: usize, page: &CachedPageWrite<'_>) -> Result {
+  pub fn log(&self, tx_id: usize, page: &CachedSlotWrite<'_>) -> Result {
     let index = page.get_index();
     match self.wal.append_insert(tx_id, index, page.as_ref()) {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
@@ -70,7 +70,7 @@ impl TxOrchestrator {
     };
     self.wal.append_insert(tx_id, index, page.as_ref())
   }
-  pub fn alloc(&self) -> Result<CachedPage<'_>> {
+  pub fn alloc(&self) -> Result<CachedSlot<'_>> {
     let mut index = self.last_free.wl();
     let page = self.buffer_pool.read(*index)?;
     let next = page.for_read().as_ref().scanner().read_usize()?;
@@ -85,7 +85,7 @@ impl TxOrchestrator {
     *index = next;
     Ok(page)
   }
-  pub fn release(&self, page: CachedPage<'_>) -> Result {
+  pub fn release(&self, page: CachedSlot<'_>) -> Result {
     let index = page.get_index();
     let mut prev = self.last_free.wl();
     match self.wal.append_free(index) {

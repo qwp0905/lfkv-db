@@ -1,14 +1,14 @@
 use std::{
   mem::replace,
   path::PathBuf,
-  sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+  sync::{Arc, RwLock},
 };
 
 use crate::{
-  buffer_pool::table::LRUTable,
+  buffer_pool::{table::LRUTable, CachedSlot},
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
   utils::{Bitmap, ShortenedRwLock},
-  Page, Result, ToArc,
+  Result, ToArc,
 };
 
 pub struct BufferPoolConfig {
@@ -17,79 +17,6 @@ pub struct BufferPoolConfig {
   pub path: PathBuf,
   pub read_threads: Option<usize>,
   pub write_threads: Option<usize>,
-}
-
-pub struct CachedPage<'a> {
-  page: &'a RwLock<PageRef<PAGE_SIZE>>,
-  frame_id: usize,
-  dirty: &'a Bitmap,
-  index: usize,
-}
-impl<'a> CachedPage<'a> {
-  fn new(
-    page: &'a RwLock<PageRef<PAGE_SIZE>>,
-    frame_id: usize,
-    dirty: &'a Bitmap,
-    index: usize,
-  ) -> Self {
-    Self {
-      page,
-      frame_id,
-      dirty,
-      index,
-    }
-  }
-  pub fn get_index(&self) -> usize {
-    self.index
-  }
-
-  pub fn for_read(&self) -> CachedPageRead<'a> {
-    CachedPageRead {
-      guard: self.page.rl(),
-    }
-  }
-  pub fn for_write(&self) -> CachedPageWrite<'a> {
-    CachedPageWrite {
-      guard: self.page.wl(),
-      dirty: self.dirty,
-      frame_id: self.frame_id,
-      index: self.index,
-    }
-  }
-}
-pub struct CachedPageWrite<'a> {
-  guard: RwLockWriteGuard<'a, PageRef<PAGE_SIZE>>,
-  index: usize,
-  dirty: &'a Bitmap,
-  frame_id: usize,
-}
-impl<'a> CachedPageWrite<'a> {
-  pub fn get_index(&self) -> usize {
-    self.index
-  }
-}
-impl<'a> AsMut<Page<PAGE_SIZE>> for CachedPageWrite<'a> {
-  fn as_mut(&mut self) -> &mut Page<PAGE_SIZE> {
-    self.guard.as_mut()
-  }
-}
-impl<'a> AsRef<Page<PAGE_SIZE>> for CachedPageWrite<'a> {
-  fn as_ref(&self) -> &Page<PAGE_SIZE> {
-    self.guard.as_ref()
-  }
-}
-impl<'a> Drop for CachedPageWrite<'a> {
-  fn drop(&mut self) {
-    self.dirty.insert(self.frame_id);
-  }
-}
-pub struct CachedPageRead<'a> {
-  guard: RwLockReadGuard<'a, PageRef<PAGE_SIZE>>,
-}
-impl<'a> AsRef<Page<PAGE_SIZE>> for CachedPageRead<'a> {
-  fn as_ref(&self) -> &Page<PAGE_SIZE> {
-    self.guard.as_ref()
-  }
 }
 
 pub struct BufferPool {
@@ -118,9 +45,9 @@ impl BufferPool {
     })
   }
 
-  pub fn read(&self, index: usize) -> Result<CachedPage<'_>> {
+  pub fn read(&self, index: usize) -> Result<CachedSlot<'_>> {
     let evicted = match self.table.acquire(index) {
-      Ok(id) => return Ok(CachedPage::new(&self.frame[id], id, &self.dirty, index)),
+      Ok(id) => return Ok(CachedSlot::new(&self.frame[id], id, &self.dirty, index)),
       Err(evicted) => evicted,
     };
 
@@ -128,7 +55,7 @@ impl BufferPool {
     let mut slot = self.frame[id].wl();
     let page = self.disk.read(index)?;
     let prev = replace(&mut slot as &mut PageRef<PAGE_SIZE>, page);
-    let cached = CachedPage::new(&self.frame[id], id, &self.dirty, index);
+    let cached = CachedSlot::new(&self.frame[id], id, &self.dirty, index);
     let evicted_index = match evicted.get_evicted_index() {
       Some(index) => index,
       None => return Ok(cached),
