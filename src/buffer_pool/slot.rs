@@ -5,13 +5,13 @@ use crate::{
   utils::{Bitmap, ShortenedRwLock},
   Page,
 };
-pub struct CachedSlot<'a> {
+pub struct PageSlot<'a> {
   page: &'a RwLock<PageRef<PAGE_SIZE>>,
   frame_id: usize,
   dirty: &'a Bitmap,
   index: usize,
 }
-impl<'a> CachedSlot<'a> {
+impl<'a> PageSlot<'a> {
   pub fn new(
     page: &'a RwLock<PageRef<PAGE_SIZE>>,
     frame_id: usize,
@@ -29,13 +29,13 @@ impl<'a> CachedSlot<'a> {
     self.index
   }
 
-  pub fn for_read(&self) -> CachedSlotRead<'a> {
-    CachedSlotRead {
+  pub fn for_read(&self) -> PageSlotRead<'a> {
+    PageSlotRead {
       guard: self.page.rl(),
     }
   }
-  pub fn for_write(&self) -> CachedSlotWrite<'a> {
-    CachedSlotWrite {
+  pub fn for_write(&self) -> PageSlotWrite<'a> {
+    PageSlotWrite {
       guard: self.page.wl(),
       dirty: self.dirty,
       frame_id: self.frame_id,
@@ -43,36 +43,36 @@ impl<'a> CachedSlot<'a> {
     }
   }
 }
-pub struct CachedSlotWrite<'a> {
+pub struct PageSlotWrite<'a> {
   guard: RwLockWriteGuard<'a, PageRef<PAGE_SIZE>>,
   index: usize,
   dirty: &'a Bitmap,
   frame_id: usize,
 }
-impl<'a> CachedSlotWrite<'a> {
+impl<'a> PageSlotWrite<'a> {
   pub fn get_index(&self) -> usize {
     self.index
   }
 }
-impl<'a> AsMut<Page<PAGE_SIZE>> for CachedSlotWrite<'a> {
+impl<'a> AsMut<Page<PAGE_SIZE>> for PageSlotWrite<'a> {
   fn as_mut(&mut self) -> &mut Page<PAGE_SIZE> {
     self.guard.as_mut()
   }
 }
-impl<'a> AsRef<Page<PAGE_SIZE>> for CachedSlotWrite<'a> {
+impl<'a> AsRef<Page<PAGE_SIZE>> for PageSlotWrite<'a> {
   fn as_ref(&self) -> &Page<PAGE_SIZE> {
     self.guard.as_ref()
   }
 }
-impl<'a> Drop for CachedSlotWrite<'a> {
+impl<'a> Drop for PageSlotWrite<'a> {
   fn drop(&mut self) {
     self.dirty.insert(self.frame_id);
   }
 }
-pub struct CachedSlotRead<'a> {
+pub struct PageSlotRead<'a> {
   guard: RwLockReadGuard<'a, PageRef<PAGE_SIZE>>,
 }
-impl<'a> AsRef<Page<PAGE_SIZE>> for CachedSlotRead<'a> {
+impl<'a> AsRef<Page<PAGE_SIZE>> for PageSlotRead<'a> {
   fn as_ref(&self) -> &Page<PAGE_SIZE> {
     self.guard.as_ref()
   }

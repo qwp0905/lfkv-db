@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-  buffer_pool::{table::LRUTable, CachedSlot},
+  buffer_pool::{table::LRUTable, PageSlot},
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
   utils::{Bitmap, ShortenedRwLock},
   Result, ToArc,
@@ -45,9 +45,9 @@ impl BufferPool {
     })
   }
 
-  pub fn read(&self, index: usize) -> Result<CachedSlot<'_>> {
+  pub fn read(&self, index: usize) -> Result<PageSlot<'_>> {
     let evicted = match self.table.acquire(index) {
-      Ok(id) => return Ok(CachedSlot::new(&self.frame[id], id, &self.dirty, index)),
+      Ok(id) => return Ok(PageSlot::new(&self.frame[id], id, &self.dirty, index)),
       Err(evicted) => evicted,
     };
 
@@ -55,7 +55,7 @@ impl BufferPool {
     let mut slot = self.frame[id].wl();
     let page = self.disk.read(index)?;
     let prev = replace(&mut slot as &mut PageRef<PAGE_SIZE>, page);
-    let cached = CachedSlot::new(&self.frame[id], id, &self.dirty, index);
+    let cached = PageSlot::new(&self.frame[id], id, &self.dirty, index);
     let evicted_index = match evicted.get_evicted_index() {
       Some(index) => index,
       None => return Ok(cached),

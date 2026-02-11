@@ -1,7 +1,7 @@
 use std::{mem::replace, sync::Arc};
 
 use crate::{
-  buffer_pool::CachedSlotWrite,
+  buffer_pool::PageSlotWrite,
   cursor::{
     node::InternalNode, CursorNode, DataEntry, DataVersion, NodeFindResult, TreeHeader,
     HEADER_INDEX,
@@ -95,7 +95,7 @@ impl Cursor {
     }
   }
 
-  fn alloc_entry(&self, key: &Vec<u8>) -> Result<(CachedSlotWrite<'_>, DataEntry)> {
+  fn alloc_entry(&self, key: &Vec<u8>) -> Result<(PageSlotWrite<'_>, DataEntry)> {
     let header_slot = self.orchestrator.fetch(HEADER_INDEX)?;
     let mut header: TreeHeader = header_slot.for_read().as_ref().deserialize()?;
 
@@ -119,7 +119,7 @@ impl Cursor {
     }
 
     let (latch, entry, mid_key, right_ptr): (
-      CachedSlotWrite<'_>,
+      PageSlotWrite<'_>,
       DataEntry,
       Vec<u8>,
       usize,
