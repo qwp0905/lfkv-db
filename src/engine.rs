@@ -23,12 +23,8 @@ where
   pub disk_batch_delay: Duration,
   pub disk_batch_size: usize,
   pub defragmentation_interval: Duration,
-  pub undo_batch_delay: Duration,
-  pub undo_batch_size: usize,
-  pub undo_file_size: usize,
   pub wal_file_size: usize,
   pub checkpoint_interval: Duration,
-  pub checkpoint_count: usize,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
 }

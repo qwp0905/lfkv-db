@@ -35,22 +35,14 @@ impl TxOrchestrator {
         .write(page.as_ref())?;
     }
 
-    let b = buffer_pool.clone();
-    let w = wal.clone();
-    let f = last_free.clone();
     let checkpoint = WorkBuilder::new()
       .name("")
       .stack_size(1)
       .single()
-      .with_timeout(Duration::new(1, 1), move |_| {
-        b.flush()?;
-        match w.append_checkpoint(*f.rl()) {
-          Ok(_) => {}
-          Err(Error::WALCapacityExceeded) => {}
-          Err(err) => return Err(err),
-        };
-        w.flush()
-      });
+      .with_timeout(
+        Duration::new(1, 1),
+        handle_checkpoint(wal.clone(), buffer_pool.clone(), last_free.clone()),
+      );
 
     Ok(Self {
       checkpoint,
@@ -138,5 +130,21 @@ impl TxOrchestrator {
   pub fn is_available(&self, tx_id: usize) -> bool {
     // version visibility check
     true
+  }
+}
+
+fn handle_checkpoint(
+  wal: Arc<WAL>,
+  buffer_pool: Arc<BufferPool>,
+  last_free: Arc<RwLock<usize>>,
+) -> impl Fn(Option<()>) -> Result {
+  move |_| {
+    buffer_pool.flush()?;
+    match wal.append_checkpoint(*last_free.rl()) {
+      Ok(_) => {}
+      Err(Error::WALCapacityExceeded) => {}
+      Err(err) => return Err(err),
+    };
+    wal.flush()
   }
 }
