@@ -153,7 +153,7 @@ impl<'a, const T: usize> PageWriter<'a, T> {
 
 #[cfg(test)]
 mod tests {
-  use crate::{Page, PAGE_SIZE};
+  use crate::disk::{Page, PAGE_SIZE};
 
   #[test]
   fn test_writer() {

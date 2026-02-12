@@ -5,7 +5,9 @@ use std::{
 };
 
 use crate::{
-  disk::PageRef, Error, Page, Result, SafeWork, SingleWorkThread, WorkBuilder,
+  disk::{Page, PageRef},
+  thread::{SafeWork, SingleWorkThread, WorkBuilder},
+  Error, Result,
 };
 
 use super::{Pread, Pwrite};

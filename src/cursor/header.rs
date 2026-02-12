@@ -1,7 +1,7 @@
 use crate::{
-  disk::{Page, Serializable},
-  error::Error,
-  PAGE_SIZE,
+  disk::{PageScanner, PageWriter},
+  serialize::{Serializable, SerializeType},
+  Result,
 };
 
 pub const HEADER_INDEX: usize = 0;
@@ -28,12 +28,16 @@ impl TreeHeader {
 }
 
 impl Serializable for TreeHeader {
-  fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> Result<(), Error> {
-    page.writer().write_usize(self.root)
+  fn get_type() -> SerializeType {
+    SerializeType::DataEntry
   }
 
-  fn deserialize(page: &Page<PAGE_SIZE>) -> Result<Self, Error> {
-    let root = page.scanner().read_usize()?;
+  fn write_at(&self, writer: &mut PageWriter) -> Result {
+    writer.write_usize(self.root)
+  }
+
+  fn read_from(reader: &mut PageScanner) -> Result<Self> {
+    let root = reader.read_usize()?;
     Ok(Self { root })
   }
 }

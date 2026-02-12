@@ -1,9 +1,8 @@
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
-  disk::{PageRef, PAGE_SIZE},
+  disk::{Page, PageRef, PAGE_SIZE},
   utils::{Bitmap, ShortenedRwLock},
-  Page,
 };
 pub struct PageSlot<'a> {
   page: &'a RwLock<PageRef<PAGE_SIZE>>,

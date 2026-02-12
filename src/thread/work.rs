@@ -2,7 +2,7 @@ use std::{any::Any, fmt::Debug};
 
 use crossbeam::channel::Sender;
 
-use crate::{logger, Result};
+use crate::{error::Result, utils::logger};
 
 pub enum Context<T, R> {
   Work((T, Sender<Result<R>>)),

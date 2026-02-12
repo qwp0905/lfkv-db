@@ -7,8 +7,8 @@ use std::{
 use crate::{
   buffer_pool::{table::LRUTable, PageSlot},
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
-  utils::{Bitmap, ShortenedRwLock},
-  Result, ToArc,
+  utils::{Bitmap, ShortenedRwLock, ToArc},
+  Result,
 };
 
 pub struct BufferPoolConfig {

@@ -6,8 +6,10 @@ use std::{
 };
 
 use crate::{
-  disk::page_pool::{PagePool, PageRef},
-  Error, Page, Result, SharedWorkThread, SingleWorkThread, ToArc, WorkBuilder,
+  disk::{Page, PagePool, PageRef},
+  thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
+  utils::ToArc,
+  Error, Result,
 };
 
 use super::{

@@ -1,6 +1,9 @@
 use std::ops::Add;
 
-use crate::{Error, Page, Result, PAGE_SIZE};
+use crate::{
+  disk::{Page, PAGE_SIZE},
+  Error, Result,
+};
 
 pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
 

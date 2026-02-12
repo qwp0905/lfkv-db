@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use crate::{
+use crate::utils::{
   logger, AsTimer, CallableMut, ShortenedMutex, UnwrappedReceiver, UnwrappedSender,
 };
 

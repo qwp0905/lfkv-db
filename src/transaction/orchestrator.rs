@@ -9,10 +9,13 @@ use std::{
 };
 
 use crate::{
-  buffer_pool::{BufferPoolConfig, PageSlotWrite},
-  utils::{ShortenedRwLock, ToArcRwLock},
+  buffer_pool::{BufferPool, BufferPoolConfig, PageSlot, PageSlotWrite},
+  error::{Error, Result},
+  serialize::SerializeFrom,
+  thread::{SingleWorkThread, WorkBuilder},
+  transaction::FreePage,
+  utils::{ShortenedRwLock, ToArc, ToArcRwLock},
   wal::{WALConfig, WAL},
-  BufferPool, Error, PageSlot, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
 struct VersionVisibility {
@@ -75,6 +78,7 @@ impl TxOrchestrator {
   pub fn fetch(&self, index: usize) -> Result<PageSlot<'_>> {
     self.buffer_pool.read(index)
   }
+
   pub fn log(&self, tx_id: usize, page: &PageSlotWrite<'_>) -> Result {
     let index = page.get_index();
     match self.wal.append_insert(tx_id, index, page.as_ref()) {
@@ -83,10 +87,15 @@ impl TxOrchestrator {
     };
     self.wal.append_insert(tx_id, index, page.as_ref())
   }
+
   pub fn alloc(&self) -> Result<PageSlot<'_>> {
     let mut index = self.last_free.wl();
     let slot = self.buffer_pool.read(*index)?;
-    let next = slot.for_read().as_ref().scanner().read_usize()?;
+    let next = slot
+      .for_read()
+      .as_ref()
+      .deserialize::<FreePage>()?
+      .get_next();
     match self.wal.append_free(next) {
       Ok(_) => {}
       Err(Error::WALCapacityExceeded) => self
@@ -109,11 +118,8 @@ impl TxOrchestrator {
         .and_then(|_| self.wal.append_free(index))?,
       Err(err) => return Err(err),
     };
-    let _ = page
-      .for_write()
-      .as_mut()
-      .writer()
-      .write_usize(replace(&mut prev, index));
+    let free = FreePage::new(replace(&mut prev, index));
+    page.for_write().as_mut().serialize_from(&free)?;
     Ok(())
   }
 

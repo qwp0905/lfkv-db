@@ -11,8 +11,10 @@ use crossbeam::{
 };
 
 use crate::{
-  logger, AsTimer, Error, Result, SafeCallable, SendBy, ToArc, UnwrappedReceiver,
-  UnwrappedSender,
+  error::{Error, Result},
+  utils::{
+    logger, AsTimer, SafeCallable, SendBy, ToArc, UnwrappedReceiver, UnwrappedSender,
+  },
 };
 
 use super::{work::handle_panic, Context};

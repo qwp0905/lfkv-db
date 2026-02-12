@@ -11,8 +11,8 @@ use std::{
 use sysinfo::System;
 
 use crate::{
-  buffer_pool::BufferPoolConfig, logger, transaction::TxOrchestrator, utils::ToArc,
-  wal::WALConfig, Cursor, Error, Result,
+  buffer_pool::BufferPoolConfig, transaction::TxOrchestrator, utils::logger,
+  utils::ToArc, wal::WALConfig, Cursor, Error, Result,
 };
 
 pub struct EngineConfig<T>
@@ -68,9 +68,9 @@ impl Engine {
       available: AtomicBool::new(true),
     };
 
-    let cursor = engine.new_transaction()?;
-    cursor.initialize()?;
-    cursor.commit()?;
+    // let cursor = engine.new_transaction()?;
+    // cursor.initialize()?;
+    // cursor.commit()?;
 
     logger::info("engine initialized");
     Ok(engine)

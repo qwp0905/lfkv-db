@@ -1,9 +1,6 @@
 mod page;
 pub use page::*;
 
-mod serialize;
-pub use serialize::*;
-
 mod controller;
 pub use controller::*;
 

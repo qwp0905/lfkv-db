@@ -106,7 +106,7 @@ impl SafeWorkBuilder {
 }
 #[cfg(test)]
 mod tests {
-  use crate::{Error, ToArc};
+  use crate::{error::Error, utils::ToArc};
 
   use super::*;
   use std::sync::atomic::{AtomicUsize, Ordering};

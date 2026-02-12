@@ -1,6 +1,10 @@
 use std::{collections::VecDeque, mem::replace};
 
-use crate::{cursor::Pointer, Error, Page, Serializable, PAGE_SIZE};
+use crate::{
+  cursor::Pointer,
+  serialize::{Serializable, SerializeType, SERIALIZABLE_BYTES},
+  Error,
+};
 
 pub enum RecordData {
   Data(Vec<u8>),
@@ -75,7 +79,7 @@ impl DataEntry {
 
     for i in 0..self.versions.len() {
       byte_len += 8 * 3 + self.versions[i].data.len();
-      if byte_len >= PAGE_SIZE {
+      if byte_len >= SERIALIZABLE_BYTES {
         return Some(self.versions.split_off(self.versions.len() >> 1));
       }
     }
@@ -84,8 +88,10 @@ impl DataEntry {
   }
 }
 impl Serializable for DataEntry {
-  fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> std::result::Result<(), Error> {
-    let mut writer = page.writer();
+  fn get_type() -> SerializeType {
+    SerializeType::DataEntry
+  }
+  fn write_at(&self, writer: &mut crate::disk::PageWriter) -> crate::Result {
     writer.write_usize(self.next.unwrap_or(0))?;
     writer.write_usize(self.versions.len())?;
 
@@ -104,8 +110,7 @@ impl Serializable for DataEntry {
     Ok(())
   }
 
-  fn deserialize(page: &Page<PAGE_SIZE>) -> std::result::Result<Self, Error> {
-    let mut reader = page.scanner();
+  fn read_from(reader: &mut crate::disk::PageScanner) -> crate::Result<Self> {
     let next = reader.read_usize()?;
     let len = reader.read_usize()?;
     let mut versions = VecDeque::new();

@@ -2,7 +2,7 @@ use std::{mem::ManuallyDrop, sync::Arc};
 
 use crossbeam::queue::ArrayQueue;
 
-use crate::Page;
+use crate::disk::Page;
 
 pub struct PageRef<const N: usize> {
   page: ManuallyDrop<Page<N>>,

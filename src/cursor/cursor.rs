@@ -7,7 +7,7 @@ use crate::{
     node::InternalNode,
     CursorNode, DataEntry, NodeFindResult, TreeHeader, HEADER_INDEX,
   },
-  disk::SerializeFrom,
+  serialize::SerializeFrom,
   transaction::TxOrchestrator,
   Error, Result,
 };
@@ -29,6 +29,7 @@ impl Cursor {
   pub fn initialize(&self) -> Result {
     Ok(())
   }
+
   pub fn commit(&mut self) -> Result {
     if self.committed {
       return Err(Error::TransactionClosed);
@@ -139,10 +140,7 @@ impl Cursor {
       usize,
     ) = loop {
       let mut slot = self.orchestrator.fetch(index)?.for_write();
-      let mut leaf = slot
-        .as_ref()
-        .deserialize::<CursorNode, Error>()?
-        .as_leaf()?;
+      let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
 
       match leaf.find(&key) {
         NodeFindResult::Move(i) => {
@@ -189,10 +187,7 @@ impl Cursor {
     while let Some(mut index) = stack.pop() {
       let (mut slot, mut internal) = loop {
         let slot = self.orchestrator.fetch(index)?.for_write();
-        let mut internal = slot
-          .as_ref()
-          .deserialize::<CursorNode, Error>()?
-          .as_internal()?;
+        let mut internal = slot.as_ref().deserialize::<CursorNode>()?.as_internal()?;
         match internal.insert_or_next(&split_key, split_pointer) {
           Ok(_) => break (slot, internal),
           Err(i) => index = i,

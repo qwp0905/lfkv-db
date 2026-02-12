@@ -9,13 +9,11 @@ use std::{
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use crate::{
-  disk::{DiskController, DiskControllerConfig, PagePool, PageRef},
-  wal::{
-    record::{LogRecord, Operation},
-    LogEntry, WAL_BLOCK_SIZE,
-  },
-  Error, Page, Result, ShortenedMutex, SingleWorkThread, ToArc, ToArcMutex, WorkBuilder,
-  PAGE_SIZE,
+  disk::{DiskController, DiskControllerConfig, Page, PagePool, PageRef, PAGE_SIZE},
+  thread::{SingleWorkThread, WorkBuilder},
+  utils::{ShortenedMutex, ToArc, ToArcMutex},
+  wal::{LogEntry, LogRecord, Operation, WAL_BLOCK_SIZE},
+  Error, Result,
 };
 
 struct WALBuffer {

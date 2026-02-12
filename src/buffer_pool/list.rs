@@ -1,6 +1,6 @@
 use std::ptr::NonNull;
 
-use crate::Pointer;
+use crate::utils::Pointer;
 
 use super::Bucket;
 

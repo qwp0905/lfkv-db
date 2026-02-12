@@ -1,4 +1,8 @@
-use crate::{Error, Page, Result, Serializable, PAGE_SIZE};
+use crate::{
+  disk::{PageScanner, PageWriter, PAGE_SIZE},
+  serialize::{Serializable, SerializeType},
+  Error, Result,
+};
 
 pub type Key = Vec<u8>;
 pub type Pointer = usize;
@@ -22,8 +26,10 @@ impl CursorNode {
   }
 }
 impl Serializable for CursorNode {
-  fn serialize(&self, page: &mut Page<PAGE_SIZE>) -> Result {
-    let mut writer = page.writer();
+  fn get_type() -> SerializeType {
+    SerializeType::CursorNode
+  }
+  fn write_at(&self, writer: &mut PageWriter) -> Result {
     match self {
       CursorNode::Internal(node) => {
         writer.write(&[0])?;
@@ -60,8 +66,7 @@ impl Serializable for CursorNode {
     Ok(())
   }
 
-  fn deserialize(page: &Page<PAGE_SIZE>) -> Result<Self> {
-    let mut scanner = page.scanner();
+  fn read_from(scanner: &mut PageScanner) -> Result<Self> {
     match scanner.read()? {
       0 => {
         //internal

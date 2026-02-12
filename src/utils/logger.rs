@@ -8,7 +8,10 @@ use std::{
 use chrono::{Local, SecondsFormat};
 use serde_json::json;
 
-use crate::{size, BackgroundThread, BackgroundWork, DrainAll};
+use crate::{
+  thread::{BackgroundThread, BackgroundWork},
+  utils::{size, DrainAll},
+};
 
 #[allow(unused)]
 enum Level {
