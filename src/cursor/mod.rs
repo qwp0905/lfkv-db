@@ -9,3 +9,6 @@ use entry::*;
 
 mod cursor;
 pub use cursor::*;
+
+mod gc;
+use gc::*;

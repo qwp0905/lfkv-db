@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   serialize::{Serializable, SerializeType},
@@ -140,6 +142,9 @@ impl InternalNode {
       Err(i) => Ok(self.children[i]),
     }
   }
+  pub fn first_child(&self) -> Pointer {
+    self.children[0]
+  }
   pub fn insert_or_next(
     &mut self,
     key: &Key,
@@ -225,6 +230,17 @@ impl LeafNode {
     }
   }
 
+  pub fn is_empy(&self) -> bool {
+    self.entries.is_empty()
+  }
+
+  pub fn get_entries(&self) -> impl Iterator<Item = &(Key, Pointer)> {
+    self.entries.iter()
+  }
+
+  pub fn get_next(&self) -> Option<Pointer> {
+    self.next
+  }
   pub fn set_next(&mut self, pointer: Pointer) -> Option<Pointer> {
     self.next.replace(pointer)
   }

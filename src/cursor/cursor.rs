@@ -3,9 +3,8 @@ use std::{collections::VecDeque, mem::replace, sync::Arc};
 use crate::{
   buffer_pool::PageSlotWrite,
   cursor::{
-    entry::{RecordData, VersionRecord},
-    node::InternalNode,
-    CursorNode, DataEntry, NodeFindResult, TreeHeader, HEADER_INDEX,
+    CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData, TreeHeader,
+    VersionRecord, HEADER_INDEX,
   },
   serialize::SerializeFrom,
   transaction::TxOrchestrator,
