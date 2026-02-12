@@ -20,7 +20,6 @@ use crate::{
 
 struct WALBuffer {
   last_log_id: usize,
-  last_tx_id: usize,
   entry: LogEntry,
 }
 
@@ -42,7 +41,9 @@ pub struct WAL {
   max_index: usize,
 }
 impl WAL {
-  pub fn replay(config: WALConfig) -> Result<(Self, usize, Vec<(usize, usize, Page)>)> {
+  pub fn replay(
+    config: WALConfig,
+  ) -> Result<(Self, usize, usize, Vec<(usize, usize, Page)>)> {
     let page_pool = PagePool::new(1).to_arc();
     let disk = DiskController::open(
       DiskControllerConfig {
@@ -57,7 +58,6 @@ impl WAL {
     let (last_index, last_log_id, last_tx_id, last_free, redo) = replay(&disk)?;
     let buffer = WALBuffer {
       last_log_id,
-      last_tx_id,
       entry: LogEntry::new(last_index),
     }
     .to_arc_mutex();
@@ -102,6 +102,7 @@ impl WAL {
         flush_th,
         max_index: config.max_file_size.div(WAL_BLOCK_SIZE),
       },
+      last_tx_id,
       last_free,
       redo,
     ))
@@ -116,18 +117,17 @@ impl WAL {
   }
 
   #[inline]
-  fn append<F>(&self, mut f: F) -> Result<LogRecord>
+  fn append<F>(&self, mut f: F) -> Result
   where
-    F: FnMut(usize, usize) -> LogRecord,
+    F: FnMut(usize) -> LogRecord,
   {
     let mut buffer = self.buffer.l();
     let log_id = buffer.last_log_id;
-    let record = f(log_id, buffer.last_tx_id);
+    let record = f(log_id);
     match buffer.entry.append(&record) {
       Ok(_) => {
         buffer.last_log_id += 1;
-        buffer.last_tx_id += buffer.last_tx_id.eq(&record.tx_id).then(|| 1).unwrap_or(0);
-        return Ok(record);
+        return Ok(());
       }
       Err(Error::EOF) => {}
       Err(err) => return Err(err),
@@ -145,8 +145,7 @@ impl WAL {
     let _ = buffer.entry.append(&record);
 
     buffer.last_log_id += 1;
-    buffer.last_tx_id += buffer.last_tx_id.eq(&record.tx_id).then(|| 1).unwrap_or(0);
-    Ok(record)
+    Ok(())
   }
 
   pub fn append_insert(
@@ -155,30 +154,22 @@ impl WAL {
     index: usize,
     page: &Page<PAGE_SIZE>,
   ) -> Result {
-    self.append(move |log_id, _| {
-      LogRecord::new_insert(log_id, tx_id, index, page.copy())
-    })?;
-    Ok(())
+    self.append(move |log_id| LogRecord::new_insert(log_id, tx_id, index, page.copy()))
   }
   pub fn append_checkpoint(&self, last_free: usize) -> Result {
-    self.append(move |log_id, _| LogRecord::new_checkpoint(log_id, last_free))?;
-    Ok(())
+    self.append(move |log_id| LogRecord::new_checkpoint(log_id, last_free))
   }
-  pub fn append_start(&self) -> Result<usize> {
-    let record = self.append(LogRecord::new_start)?;
-    Ok(record.tx_id)
+  pub fn append_start(&self, tx_id: usize) -> Result {
+    self.append(move |log_id| LogRecord::new_start(log_id, tx_id))
   }
   pub fn append_free(&self, last_free: usize) -> Result {
-    self.append(move |log_id, _| LogRecord::new_free(log_id, last_free))?;
-    Ok(())
+    self.append(move |log_id| LogRecord::new_free(log_id, last_free))
   }
   pub fn append_commit(&self, tx_id: usize) -> Result {
-    self.append(|log_id, _| LogRecord::new_commit(log_id, tx_id))?;
-    Ok(())
+    self.append(|log_id| LogRecord::new_commit(log_id, tx_id))
   }
   pub fn append_abort(&self, tx_id: usize) -> Result {
-    self.append(|log_id, _| LogRecord::new_abort(log_id, tx_id))?;
-    Ok(())
+    self.append(|log_id| LogRecord::new_abort(log_id, tx_id))
   }
 }
 

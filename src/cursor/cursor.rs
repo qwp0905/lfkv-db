@@ -1,10 +1,11 @@
-use std::{mem::replace, sync::Arc};
+use std::{collections::VecDeque, mem::replace, sync::Arc};
 
 use crate::{
   buffer_pool::PageSlotWrite,
   cursor::{
-    node::InternalNode, CursorNode, DataEntry, DataVersion, NodeFindResult, TreeHeader,
-    HEADER_INDEX,
+    entry::{RecordData, VersionRecord},
+    node::InternalNode,
+    CursorNode, DataEntry, NodeFindResult, TreeHeader, HEADER_INDEX,
   },
   disk::SerializeFrom,
   transaction::TxOrchestrator,
@@ -28,12 +29,22 @@ impl Cursor {
   pub fn initialize(&self) -> Result {
     Ok(())
   }
-  pub fn commit(&self) -> Result {
+  pub fn commit(&mut self) -> Result {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
 
     self.orchestrator.commit_tx(self.tx_id)?;
+    self.committed = true;
+    Ok(())
+  }
+
+  pub fn abort(&mut self) -> Result {
+    if self.committed {
+      return Err(Error::TransactionClosed);
+    }
+    self.orchestrator.abort_tx(self.tx_id)?;
+    self.committed = true;
     Ok(())
   }
 
@@ -78,13 +89,12 @@ impl Cursor {
         .as_ref()
         .deserialize()?;
 
-      let iter = match entry.find(self.tx_id) {
-        Ok(data) => return Ok(data.clone()),
-        Err(iter) => iter,
-      };
-      for (version, data) in iter {
-        if self.orchestrator.is_available(*version) {
-          return Ok(data.clone());
+      for record in entry.find(self.tx_id) {
+        if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
+          match &record.data {
+            RecordData::Data(data) => return Ok(data.clone()),
+            RecordData::Tombstone => return Err(Error::NotFound),
+          }
         }
       }
 
@@ -95,7 +105,11 @@ impl Cursor {
     }
   }
 
-  fn alloc_entry(&self, key: &Vec<u8>) -> Result<(PageSlotWrite<'_>, DataEntry)> {
+  fn alloc_entry(
+    &self,
+    key: &Vec<u8>,
+    create: bool,
+  ) -> Result<(PageSlotWrite<'_>, DataEntry)> {
     let header_slot = self.orchestrator.fetch(HEADER_INDEX)?;
     let mut header: TreeHeader = header_slot.for_read().as_ref().deserialize()?;
 
@@ -141,6 +155,9 @@ impl Cursor {
           return Ok((latch, entry));
         }
         NodeFindResult::NotFound(i) => {
+          if !create {
+            return Err(Error::NotFound);
+          }
           let latch = self.orchestrator.alloc()?.for_write();
           let mut split = match leaf.insert_at(i, key.clone(), latch.get_index()) {
             Some(s) => s,
@@ -225,28 +242,25 @@ impl Cursor {
     Ok((latch, entry))
   }
 
-  pub fn insert(&self, key: Vec<u8>, data: Vec<u8>) -> Result {
+  fn write_at(&mut self, key: &Vec<u8>, data: RecordData, create: bool) -> Result {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
 
-    let (mut latch, mut entry) = self.alloc_entry(&key)?;
-
-    loop {
-      match entry.find_slot(self.tx_id) {
-        Ok(slot) => {
-          slot.alloc(data);
-          break;
-        }
-        Err(next) => {
-          let _ = replace(&mut latch, self.orchestrator.fetch(next)?.for_write());
-          entry = latch.as_ref().deserialize()?;
-          continue;
-        }
+    let (mut latch, mut entry) = self.alloc_entry(key, create)?;
+    if let Some(owner) = entry.get_last_owner() {
+      if owner != self.tx_id && self.orchestrator.is_active(&owner) {
+        drop(latch);
+        self.abort()?;
+        return Err(Error::WriteConflict);
       }
     }
 
-    let mut splitted: Option<Vec<DataVersion>> = None;
+    let version = self.orchestrator.current_version();
+    let record = VersionRecord::new(self.tx_id, version, data);
+    entry.append(record);
+
+    let mut splitted: Option<VecDeque<VersionRecord>> = None;
     loop {
       if let Some(versions) = splitted.take() {
         entry.apply_split(versions);
@@ -284,5 +298,13 @@ impl Cursor {
     }
 
     Ok(())
+  }
+
+  pub fn insert(&mut self, key: Vec<u8>, data: Vec<u8>) -> Result {
+    self.write_at(&key, RecordData::Data(data), true)
+  }
+
+  pub fn remove(&mut self, key: &Vec<u8>) -> Result {
+    self.write_at(key, RecordData::Tombstone, false)
   }
 }

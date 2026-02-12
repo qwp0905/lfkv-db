@@ -1,6 +1,10 @@
 use std::{
+  collections::HashSet,
   mem::replace,
-  sync::{Arc, RwLock},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, RwLock,
+  },
   time::Duration,
 };
 
@@ -11,11 +15,26 @@ use crate::{
   BufferPool, Error, PageSlot, Result, SingleWorkThread, ToArc, WorkBuilder,
 };
 
+struct VersionVisibility {
+  active: HashSet<usize>,
+  aborted: HashSet<usize>,
+}
+impl VersionVisibility {
+  fn new() -> Self {
+    Self {
+      active: Default::default(),
+      aborted: Default::default(),
+    }
+  }
+}
+
 pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   checkpoint: SingleWorkThread<(), Result>,
   last_free: Arc<RwLock<usize>>,
+  version_visibility: Arc<RwLock<VersionVisibility>>,
+  last_tx_id: AtomicUsize,
 }
 impl TxOrchestrator {
   pub fn new(
@@ -23,7 +42,7 @@ impl TxOrchestrator {
     wal_config: WALConfig,
   ) -> Result<Self> {
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
-    let (wal, last_free, redo) = WAL::replay(wal_config)?;
+    let (wal, last_tx_id, last_free, redo) = WAL::replay(wal_config)?;
     let wal = wal.to_arc();
     let last_free = last_free.to_arc_rwlock();
     for (_, i, page) in redo {
@@ -46,9 +65,11 @@ impl TxOrchestrator {
 
     Ok(Self {
       checkpoint,
+      last_tx_id: AtomicUsize::new(last_tx_id),
       last_free,
       wal,
       buffer_pool,
+      version_visibility: VersionVisibility::new().to_arc_rwlock(),
     })
   }
   pub fn fetch(&self, index: usize) -> Result<PageSlot<'_>> {
@@ -97,11 +118,13 @@ impl TxOrchestrator {
   }
 
   pub fn start_tx(&self) -> Result<usize> {
-    match self.wal.append_start() {
+    let tx_id = self.last_tx_id.fetch_add(1, Ordering::Release);
+    match self.wal.append_start(tx_id) {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
-      result => return result,
+      _ => return Ok(tx_id),
     }
-    self.wal.append_start()
+    self.wal.append_start(tx_id)?;
+    Ok(tx_id)
   }
 
   pub fn commit_tx(&self, tx_id: usize) -> Result {
@@ -114,8 +137,7 @@ impl TxOrchestrator {
       Err(err) => return Err(err),
     }
     self.wal.flush()?;
-
-    // mark tx id committed
+    self.version_visibility.wl().active.remove(&tx_id);
     Ok(())
   }
 
@@ -124,12 +146,26 @@ impl TxOrchestrator {
       Err(Error::WALCapacityExceeded) => self.checkpoint.send_await(())??,
       result => return result,
     }
-    self.wal.append_abort(tx_id)
+    self.wal.append_abort(tx_id)?;
+    let mut v = self.version_visibility.wl();
+    if v.active.remove(&tx_id) {
+      v.aborted.insert(tx_id);
+    }
+    Ok(())
   }
 
-  pub fn is_available(&self, tx_id: usize) -> bool {
-    // version visibility check
-    true
+  pub fn is_visible(&self, tx_id: &usize) -> bool {
+    let v = self.version_visibility.rl();
+    !v.aborted.contains(tx_id) && !v.active.contains(tx_id)
+  }
+
+  pub fn is_active(&self, tx_id: &usize) -> bool {
+    let v = self.version_visibility.rl();
+    v.active.contains(tx_id)
+  }
+
+  pub fn current_version(&self) -> usize {
+    self.last_tx_id.load(Ordering::Acquire)
   }
 }
 

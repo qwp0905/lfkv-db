@@ -32,6 +32,9 @@ pub enum Error {
   #[error("wal capacity exceeded")]
   WALCapacityExceeded,
 
+  #[error("write conflict detected")]
+  WriteConflict,
+
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),
 }
