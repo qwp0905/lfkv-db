@@ -1,10 +1,11 @@
 use std::{collections::HashSet, sync::Arc};
 
 use super::{CursorNode, Pointer, TreeHeader, HEADER_INDEX};
-use crate::{error::Result, transaction::TxOrchestrator};
+use crate::{error::Result, thread::SingleWorkThread, transaction::TxOrchestrator};
 
 pub struct GarbageCollector {
   orchestrator: Arc<TxOrchestrator>,
+  entry: Arc<SingleWorkThread<Pointer, Result>>,
 }
 impl GarbageCollector {
   pub fn run(&self) -> Result {

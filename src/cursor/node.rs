@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   serialize::{Serializable, SerializeType},

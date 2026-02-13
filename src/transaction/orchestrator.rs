@@ -1,5 +1,5 @@
 use std::{
-  collections::HashSet,
+  collections::{BTreeSet, HashSet},
   mem::replace,
   sync::{
     atomic::{AtomicUsize, Ordering},
@@ -19,7 +19,7 @@ use crate::{
 };
 
 struct VersionVisibility {
-  active: HashSet<usize>,
+  active: BTreeSet<usize>,
   aborted: HashSet<usize>,
 }
 impl VersionVisibility {
@@ -172,6 +172,14 @@ impl TxOrchestrator {
 
   pub fn current_version(&self) -> usize {
     self.last_tx_id.load(Ordering::Acquire)
+  }
+
+  pub fn min_version(&self) -> usize {
+    let v = self.version_visibility.rl();
+    if let Some(&id) = v.active.first() {
+      return id;
+    }
+    self.current_version()
   }
 }
 
