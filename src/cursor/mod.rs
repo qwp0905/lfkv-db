@@ -12,3 +12,6 @@ pub use cursor::*;
 
 mod gc;
 use gc::*;
+
+mod types;
+use types::*;

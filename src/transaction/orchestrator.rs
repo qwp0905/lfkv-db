@@ -107,8 +107,8 @@ impl TxOrchestrator {
     *index = next;
     Ok(slot)
   }
-  pub fn release(&self, page: PageSlot<'_>) -> Result {
-    let index = page.get_index();
+  pub fn release(&self, index: usize) -> Result {
+    let page = self.buffer_pool.read(index)?;
     let mut prev = self.last_free.wl();
     match self.wal.append_free(index) {
       Ok(_) => {}

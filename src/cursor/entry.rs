@@ -86,6 +86,23 @@ impl DataEntry {
 
     None
   }
+
+  pub fn remove_until(&mut self, min_version: usize) -> bool {
+    let i = self
+      .versions
+      .binary_search_by(|v| min_version.cmp(&v.version))
+      .unwrap_or_else(|i| i);
+    if self.versions.split_off(i).len() == 0 {
+      return false;
+    }
+
+    let _ = self.next.take();
+    true
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.versions.is_empty()
+  }
 }
 impl Serializable for DataEntry {
   fn get_type() -> SerializeType {

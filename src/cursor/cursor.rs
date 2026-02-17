@@ -1,13 +1,11 @@
 use std::{collections::VecDeque, mem::replace, sync::Arc};
 
+use super::{
+  CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData, TreeHeader,
+  VersionRecord, HEADER_INDEX,
+};
 use crate::{
-  buffer_pool::PageSlotWrite,
-  cursor::{
-    CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData, TreeHeader,
-    VersionRecord, HEADER_INDEX,
-  },
-  serialize::SerializeFrom,
-  transaction::TxOrchestrator,
+  buffer_pool::PageSlotWrite, serialize::SerializeFrom, transaction::TxOrchestrator,
   Error, Result,
 };
 

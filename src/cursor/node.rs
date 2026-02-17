@@ -1,11 +1,9 @@
+use super::{Key, Pointer};
 use crate::{
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   serialize::{Serializable, SerializeType},
   Error, Result,
 };
-
-pub type Key = Vec<u8>;
-pub type Pointer = usize;
 
 pub enum CursorNode {
   Internal(InternalNode),
@@ -228,12 +226,15 @@ impl LeafNode {
     }
   }
 
-  pub fn is_empy(&self) -> bool {
-    self.entries.is_empty()
+  pub fn drain(&mut self) -> impl Iterator<Item = (Key, Pointer)> + use<'_> {
+    self.entries.drain(..)
   }
 
   pub fn get_entries(&self) -> impl Iterator<Item = &(Key, Pointer)> {
     self.entries.iter()
+  }
+  pub fn set_entries(&mut self, entries: Vec<(Key, Pointer)>) {
+    self.entries = entries;
   }
 
   pub fn get_next(&self) -> Option<Pointer> {

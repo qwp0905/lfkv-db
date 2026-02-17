@@ -164,6 +164,33 @@ where
     }
   }
 
+  pub fn build_unchecked<S: ToString, F>(
+    name: S,
+    size: usize,
+    count: usize,
+    build: F,
+  ) -> Self
+  where
+    F: Fn(usize) -> SafeWork<T, R>,
+  {
+    let (tx, rx) = unbounded();
+    let threads = ArrayQueue::new(count);
+    for i in 0..count {
+      let work = build(i);
+      let rx = rx.clone();
+      let th = std::thread::Builder::new()
+        .name(format!("{} {}", name.to_string(), i))
+        .stack_size(size)
+        .spawn(move || work.run(rx))
+        .unwrap();
+      let _ = threads.push(th);
+    }
+    Self {
+      threads,
+      channel: tx,
+    }
+  }
+
   pub fn build<S: ToString, F, E>(
     name: S,
     size: usize,
@@ -206,6 +233,9 @@ where
   }
   pub fn send_await(&self, v: T) -> Result<R> {
     self.send(v).must_recv()
+  }
+  pub fn send_no_wait(&self, v: T) {
+    let _ = self.send(v);
   }
 
   #[inline]

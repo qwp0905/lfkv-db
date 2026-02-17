@@ -60,6 +60,20 @@ impl SharedWorkBuilder {
       build,
     )
   }
+
+  pub fn build_unchecked<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
+  where
+    T: Send + UnwindSafe + 'static,
+    R: Send + 'static,
+    F: Fn(usize) -> SafeWork<T, R>,
+  {
+    SharedWorkThread::build_unchecked(
+      self.builder.name,
+      self.builder.stack_size,
+      self.count,
+      build,
+    )
+  }
 }
 pub struct SafeWorkBuilder {
   builder: WorkBuilder,
