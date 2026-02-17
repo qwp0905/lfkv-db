@@ -18,14 +18,20 @@ pub struct GarbageCollector {
 impl GarbageCollector {
   pub fn start(orchestrator: Arc<TxOrchestrator>, timeout: Duration) -> Self {
     let release = WorkBuilder::new()
+      .name("gc release entry")
+      .stack_size(1)
       .shared(1)
       .build_unchecked(Self::run_release(orchestrator.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
+      .name("gc found entry")
+      .stack_size(1)
       .shared(1)
       .build_unchecked(Self::run_entry(orchestrator.clone(), release.clone()))
       .to_arc();
     let check = WorkBuilder::new()
+      .name("gc check top entry")
+      .stack_size(1)
       .shared(1)
       .build_unchecked(Self::run_check(
         orchestrator.clone(),
@@ -34,6 +40,8 @@ impl GarbageCollector {
       ))
       .to_arc();
     let main = WorkBuilder::new()
+      .name("gc main")
+      .stack_size(1)
       .single()
       .with_timeout(timeout, Self::run_main(orchestrator.clone(), check.clone()));
     Self {
@@ -103,7 +111,7 @@ impl GarbageCollector {
             release.push(ptr);
           }
 
-          if !new_entries.is_empty() {
+          if !release.is_empty() {
             leaf.set_entries(new_entries);
             latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
           }
@@ -151,13 +159,14 @@ impl GarbageCollector {
         while let Some(i) = index.take() {
           let mut latch = orchestrator.fetch(i)?.for_write();
           let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
-          if let Some(next) = entry.get_next() {
-            release_c.send_no_wait(next);
-          }
+          let next = entry.get_next();
 
           if !entry.remove_until(orchestrator.min_version()) {
-            index = entry.get_next();
+            index = next;
             continue;
+          }
+          if let Some(n) = next {
+            release_c.send_no_wait(n);
           }
           latch.as_mut().serialize_from(&entry)?;
 
