@@ -61,7 +61,7 @@ impl DataEntry {
       .drain(..)
       .filter(|v| !is_aborted(&v.owner))
       .collect();
-    self.versions.len() == len
+    self.versions.len() < len
   }
 
   pub fn get_last_owner(&self) -> Option<usize> {

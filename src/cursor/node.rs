@@ -10,6 +10,13 @@ pub enum CursorNode {
   Leaf(LeafNode),
 }
 impl CursorNode {
+  pub fn initial_state() -> Self {
+    Self::Internal(InternalNode {
+      keys: Default::default(),
+      children: Default::default(),
+      right: None,
+    })
+  }
   pub fn as_leaf(self) -> Result<LeafNode> {
     match self {
       CursorNode::Internal(_) => Err(Error::InvalidFormat),

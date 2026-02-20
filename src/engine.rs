@@ -95,11 +95,7 @@ impl Engine {
       return Err(Error::EngineUnavailable);
     }
     let tx_id = self.orchestrator.start_tx()?;
-    Ok(Cursor::new(
-      self.orchestrator.clone(),
-      // self.garbage_collector.clone(),
-      tx_id,
-    ))
+    Ok(Cursor::new(self.orchestrator.clone(), tx_id))
   }
 }
 

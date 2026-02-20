@@ -76,4 +76,8 @@ impl BufferPool {
     }
     Ok(())
   }
+
+  pub fn is_empty(&self) -> Result<bool> {
+    Ok(self.disk.len()? == 0)
+  }
 }

@@ -24,6 +24,22 @@ impl Cursor {
   }
 
   pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
+    if !orchestrator.is_disk_empty()? {
+      return Ok(());
+    }
+
+    let root = CursorNode::initial_state();
+    let header = TreeHeader::initial_state();
+    orchestrator
+      .fetch(header.get_root())?
+      .for_write()
+      .as_mut()
+      .serialize_from(&root)?;
+    orchestrator
+      .fetch(HEADER_INDEX)?
+      .for_write()
+      .as_mut()
+      .serialize_from(&header)?;
     Ok(())
   }
 

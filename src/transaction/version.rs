@@ -25,7 +25,7 @@ impl VersionVisibility {
 
   pub fn remove_aborted(&self, version: &usize) {
     let mut inner = self.inner.wl();
-    inner.aborted.split_off(version);
+    inner.aborted = inner.aborted.split_off(version);
   }
 
   pub fn is_aborted(&self, tx_id: &usize) -> bool {
