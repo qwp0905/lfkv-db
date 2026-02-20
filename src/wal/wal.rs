@@ -1,6 +1,5 @@
 use std::{
-  collections::{BTreeMap, BTreeSet, HashMap},
-  fs::read_dir,
+  collections::BTreeSet,
   mem::replace,
   ops::{Add, Div},
   path::PathBuf,
@@ -11,7 +10,7 @@ use std::{
 use chrono::Local;
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
-use super::{LogEntry, LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
+use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{DiskController, DiskControllerConfig, Page, PagePool, PageRef, PAGE_SIZE},
   thread::{SingleWorkThread, WorkBuilder},
@@ -55,11 +54,13 @@ impl WAL {
     Vec<(usize, usize, Page)>,
     Vec<WALSegment>,
   )> {
+    let max_index = config.max_file_size.div(WAL_BLOCK_SIZE);
     let page_pool = PagePool::new(1).to_arc();
     let (last_index, last_log_id, last_tx_id, last_free, aborted, redo, disk, segments) =
       replay(
         config.base_dir.to_string_lossy().as_ref(),
         config.prefix.to_string_lossy().as_ref(),
+        max_index,
         page_pool.clone(),
       )?;
     let buffer = WALBuffer {
@@ -108,7 +109,7 @@ impl WAL {
         buffer,
         page_pool,
         flush_th,
-        max_index: config.max_file_size.div(WAL_BLOCK_SIZE),
+        max_index,
         checkpoint,
       },
       last_tx_id,
@@ -200,141 +201,6 @@ impl WAL {
   pub fn append_abort(&self, tx_id: usize) -> Result {
     self.append(|log_id| LogRecord::new_abort(log_id, tx_id))
   }
-}
-
-fn replay(
-  base_dir: &str,
-  prefix: &str,
-  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
-) -> Result<(
-  usize,
-  usize,
-  usize,
-  usize,
-  BTreeSet<usize>,
-  Vec<(usize, usize, Page)>,
-  DiskController<WAL_BLOCK_SIZE>,
-  Vec<WALSegment>,
-)> {
-  let mut tx_id = 0;
-  let mut log_id = 0;
-  let mut index = 0;
-  let mut redo = BTreeMap::<usize, LogRecord>::new();
-
-  let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
-  let mut commited = Vec::<(usize, usize, Page)>::new();
-  let mut f = None;
-  let mut last_file = None;
-  let mut segments = Vec::new();
-
-  let mut files = Vec::new();
-  for file in read_dir(base_dir).map_err(Error::IO)? {
-    let file = file.map_err(Error::IO)?;
-    if !file.file_name().to_string_lossy().starts_with(prefix) {
-      continue;
-    }
-    files.push(file.path())
-  }
-
-  files.sort();
-  for path in files.into_iter() {
-    let wal = DiskController::open(
-      DiskControllerConfig {
-        path,
-        read_threads: Some(1),
-        write_threads: Some(3),
-      },
-      page_pool.clone(),
-    )?;
-
-    let len = wal.len()?;
-    let mut records = vec![];
-
-    for i in 0..len.div(WAL_BLOCK_SIZE) {
-      for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
-        records.push((i, record))
-      }
-    }
-    records.sort_by_key(|(_, r)| r.log_id);
-
-    if let Some((i, record)) = records.last() {
-      index = *i;
-      log_id = record.log_id;
-    }
-
-    for (_, record) in records {
-      tx_id = tx_id.max(record.tx_id);
-      match record.operation {
-        Operation::Checkpoint(free, log_id) => {
-          redo.split_off(&log_id);
-          f = Some(free);
-        }
-        _ => drop(redo.insert(record.log_id, record)),
-      };
-    }
-
-    if let Some(last) = replace(&mut last_file, Some(wal)) {
-      segments.push(WALSegment::new(last));
-    }
-  }
-
-  let mut free = f.map(|i| vec![i]).unwrap_or_default();
-  for record in redo.into_values() {
-    tx_id = tx_id.max(record.tx_id);
-    match record.operation {
-      Operation::Insert(i, page) => {
-        if let Some(f) = free.last() {
-          if *f == i {
-            free.pop();
-          }
-        }
-        apply
-          .entry(record.tx_id)
-          .or_default()
-          .push((record.log_id, i, page));
-      }
-      Operation::Start => {
-        apply.insert(record.tx_id, vec![]);
-      }
-      Operation::Commit => {
-        apply
-          .remove(&record.tx_id)
-          .map(|pages| commited.extend(pages));
-      }
-      Operation::Abort => {
-        apply.remove(&record.tx_id);
-      }
-      Operation::Checkpoint(_, _) => {}
-      Operation::Free(index) => {
-        free.push(index);
-      }
-    };
-  }
-
-  let aborted = BTreeSet::from_iter(apply.into_keys());
-  let wal = match last_file {
-    Some(w) => w,
-    None => DiskController::open(
-      DiskControllerConfig {
-        path: PathBuf::from(base_dir)
-          .join(prefix)
-          .join(Local::now().to_string()),
-        read_threads: Some(1),
-        write_threads: Some(3),
-      },
-      page_pool.clone(),
-    )?,
-  };
-  Ok((
-    index,
-    log_id,
-    tx_id,
-    free.last().map(|i| *i).unwrap_or_default(),
-    aborted,
-    commited,
-    wal,
-    segments,
-  ))
 }
 
 fn entry_to_page(
