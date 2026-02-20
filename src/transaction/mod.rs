@@ -2,4 +2,7 @@ mod orchestrator;
 pub use orchestrator::*;
 
 mod free;
-use free::*;
+pub use free::*;
+
+mod version;
+pub use version::*;

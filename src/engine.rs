@@ -11,8 +11,11 @@ use std::{
 use sysinfo::System;
 
 use crate::{
-  buffer_pool::BufferPoolConfig, transaction::TxOrchestrator, utils::logger,
-  utils::ToArc, wal::WALConfig, Cursor, Error, Result,
+  buffer_pool::BufferPoolConfig,
+  transaction::TxOrchestrator,
+  utils::{logger, ToArc},
+  wal::WALConfig,
+  Cursor, Error, GarbageCollectionConfig, Result,
 };
 
 pub struct EngineConfig<T>
@@ -27,6 +30,8 @@ where
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
+  pub gc_trigger_interval: Duration,
+  pub gc_trigger_count: usize,
 }
 
 const WAL_PATH: &str = "wal.db";
@@ -61,16 +66,25 @@ impl Engine {
       read_threads: todo!(),
       write_threads: todo!(),
     };
-    let orchestrator = TxOrchestrator::new(buffer_pool_config, wal_config)?.to_arc();
+    let gc_config = GarbageCollectionConfig {
+      interval: todo!(),
+      count: todo!(),
+    };
+    // let garbage_collector = GarbageCollector::start(
+    //   orchestrator.clone(),
+    //   config.gc_trigger_interval,
+    //   config.gc_trigger_count,
+    // )
+    // .to_arc();
+    let orchestrator =
+      TxOrchestrator::new(buffer_pool_config, wal_config, gc_config)?.to_arc();
+
+    Cursor::initialize(orchestrator.clone())?;
 
     let engine = Self {
       orchestrator,
       available: AtomicBool::new(true),
     };
-
-    // let cursor = engine.new_transaction()?;
-    // cursor.initialize()?;
-    // cursor.commit()?;
 
     logger::info("engine initialized");
     Ok(engine)
@@ -81,7 +95,11 @@ impl Engine {
       return Err(Error::EngineUnavailable);
     }
     let tx_id = self.orchestrator.start_tx()?;
-    Ok(Cursor::new(self.orchestrator.clone(), tx_id))
+    Ok(Cursor::new(
+      self.orchestrator.clone(),
+      // self.garbage_collector.clone(),
+      tx_id,
+    ))
   }
 }
 

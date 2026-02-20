@@ -29,7 +29,6 @@ pub enum SafeWork<T, R> {
     Duration,
     Arc<dyn Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + Sync + RefUnwindSafe>,
   ),
-  Empty,
 }
 impl<T, R> SafeWork<T, R> {
   pub fn no_timeout<F>(f: F) -> Self
@@ -51,10 +50,6 @@ impl<T, R> SafeWork<T, R> {
     F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
     SafeWork::WithTimer(timeout, f.to_arc())
-  }
-
-  pub fn empty() -> Self {
-    SafeWork::Empty
   }
 }
 impl<T, R> SafeWork<T, R>
@@ -130,7 +125,6 @@ where
           };
         }
       }
-      SafeWork::Empty => {}
     }
   }
 }
@@ -293,6 +287,9 @@ where
 
   pub fn send_await(&self, v: T) -> Result<R> {
     self.0.send_await(v)
+  }
+  pub fn send_no_wait(&self, v: T) {
+    let _ = self.send(v);
   }
 
   pub fn close(&self) {

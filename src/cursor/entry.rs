@@ -54,6 +54,16 @@ impl DataEntry {
     (s..self.versions.len()).map(|i| &self.versions[i])
   }
 
+  pub fn filter_aborted<F: Fn(&usize) -> bool>(&mut self, is_aborted: F) -> bool {
+    let len = self.versions.len();
+    self.versions = self
+      .versions
+      .drain(..)
+      .filter(|v| !is_aborted(&v.owner))
+      .collect();
+    self.versions.len() == len
+  }
+
   pub fn get_last_owner(&self) -> Option<usize> {
     self.versions.front().map(|v| v.owner)
   }
@@ -91,11 +101,12 @@ impl DataEntry {
     let i = self
       .versions
       .binary_search_by(|v| min_version.cmp(&v.version))
-      .unwrap_or_else(|i| i);
-    if self.versions.split_off(i).len() == 0 {
+      .unwrap_or_else(|i| i)
+      + 1;
+    if i >= self.versions.len() {
       return false;
     }
-
+    let _ = self.versions.split_off(i);
     let _ = self.next.take();
     true
   }

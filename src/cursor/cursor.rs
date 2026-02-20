@@ -23,7 +23,7 @@ impl Cursor {
     }
   }
 
-  pub fn initialize(&self) -> Result {
+  pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
     Ok(())
   }
 

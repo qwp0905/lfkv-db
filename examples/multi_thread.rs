@@ -17,6 +17,8 @@ fn main() {
       // checkpoint_count: 10000,
       group_commit_delay: Duration::from_millis(10),
       group_commit_count: 100,
+      gc_trigger_count: 1000,
+      gc_trigger_interval: Duration::from_secs(60),
     })
     .unwrap(),
   );

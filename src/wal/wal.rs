@@ -1,5 +1,5 @@
 use std::{
-  collections::HashMap,
+  collections::{BTreeSet, HashMap},
   ops::{Add, Div},
   path::PathBuf,
   sync::{Arc, Mutex},
@@ -41,7 +41,13 @@ pub struct WAL {
 impl WAL {
   pub fn replay(
     config: WALConfig,
-  ) -> Result<(Self, usize, usize, Vec<(usize, usize, Page)>)> {
+  ) -> Result<(
+    Self,
+    usize,
+    usize,
+    BTreeSet<usize>,
+    Vec<(usize, usize, Page)>,
+  )> {
     let page_pool = PagePool::new(1).to_arc();
     let disk = DiskController::open(
       DiskControllerConfig {
@@ -53,7 +59,7 @@ impl WAL {
     )?
     .to_arc();
 
-    let (last_index, last_log_id, last_tx_id, last_free, redo) = replay(&disk)?;
+    let (last_index, last_log_id, last_tx_id, last_free, aborted, redo) = replay(&disk)?;
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
@@ -102,6 +108,7 @@ impl WAL {
       },
       last_tx_id,
       last_free,
+      aborted,
       redo,
     ))
   }
@@ -173,12 +180,19 @@ impl WAL {
 
 fn replay(
   wal: &DiskController<WAL_BLOCK_SIZE>,
-) -> Result<(usize, usize, usize, usize, Vec<(usize, usize, Page)>)> {
+) -> Result<(
+  usize,
+  usize,
+  usize,
+  usize,
+  BTreeSet<usize>,
+  Vec<(usize, usize, Page)>,
+)> {
   let len = wal.len()?;
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
-  let mut free_index = 0;
+  let mut free = Vec::new();
 
   let mut records = vec![];
   for i in 0..len.div(WAL_BLOCK_SIZE) {
@@ -199,6 +213,11 @@ fn replay(
     tx_id = tx_id.max(record.tx_id);
     match record.operation {
       Operation::Insert(i, page) => {
+        if let Some(f) = free.last() {
+          if *f == i {
+            free.pop();
+          }
+        }
         apply
           .entry(record.tx_id)
           .or_default()
@@ -218,16 +237,24 @@ fn replay(
       Operation::Checkpoint(index) => {
         apply.clear();
         commited.clear();
-        free_index = index;
+        free = vec![index];
       }
       Operation::Free(index) => {
-        free_index = index;
+        free.push(index);
       }
     };
   }
 
   commited.sort_by_key(|(i, _, _)| *i);
-  Ok((index, log_id, tx_id, free_index, commited))
+  let aborted = BTreeSet::from_iter(apply.into_keys());
+  Ok((
+    index,
+    log_id,
+    tx_id,
+    free.last().map(|i| *i).unwrap_or_default(),
+    aborted,
+    commited,
+  ))
 }
 
 fn entry_to_page(

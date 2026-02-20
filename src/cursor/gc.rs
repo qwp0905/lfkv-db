@@ -1,70 +1,121 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+  sync::{Arc, Mutex},
+  time::Duration,
+};
 
 use super::{CursorNode, DataEntry, Pointer, TreeHeader, HEADER_INDEX};
 use crate::{
+  buffer_pool::BufferPool,
   error::Result,
   serialize::SerializeFrom,
   thread::{SafeWork, SendAll, SharedWorkThread, SingleWorkThread, WorkBuilder},
-  transaction::TxOrchestrator,
-  utils::ToArc,
+  transaction::{FreeList, VersionVisibility},
+  utils::{ShortenedMutex, ToArc},
 };
+
+pub struct GarbageCollectionConfig {
+  pub interval: Duration,
+  pub count: usize,
+}
 
 pub struct GarbageCollector {
   main: SingleWorkThread<(), Result>,
   check: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   entry: Arc<SharedWorkThread<Pointer, Result>>,
   release: Arc<SharedWorkThread<Pointer, Result>>,
+  count: Arc<Mutex<usize>>,
+  max_count: usize,
 }
 impl GarbageCollector {
-  pub fn start(orchestrator: Arc<TxOrchestrator>, timeout: Duration) -> Self {
+  pub fn notify(&self) {
+    let mut c = self.count.l();
+    if *c != self.max_count {
+      *c += 1;
+      return;
+    }
+    self.main.send_no_wait(());
+  }
+
+  pub fn run(&self) -> Result {
+    *self.count.l() = 0;
+    self.main.send_await(())?
+  }
+
+  pub fn start(
+    buffer_pool: Arc<BufferPool>,
+    version_visibility: Arc<VersionVisibility>,
+    free_list: Arc<FreeList>,
+    config: GarbageCollectionConfig,
+  ) -> Self {
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(1)
       .shared(1)
-      .build_unchecked(Self::run_release(orchestrator.clone()))
+      .build_unchecked(Self::run_release(buffer_pool.clone(), free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(1)
       .shared(1)
-      .build_unchecked(Self::run_entry(orchestrator.clone(), release.clone()))
+      .build_unchecked(Self::run_entry(
+        buffer_pool.clone(),
+        version_visibility.clone(),
+        release.clone(),
+      ))
       .to_arc();
     let check = WorkBuilder::new()
       .name("gc check top entry")
       .stack_size(1)
       .shared(1)
       .build_unchecked(Self::run_check(
-        orchestrator.clone(),
+        buffer_pool.clone(),
+        version_visibility.clone(),
         entry.clone(),
         release.clone(),
       ))
       .to_arc();
+    let count: Arc<Mutex<usize>> = Default::default();
     let main = WorkBuilder::new()
       .name("gc main")
       .stack_size(1)
       .single()
-      .with_timeout(timeout, Self::run_main(orchestrator.clone(), check.clone()));
+      .with_timeout(
+        config.interval,
+        Self::run_main(
+          buffer_pool.clone(),
+          version_visibility.clone(),
+          free_list.clone(),
+          check.clone(),
+          count.clone(),
+        ),
+      );
     Self {
       main,
       check,
       entry,
       release,
+      max_count: config.count,
+      count,
     }
   }
   fn run_main(
-    orchestrator: Arc<TxOrchestrator>,
+    buffer_pool: Arc<BufferPool>,
+    version_visibility: Arc<VersionVisibility>,
+    free_list: Arc<FreeList>,
     check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
+    counter: Arc<Mutex<usize>>,
   ) -> impl Fn(Option<()>) -> Result {
     move |_| {
-      let header: TreeHeader = orchestrator
-        .fetch(HEADER_INDEX)?
+      *counter.l() = 0;
+      let header: TreeHeader = buffer_pool
+        .read(HEADER_INDEX)?
         .for_read()
         .as_ref()
         .deserialize()?;
 
       let mut index = header.get_root();
-      while let CursorNode::Internal(node) = orchestrator
-        .fetch(index)?
+      while let CursorNode::Internal(node) = buffer_pool
+        .read(index)?
         .for_read()
         .as_ref()
         .deserialize::<CursorNode>()?
@@ -72,10 +123,11 @@ impl GarbageCollector {
         index = node.first_child()
       }
 
+      let min_version = version_visibility.min_version();
       let mut index = Some(index);
       while let Some(i) = index.take() {
-        let leaf = orchestrator
-          .fetch(i)?
+        let leaf = buffer_pool
+          .read(i)?
           .for_read()
           .as_ref()
           .deserialize::<CursorNode>()?
@@ -84,22 +136,20 @@ impl GarbageCollector {
         index = leaf.get_next();
         let mut found = false;
         for r in leaf.get_entries().map(|(_, p)| *p).send_all_to(&check_c)? {
-          if r? && !found {
-            found = true
-          }
+          found = r? || found;
         }
         if !found {
           continue;
         }
 
         let released = {
-          let mut latch = orchestrator.fetch(i)?.for_write();
+          let mut latch = buffer_pool.read(i)?.for_write();
           let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
           let mut new_entries = vec![];
           let mut release = vec![];
           for (key, ptr) in leaf.drain() {
-            if !orchestrator
-              .fetch(ptr)?
+            if !buffer_pool
+              .read(ptr)?
               .for_read()
               .as_ref()
               .deserialize::<DataEntry>()?
@@ -119,57 +169,65 @@ impl GarbageCollector {
         };
 
         for i in released {
-          orchestrator.release(i)?;
+          free_list.release(i)?;
         }
       }
 
+      version_visibility.remove_aborted(&min_version);
       Ok(())
     }
   }
   fn run_release(
-    orchestrator: Arc<TxOrchestrator>,
+    buffer_pool: Arc<BufferPool>,
+    free_list: Arc<FreeList>,
   ) -> impl Fn(usize) -> SafeWork<Pointer, Result> {
     move |_| {
-      let orchestrator = orchestrator.clone();
+      let orchestrator = buffer_pool.clone();
+      let free_list = free_list.clone();
       SafeWork::no_timeout(move |pointer: Pointer| {
         let mut p = Some(pointer);
 
         while let Some(i) = p.take() {
           p = orchestrator
-            .fetch(i)?
+            .read(i)?
             .for_read()
             .as_ref()
             .deserialize::<DataEntry>()?
             .get_next();
-          orchestrator.release(i)?;
+          free_list.release(i)?;
         }
         Ok(())
       })
     }
   }
   fn run_entry(
-    orchestrator: Arc<TxOrchestrator>,
+    buffer_pool: Arc<BufferPool>,
+    version_visibility: Arc<VersionVisibility>,
     release_c: Arc<SharedWorkThread<Pointer, Result>>,
   ) -> impl Fn(usize) -> SafeWork<Pointer, Result> {
     move |_| {
-      let orchestrator = orchestrator.clone();
+      let buffer_pool = buffer_pool.clone();
       let release_c = release_c.clone();
+      let version_visibility = version_visibility.clone();
       let work = SafeWork::no_timeout(move |pointer: Pointer| {
         let mut index = Some(pointer);
         while let Some(i) = index.take() {
-          let mut latch = orchestrator.fetch(i)?.for_write();
+          let mut latch = buffer_pool.read(i)?.for_write();
           let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
           let next = entry.get_next();
 
-          if !entry.remove_until(orchestrator.min_version()) {
+          let expired = entry.remove_until(version_visibility.min_version());
+          let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
+          if expired || modified {
+            latch.as_mut().serialize_from(&entry)?;
+          }
+          if !expired {
             index = next;
             continue;
           }
           if let Some(n) = next {
             release_c.send_no_wait(n);
           }
-          latch.as_mut().serialize_from(&entry)?;
-
           break;
         }
         Ok(())
@@ -179,29 +237,34 @@ impl GarbageCollector {
   }
 
   fn run_check(
-    orchestrator: Arc<TxOrchestrator>,
+    buffer_pool: Arc<BufferPool>,
+    version_visibility: Arc<VersionVisibility>,
     entry_c: Arc<SharedWorkThread<Pointer, Result>>,
     release_c: Arc<SharedWorkThread<Pointer, Result>>,
   ) -> impl Fn(usize) -> SafeWork<Pointer, Result<bool>> {
     move |_| {
-      let orchestrator = orchestrator.clone();
+      let buffer_pool = buffer_pool.clone();
+      let version_visibility = version_visibility.clone();
       let entry_c = entry_c.clone();
       let release_c = release_c.clone();
       let work = SafeWork::no_timeout(move |pointer: Pointer| {
-        let mut latch = orchestrator.fetch(pointer)?.for_write();
+        let mut latch = buffer_pool.read(pointer)?.for_write();
         let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
         let next = entry.get_next();
-        let (result, c) = match entry.remove_until(orchestrator.min_version()) {
-          true => (true, &release_c),
-          false => (false, &entry_c),
-        };
+
+        let expired = entry.remove_until(version_visibility.min_version());
+        let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
+
+        let result = modified || expired;
+
+        let c = (!result).then_some(&entry_c).unwrap_or(&release_c);
         if result {
           latch.as_mut().serialize_from(&entry)?;
         }
         if let Some(i) = next {
           c.send_no_wait(i);
         }
-        Ok(result)
+        Ok(entry.is_empty())
       });
       work
     }
