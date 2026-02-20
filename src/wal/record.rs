@@ -15,7 +15,7 @@ pub enum Operation {
   Start,
   Commit,
   Abort,
-  Checkpoint(usize),
+  Checkpoint(usize, usize),
   Free(usize),
 }
 impl Operation {
@@ -30,8 +30,9 @@ impl Operation {
       Operation::Start => vec![1],
       Operation::Commit => vec![2],
       Operation::Abort => vec![3],
-      Operation::Checkpoint(index) => {
+      Operation::Checkpoint(index, log_id) => {
         let mut v = vec![4];
+        v.extend_from_slice(&log_id.to_le_bytes());
         v.extend_from_slice(&index.to_le_bytes());
         v
       }
@@ -74,8 +75,8 @@ impl LogRecord {
     LogRecord::new(log_id, tx_id, Operation::Abort)
   }
 
-  pub fn new_checkpoint(log_id: usize, last_free: usize) -> Self {
-    LogRecord::new(log_id, 0, Operation::Checkpoint(last_free))
+  pub fn new_checkpoint(log_id: usize, last_free: usize, last_log_id: usize) -> Self {
+    LogRecord::new(log_id, 0, Operation::Checkpoint(last_free, last_log_id))
   }
   pub fn new_free(log_id: usize, page_index: usize) -> Self {
     LogRecord::new(log_id, 0, Operation::Free(page_index))
@@ -122,13 +123,16 @@ impl TryFrom<Vec<u8>> for LogRecord {
       2 => Operation::Commit,
       3 => Operation::Abort,
       4 => {
-        if len.lt(&25) {
+        if len.lt(&33) {
           return Err(Error::InvalidFormat);
         }
-        let index = usize::from_le_bytes(
+        let log_id = usize::from_le_bytes(
           value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
         );
-        Operation::Checkpoint(index)
+        let index = usize::from_le_bytes(
+          value[25..33].try_into().map_err(|_| Error::InvalidFormat)?,
+        );
+        Operation::Checkpoint(index, log_id)
       }
       5 => {
         if len.lt(&25) {

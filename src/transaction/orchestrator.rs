@@ -158,9 +158,10 @@ fn handle_checkpoint(
   gc: Arc<GarbageCollector>,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
+    let log_id = wal.current_log_id();
     gc.run()?;
     buffer_pool.flush()?;
-    match wal.append_checkpoint(*last_free.rl()) {
+    match wal.append_checkpoint(*last_free.rl(), log_id) {
       Ok(_) => {}
       Err(Error::WALCapacityExceeded) => {}
       Err(err) => return Err(err),

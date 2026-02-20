@@ -1,5 +1,5 @@
 use std::{
-  collections::{BTreeSet, HashMap},
+  collections::{BTreeMap, BTreeSet, HashMap},
   ops::{Add, Div},
   path::PathBuf,
   sync::{Arc, Mutex},
@@ -152,6 +152,9 @@ impl WAL {
     buffer.last_log_id += 1;
     Ok(())
   }
+  pub fn current_log_id(&self) -> usize {
+    self.buffer.l().last_log_id
+  }
 
   pub fn append_insert(
     &self,
@@ -161,8 +164,8 @@ impl WAL {
   ) -> Result {
     self.append(move |log_id| LogRecord::new_insert(log_id, tx_id, index, page.copy()))
   }
-  pub fn append_checkpoint(&self, last_free: usize) -> Result {
-    self.append(move |log_id| LogRecord::new_checkpoint(log_id, last_free))
+  pub fn append_checkpoint(&self, last_free: usize, last_log_id: usize) -> Result {
+    self.append(move |log_id| LogRecord::new_checkpoint(log_id, last_free, last_log_id))
   }
   pub fn append_start(&self, tx_id: usize) -> Result {
     self.append(move |log_id| LogRecord::new_start(log_id, tx_id))
@@ -192,7 +195,6 @@ fn replay(
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
-  let mut free = Vec::new();
 
   let mut records = vec![];
   for i in 0..len.div(WAL_BLOCK_SIZE) {
@@ -209,7 +211,21 @@ fn replay(
     log_id = record.log_id;
   }
 
+  let mut f = None;
+  let mut redo = BTreeMap::<usize, LogRecord>::new();
   for (_, record) in records {
+    tx_id = tx_id.max(record.tx_id);
+    match record.operation {
+      Operation::Checkpoint(free, log_id) => {
+        redo.split_off(&log_id);
+        f = Some(free);
+      }
+      _ => drop(redo.insert(record.log_id, record)),
+    };
+  }
+
+  let mut free = f.map(|i| vec![i]).unwrap_or_default();
+  for record in redo.into_values() {
     tx_id = tx_id.max(record.tx_id);
     match record.operation {
       Operation::Insert(i, page) => {
@@ -234,18 +250,13 @@ fn replay(
       Operation::Abort => {
         apply.remove(&record.tx_id);
       }
-      Operation::Checkpoint(index) => {
-        apply.clear();
-        commited.clear();
-        free = vec![index];
-      }
+      Operation::Checkpoint(_, _) => {}
       Operation::Free(index) => {
         free.push(index);
       }
     };
   }
 
-  commited.sort_by_key(|(i, _, _)| *i);
   let aborted = BTreeSet::from_iter(apply.into_keys());
   Ok((
     index,
