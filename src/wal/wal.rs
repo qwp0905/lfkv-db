@@ -1,5 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
+  mem::replace,
   ops::{Add, Div},
   path::PathBuf,
   sync::{Arc, Mutex},
@@ -8,39 +9,40 @@ use std::{
 
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
+use super::{LogEntry, LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{DiskController, DiskControllerConfig, Page, PagePool, PageRef, PAGE_SIZE},
   thread::{SingleWorkThread, WorkBuilder},
-  utils::{ShortenedMutex, ToArc, ToArcMutex},
-  wal::{LogEntry, LogRecord, Operation, WAL_BLOCK_SIZE},
+  utils::{ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
   Error, Result,
 };
 
 struct WALBuffer {
   last_log_id: usize,
   entry: LogEntry,
+  disk: DiskController<WAL_BLOCK_SIZE>,
 }
 
 pub struct WALConfig {
   pub path: PathBuf,
   pub max_buffer_size: usize,
   pub checkpoint_interval: Duration,
-  pub checkpoint_count: usize,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
   pub max_file_size: usize,
 }
 
 pub struct WAL {
-  disk: Arc<DiskController<WAL_BLOCK_SIZE>>,
   flush_th: SingleWorkThread<(), bool>,
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
+  checkpoint: Sender<WALSegment>,
 }
 impl WAL {
   pub fn replay(
     config: WALConfig,
+    checkpoint: Sender<WALSegment>,
   ) -> Result<(
     Self,
     usize,
@@ -56,17 +58,16 @@ impl WAL {
         write_threads: Some(3),
       },
       page_pool.clone(),
-    )?
-    .to_arc();
+    )?;
 
     let (last_index, last_log_id, last_tx_id, last_free, aborted, redo) = replay(&disk)?;
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
+      disk,
     }
     .to_arc_mutex();
     let waits = ArrayQueue::new(config.group_commit_count);
-    let disk_cloned = disk.clone();
     let buffer_cloned = buffer.clone();
     let pool_cloned = page_pool.clone();
     let flush_th = WorkBuilder::new()
@@ -83,15 +84,16 @@ impl WAL {
             }
           }
 
-          let (i, p) = entry_to_page(&pool_cloned, &buffer_cloned.l().entry);
-          if let Err(_) = disk_cloned.write(i, &p) {
+          let buffer = buffer_cloned.l();
+          let (i, p) = entry_to_page(&pool_cloned, &buffer.entry);
+          if let Err(_) = buffer.disk.write(i, &p) {
             while let Some(done) = waits.pop() {
               let _ = done.send(Ok(false));
             }
             return true;
           };
 
-          let result = disk_cloned.fsync().is_ok();
+          let result = buffer.disk.fsync().is_ok();
           while let Some(done) = waits.pop() {
             let _ = done.send(Ok(result));
           }
@@ -101,10 +103,10 @@ impl WAL {
     Ok((
       Self {
         buffer,
-        disk,
         page_pool,
         flush_th,
         max_index: config.max_file_size.div(WAL_BLOCK_SIZE),
+        checkpoint,
       },
       last_tx_id,
       last_free,
@@ -139,11 +141,24 @@ impl WAL {
     }
 
     let (i, p) = entry_to_page(&self.page_pool, &buffer.entry);
-    self.disk.write(i, &p)?;
+    buffer.disk.write(i, &p)?;
+
     let index = buffer.entry.get_index().add(1);
+
     if index == self.max_index {
       buffer.entry = LogEntry::new(0);
-      return Err(Error::WALCapacityExceeded);
+      let new_segment = DiskController::open(
+        DiskControllerConfig {
+          path: "".into(),
+          read_threads: Some(1),
+          write_threads: Some(3),
+        },
+        self.page_pool.clone(),
+      )?;
+
+      self
+        .checkpoint
+        .must_send(WALSegment::new(replace(&mut buffer.disk, new_segment)));
     }
 
     buffer.entry = LogEntry::new(index);

@@ -54,7 +54,6 @@ impl Engine {
       path: todo!(),
       max_buffer_size: todo!(),
       checkpoint_interval: todo!(),
-      checkpoint_count: todo!(),
       group_commit_delay: todo!(),
       group_commit_count: todo!(),
       max_file_size: todo!(),

@@ -29,9 +29,6 @@ pub enum Error {
   #[error("flush failed")]
   FlushFailed,
 
-  #[error("wal capacity exceeded")]
-  WALCapacityExceeded,
-
   #[error("write conflict detected")]
   WriteConflict,
 

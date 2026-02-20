@@ -26,6 +26,7 @@ pub struct DiskControllerConfig {
 }
 
 pub struct DiskController<const N: usize> {
+  path: PathBuf,
   read_ths: Arc<SharedWorkThread<(usize, PageRef<N>), std::io::Result<PageRef<N>>>>,
   write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
   flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
@@ -55,11 +56,15 @@ impl<const N: usize> DiskController<N> {
       .build(create_write_thread(&file))?
       .to_arc();
 
+    let flush_th = create_flush_thread(&file, &config.path)?.to_arc();
+    let meta_th = create_metadata_thread(&file, &config.path)?.to_arc();
+
     Ok(Self {
+      path: config.path,
       read_ths,
       write_ths,
-      flush_th: create_flush_thread(&file, &config.path)?.to_arc(),
-      meta_th: create_metadata_thread(&file, &config.path)?.to_arc(),
+      flush_th,
+      meta_th,
       page_pool,
     })
   }
@@ -87,6 +92,10 @@ impl<const N: usize> DiskController<N> {
     self.read_ths.close();
     self.flush_th.close();
     self.meta_th.close();
+  }
+
+  pub fn unlink(self) -> Result {
+    std::fs::remove_file(self.path).map_err(Error::IO)
   }
 
   pub fn len(&self) -> Result<usize> {

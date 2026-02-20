@@ -1,7 +1,5 @@
 use std::ptr::NonNull;
 
-use crate::utils::Pointer;
-
 use super::Bucket;
 
 pub struct LRUList<K, V> {
@@ -28,7 +26,7 @@ impl<K, V> LRUList<K, V> {
     self.len_ += 1;
     match &self.tail {
       Some(_) => {
-        bucket.borrow_mut().set_next(self.head);
+        unsafe { bucket.as_mut() }.set_next(self.head);
         self.head = Some(*bucket);
       }
       None => {
@@ -43,18 +41,18 @@ impl<K, V> LRUList<K, V> {
       return;
     }
 
-    let bucket = bucket.borrow_mut();
+    let bucket = unsafe { bucket.as_mut() };
     let n = bucket.set_next(None);
     let p = bucket.set_prev(None);
 
     if let Some(mut next) = &n {
-      next.borrow_mut().set_prev(p.clone());
+      unsafe { next.as_mut() }.set_prev(p.clone());
     } else {
       self.tail = p;
     }
 
     if let Some(mut prev) = &p {
-      prev.borrow_mut().set_next(n);
+      unsafe { prev.as_mut() }.set_next(n);
     } else {
       self.head = n;
     }

@@ -6,7 +6,7 @@ use std::{
 use crate::{
   buffer_pool::{BufferPool, PageSlot},
   disk::{PageScanner, PageWriter},
-  error::{Error, Result},
+  error::Result,
   serialize::{Serializable, SerializeFrom, SerializeType},
   utils::ShortenedRwLock,
   wal::WAL,
@@ -71,11 +71,7 @@ impl FreeList {
   pub fn release(&self, index: usize) -> Result {
     let page = self.buffer_pool.read(index)?;
     let mut prev = self.last_free.wl();
-    match self.wal.append_free(index) {
-      Ok(_) => {}
-      Err(Error::WALCapacityExceeded) => self.wal.append_free(index)?,
-      Err(err) => return Err(err),
-    };
+    self.wal.append_free(index)?;
     let free = FreePage::new(replace(&mut prev, index));
     page.for_write().as_mut().serialize_from(&free)?;
     Ok(())
