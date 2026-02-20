@@ -34,7 +34,7 @@ impl TxOrchestrator {
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
     let (checkpoint_queue, recv) = unbounded();
-    let (wal, last_tx_id, last_free, aborted, redo) =
+    let (wal, last_tx_id, last_free, aborted, redo, segments) =
       WAL::replay(wal_config, checkpoint_queue)?;
     let wal = wal.to_arc();
     let last_free = last_free.to_arc_rwlock();
@@ -58,6 +58,16 @@ impl TxOrchestrator {
       gc_config,
     )
     .to_arc();
+
+    let log_id = wal.current_log_id();
+    gc.run()?;
+    buffer_pool.flush()?;
+    wal.append_checkpoint(*last_free.rl(), log_id)?;
+    wal.flush()?;
+
+    for seg in segments {
+      seg.truncate()?;
+    }
 
     let checkpoint = WorkBuilder::new()
       .name("")

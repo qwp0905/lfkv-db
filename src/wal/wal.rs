@@ -53,6 +53,7 @@ impl WAL {
     usize,
     BTreeSet<usize>,
     Vec<(usize, usize, Page)>,
+    Vec<WALSegment>,
   )> {
     let page_pool = PagePool::new(1).to_arc();
     let (last_index, last_log_id, last_tx_id, last_free, aborted, redo, disk, segments) =
@@ -101,10 +102,6 @@ impl WAL {
         },
       );
 
-    for segment in segments {
-      checkpoint.must_send(segment);
-    }
-
     Ok((
       Self {
         prefix: PathBuf::from(config.base_dir).join(config.prefix),
@@ -118,6 +115,7 @@ impl WAL {
       last_free,
       aborted,
       redo,
+      segments,
     ))
   }
 
