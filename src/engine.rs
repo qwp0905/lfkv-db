@@ -70,12 +70,6 @@ impl Engine {
       interval: todo!(),
       count: todo!(),
     };
-    // let garbage_collector = GarbageCollector::start(
-    //   orchestrator.clone(),
-    //   config.gc_trigger_interval,
-    //   config.gc_trigger_count,
-    // )
-    // .to_arc();
     let orchestrator =
       TxOrchestrator::new(buffer_pool_config, wal_config, gc_config)?.to_arc();
 
