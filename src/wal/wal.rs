@@ -1,5 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
+  fs::read_dir,
   mem::replace,
   ops::{Add, Div},
   path::PathBuf,
@@ -7,6 +8,7 @@ use std::{
   time::Duration,
 };
 
+use chrono::Local;
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use super::{LogEntry, LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
@@ -24,7 +26,8 @@ struct WALBuffer {
 }
 
 pub struct WALConfig {
-  pub path: PathBuf,
+  pub base_dir: PathBuf,
+  pub prefix: PathBuf,
   pub max_buffer_size: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
@@ -33,6 +36,7 @@ pub struct WALConfig {
 }
 
 pub struct WAL {
+  prefix: PathBuf,
   flush_th: SingleWorkThread<(), bool>,
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
@@ -51,16 +55,12 @@ impl WAL {
     Vec<(usize, usize, Page)>,
   )> {
     let page_pool = PagePool::new(1).to_arc();
-    let disk = DiskController::open(
-      DiskControllerConfig {
-        path: config.path,
-        read_threads: Some(1),
-        write_threads: Some(3),
-      },
-      page_pool.clone(),
-    )?;
-
-    let (last_index, last_log_id, last_tx_id, last_free, aborted, redo) = replay(&disk)?;
+    let (last_index, last_log_id, last_tx_id, last_free, aborted, redo, disk, segments) =
+      replay(
+        config.base_dir.to_string_lossy().as_ref(),
+        config.prefix.to_string_lossy().as_ref(),
+        page_pool.clone(),
+      )?;
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
@@ -100,8 +100,14 @@ impl WAL {
           true
         },
       );
+
+    for segment in segments {
+      checkpoint.must_send(segment);
+    }
+
     Ok((
       Self {
+        prefix: PathBuf::from(config.base_dir).join(config.prefix),
         buffer,
         page_pool,
         flush_th,
@@ -149,7 +155,9 @@ impl WAL {
       buffer.entry = LogEntry::new(0);
       let new_segment = DiskController::open(
         DiskControllerConfig {
-          path: "".into(),
+          path: self
+            .prefix
+            .join(Local::now().timestamp_millis().to_string()),
           read_threads: Some(1),
           write_threads: Some(3),
         },
@@ -197,7 +205,9 @@ impl WAL {
 }
 
 fn replay(
-  wal: &DiskController<WAL_BLOCK_SIZE>,
+  base_dir: &str,
+  prefix: &str,
+  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 ) -> Result<(
   usize,
   usize,
@@ -205,38 +215,69 @@ fn replay(
   usize,
   BTreeSet<usize>,
   Vec<(usize, usize, Page)>,
+  DiskController<WAL_BLOCK_SIZE>,
+  Vec<WALSegment>,
 )> {
-  let len = wal.len()?;
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
-
-  let mut records = vec![];
-  for i in 0..len.div(WAL_BLOCK_SIZE) {
-    for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
-      records.push((i, record))
-    }
-  }
-  records.sort_by_key(|(_, r)| r.log_id);
+  let mut redo = BTreeMap::<usize, LogRecord>::new();
 
   let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
   let mut commited = Vec::<(usize, usize, Page)>::new();
-  if let Some((i, record)) = records.last() {
-    index = *i;
-    log_id = record.log_id;
+  let mut f = None;
+  let mut last_file = None;
+  let mut segments = Vec::new();
+
+  let mut files = Vec::new();
+  for file in read_dir(base_dir).map_err(Error::IO)? {
+    let file = file.map_err(Error::IO)?;
+    if !file.file_name().to_string_lossy().starts_with(prefix) {
+      continue;
+    }
+    files.push(file.path())
   }
 
-  let mut f = None;
-  let mut redo = BTreeMap::<usize, LogRecord>::new();
-  for (_, record) in records {
-    tx_id = tx_id.max(record.tx_id);
-    match record.operation {
-      Operation::Checkpoint(free, log_id) => {
-        redo.split_off(&log_id);
-        f = Some(free);
+  files.sort();
+  for path in files.into_iter() {
+    let wal = DiskController::open(
+      DiskControllerConfig {
+        path,
+        read_threads: Some(1),
+        write_threads: Some(3),
+      },
+      page_pool.clone(),
+    )?;
+
+    let len = wal.len()?;
+    let mut records = vec![];
+
+    for i in 0..len.div(WAL_BLOCK_SIZE) {
+      for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
+        records.push((i, record))
       }
-      _ => drop(redo.insert(record.log_id, record)),
-    };
+    }
+    records.sort_by_key(|(_, r)| r.log_id);
+
+    if let Some((i, record)) = records.last() {
+      index = *i;
+      log_id = record.log_id;
+    }
+
+    for (_, record) in records {
+      tx_id = tx_id.max(record.tx_id);
+      match record.operation {
+        Operation::Checkpoint(free, log_id) => {
+          redo.split_off(&log_id);
+          f = Some(free);
+        }
+        _ => drop(redo.insert(record.log_id, record)),
+      };
+    }
+
+    if let Some(last) = replace(&mut last_file, Some(wal)) {
+      segments.push(WALSegment::new(last));
+    }
   }
 
   let mut free = f.map(|i| vec![i]).unwrap_or_default();
@@ -273,6 +314,19 @@ fn replay(
   }
 
   let aborted = BTreeSet::from_iter(apply.into_keys());
+  let wal = match last_file {
+    Some(w) => w,
+    None => DiskController::open(
+      DiskControllerConfig {
+        path: PathBuf::from(base_dir)
+          .join(prefix)
+          .join(Local::now().to_string()),
+        read_threads: Some(1),
+        write_threads: Some(3),
+      },
+      page_pool.clone(),
+    )?,
+  };
   Ok((
     index,
     log_id,
@@ -280,6 +334,8 @@ fn replay(
     free.last().map(|i| *i).unwrap_or_default(),
     aborted,
     commited,
+    wal,
+    segments,
   ))
 }
 

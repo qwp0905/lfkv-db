@@ -51,12 +51,13 @@ impl Engine {
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
     let wal_config = WALConfig {
-      path: todo!(),
+      prefix: todo!(),
       max_buffer_size: todo!(),
       checkpoint_interval: todo!(),
       group_commit_delay: todo!(),
       group_commit_count: todo!(),
       max_file_size: todo!(),
+      base_dir: todo!(),
     };
     let buffer_pool_config = BufferPoolConfig {
       shard_count: todo!(),
