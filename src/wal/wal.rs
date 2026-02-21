@@ -7,13 +7,11 @@ use std::{
   time::Duration,
 };
 
-use chrono::Local;
 use crossbeam::{channel::Sender, queue::ArrayQueue};
 
-use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
+use super::{open_file, replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
-  constant::FILE_SUFFIX,
-  disk::{DiskController, DiskControllerConfig, Page, PagePool, PageRef, PAGE_SIZE},
+  disk::{DiskController, Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
   thread::{SingleWorkThread, WorkBuilder},
   utils::{ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
@@ -132,17 +130,7 @@ impl WAL {
 
     if index == self.max_index {
       buffer.entry = LogEntry::new(0);
-      let new_segment = DiskController::open(
-        DiskControllerConfig {
-          path: self
-            .prefix
-            .join(Local::now().timestamp_millis().to_string())
-            .join(FILE_SUFFIX),
-          read_threads: Some(1),
-          write_threads: Some(3),
-        },
-        self.page_pool.clone(),
-      )?;
+      let new_segment = open_file(self.prefix.clone(), self.page_pool.clone())?;
 
       self
         .checkpoint

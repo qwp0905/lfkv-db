@@ -39,6 +39,8 @@ pub fn replay(
     }
     files.push(file.path())
   }
+
+  let file_prefix = PathBuf::from(base_dir).join(prefix);
   if files.len() == 0 {
     return Ok((
       0,
@@ -47,17 +49,7 @@ pub fn replay(
       0,
       Default::default(),
       Default::default(),
-      DiskController::open(
-        DiskControllerConfig {
-          path: PathBuf::from(base_dir)
-            .join(prefix)
-            .join(Local::now().to_string())
-            .join(FILE_SUFFIX),
-          read_threads: Some(1),
-          write_threads: Some(3),
-        },
-        page_pool,
-      )?,
+      open_file(file_prefix, page_pool)?,
       Default::default(),
     ));
   }
@@ -150,16 +142,7 @@ pub fn replay(
   let mut last_index = index + 1;
   if last_index == max_index {
     last_index = 0;
-    last_file = Some(DiskController::open(
-      DiskControllerConfig {
-        path: PathBuf::from(base_dir)
-          .join(prefix)
-          .join(Local::now().to_string()),
-        read_threads: Some(1),
-        write_threads: Some(3),
-      },
-      page_pool,
-    )?)
+    last_file = Some(open_file(file_prefix, page_pool)?)
   }
 
   let wal = last_file.unwrap();
@@ -174,4 +157,18 @@ pub fn replay(
     wal,
     segments,
   ))
+}
+
+pub fn open_file(
+  mut prefix: PathBuf,
+  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
+) -> Result<DiskController<WAL_BLOCK_SIZE>> {
+  prefix.push(Local::now().timestamp_millis().to_string());
+  prefix.push(FILE_SUFFIX);
+  let config = DiskControllerConfig {
+    path: prefix,
+    read_threads: Some(1),
+    write_threads: Some(3),
+  };
+  DiskController::open(config, page_pool)
 }

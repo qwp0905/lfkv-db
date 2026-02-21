@@ -61,7 +61,9 @@ impl VersionVisibility {
     }
   }
   pub fn new_transaction(&self) -> usize {
-    self.last_tx_id.fetch_add(1, Ordering::Release)
+    let tx_id = self.last_tx_id.fetch_add(1, Ordering::Release);
+    self.inner.wl().active.insert(tx_id);
+    tx_id
   }
   pub fn current_version(&self) -> usize {
     self.last_tx_id.load(Ordering::Acquire)
