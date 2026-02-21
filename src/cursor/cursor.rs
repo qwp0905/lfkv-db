@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, mem::replace, sync::Arc};
 
 use super::{
-  CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData, TreeHeader,
-  VersionRecord, HEADER_INDEX,
+  CursorIterator, CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData,
+  TreeHeader, VersionRecord, HEADER_INDEX,
 };
 use crate::{
   buffer_pool::PageSlotWrite, serialize::SerializeFrom, transaction::TxOrchestrator,
@@ -88,7 +88,7 @@ impl Cursor {
           Err(i) => index = i,
         },
         CursorNode::Leaf(leaf) => match leaf.find(key) {
-          NodeFindResult::Found(i) => break index = i,
+          NodeFindResult::Found(_, i) => break index = i,
           NodeFindResult::Move(i) => index = i,
           NodeFindResult::NotFound(_) => return Err(Error::NotFound),
         },
@@ -160,7 +160,7 @@ impl Cursor {
           index = i;
           continue;
         }
-        NodeFindResult::Found(i) => {
+        NodeFindResult::Found(_, i) => {
           let latch = self.orchestrator.fetch(i)?.for_write();
           let entry = latch.as_ref().deserialize()?;
           return Ok((latch, entry));
@@ -314,5 +314,82 @@ impl Cursor {
 
   pub fn remove(&mut self, key: &Vec<u8>) -> Result {
     self.write_at(key, RecordData::Tombstone, false)
+  }
+
+  pub fn scan(&self, start: &Vec<u8>, end: &Vec<u8>) -> Result<CursorIterator<'_>> {
+    if self.committed {
+      return Err(Error::TransactionClosed);
+    }
+
+    let header: TreeHeader = self
+      .orchestrator
+      .fetch(HEADER_INDEX)?
+      .for_read()
+      .as_ref()
+      .deserialize()?;
+
+    let mut index = header.get_root();
+    let (leaf, pos) = loop {
+      let node: CursorNode = self
+        .orchestrator
+        .fetch(index)?
+        .for_read()
+        .as_ref()
+        .deserialize()?;
+      match node {
+        CursorNode::Internal(internal) => match internal.find(start) {
+          Ok(i) => index = i,
+          Err(i) => index = i,
+        },
+        CursorNode::Leaf(leaf) => match leaf.find(start) {
+          NodeFindResult::Found(pos, _) => break (leaf, pos),
+          NodeFindResult::Move(i) => index = i,
+          NodeFindResult::NotFound(pos) => break (leaf, pos),
+        },
+      }
+    };
+
+    Ok(CursorIterator::new(
+      self.tx_id,
+      &self.orchestrator,
+      leaf,
+      pos,
+      Some(end.clone()),
+    ))
+  }
+
+  pub fn scan_all(&self) -> Result<CursorIterator<'_>> {
+    if self.committed {
+      return Err(Error::TransactionClosed);
+    }
+
+    let header: TreeHeader = self
+      .orchestrator
+      .fetch(HEADER_INDEX)?
+      .for_read()
+      .as_ref()
+      .deserialize()?;
+
+    let mut index = header.get_root();
+    let leaf = loop {
+      let node: CursorNode = self
+        .orchestrator
+        .fetch(index)?
+        .for_read()
+        .as_ref()
+        .deserialize()?;
+      match node {
+        CursorNode::Internal(internal) => index = internal.first_child(),
+        CursorNode::Leaf(leaf) => break leaf,
+      };
+    };
+
+    Ok(CursorIterator::new(
+      self.tx_id,
+      &self.orchestrator,
+      leaf,
+      0,
+      None,
+    ))
   }
 }

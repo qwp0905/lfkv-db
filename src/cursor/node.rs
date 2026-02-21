@@ -197,7 +197,7 @@ impl InternalNode {
 }
 
 pub enum NodeFindResult {
-  Found(Pointer),
+  Found(usize, Pointer),
   Move(Pointer),
   NotFound(usize),
 }
@@ -220,7 +220,7 @@ impl LeafNode {
   }
   pub fn find(&self, key: &Key) -> NodeFindResult {
     match self.entries.binary_search_by(|(k, _)| k.cmp(key)) {
-      Ok(i) => NodeFindResult::Found(self.entries[i].1),
+      Ok(i) => NodeFindResult::Found(i, self.entries[i].1),
       Err(i) => {
         if i == self.entries.len() {
           if let Some(p) = self.next {
@@ -231,6 +231,12 @@ impl LeafNode {
         NodeFindResult::NotFound(i)
       }
     }
+  }
+  pub fn at(&self, i: usize) -> &(Key, Pointer) {
+    &self.entries[i]
+  }
+  pub fn len(&self) -> usize {
+    self.entries.len()
   }
 
   pub fn drain(&mut self) -> impl Iterator<Item = (Key, Pointer)> + use<'_> {
