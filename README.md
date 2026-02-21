@@ -9,7 +9,7 @@ A persistent, ACID-compliant key-value store built on a Blink tree index with MV
 - **Blink Tree Index** - Lock-free concurrent B-tree variant with right-link pointers for non-blocking traversal and range scans
 - **MVCC** - Snapshot isolation through version chains; readers never block writers
 - **Write-Ahead Logging** - Segment-based WAL with group commit for durability and crash recovery
-- **Buffer Pool** - LRU-based page cache with configurable capacity (defaults to 30% of system memory)
+- **Buffer Pool** - LRU-based page cache with configurable capacity
 - **Garbage Collection** - Background 4-channel pipeline that reclaims obsolete versions and freed pages
 - **Crash Recovery** - Automatic WAL replay on startup with redo of committed transactions
 
@@ -28,6 +28,7 @@ let engine = Engine::bootstrap(EngineConfig {
     gc_trigger_interval: Duration::from_secs(10),
     gc_trigger_count: 1000,
     buffer_pool_shard_count: 16,
+    buffer_pool_memory_capacity: 128 << 20,  // 128MB for buffer pool
 })?;
 
 // Start a transaction
@@ -127,7 +128,6 @@ Background pipeline that:
 | `crossbeam` | Lock-free queues, channels, scoped threads |
 | `hashbrown` | Raw hash table API for buffer pool page table |
 | `chrono` | Timestamp generation for WAL segment naming |
-| `sysinfo` | System memory detection for buffer pool sizing |
 | `thiserror` | Error type derivation |
 | `serde_json` | Log serialization |
 

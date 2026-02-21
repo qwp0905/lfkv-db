@@ -14,6 +14,7 @@ fn main() {
       gc_trigger_count: 1000,
       gc_trigger_interval: Duration::from_secs(60),
       buffer_pool_shard_count: 1,
+      buffer_pool_memory_capacity: 100 << 20,
     })
     .unwrap(),
   );

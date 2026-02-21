@@ -32,11 +32,13 @@ impl BufferPool {
       read_threads: config.read_threads,
       write_threads: config.write_threads,
     };
-    let page_pool = PagePool::new((config.capacity * 3) >> 1).to_arc();
+    let page_pool = PagePool::new(config.capacity).to_arc();
     let disk = DiskController::open(dc, page_pool.clone())?.to_arc();
 
-    let mut frame = Vec::with_capacity(config.capacity);
-    frame.resize_with(config.capacity, || RwLock::new(page_pool.acquire()));
+    let mut frame = Vec::with_capacity((config.capacity << 1) / 3);
+    frame.resize_with((config.capacity << 1) / 3, || {
+      RwLock::new(page_pool.acquire())
+    });
     Ok(Self {
       frame,
       disk,
