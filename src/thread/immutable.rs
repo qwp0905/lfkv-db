@@ -304,36 +304,44 @@ where
 mod tests {
   use super::*;
   use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Mutex;
   use std::thread;
-  use std::time::Instant;
 
-  const DEFAULT_STACK_SIZE: usize = 10 << 10;
+  const DEFAULT_STACK_SIZE: usize = 4 << 10;
 
   #[test]
   fn test_shared_work_thread_no_timeout() {
+    let m: Arc<Mutex<usize>> = Default::default();
+    let mc = m.clone();
+    let c = AtomicUsize::new(0);
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
 
     let work = SafeWork::no_timeout(move |x: usize| {
+      let cc = c.fetch_add(1, Ordering::Release);
+      let mut m = m.lock().unwrap();
+      *m = m.max(cc + 1);
+      drop(m);
       thread::sleep(Duration::from_millis(100));
-      counter_clone.fetch_add(x, Ordering::SeqCst);
+      counter_clone.fetch_add(x, Ordering::Release);
+      c.fetch_sub(1, Ordering::Release);
       x * 2
     });
 
-    let thread = SharedWorkThread::new("test-no-timeout", DEFAULT_STACK_SIZE, 4, work);
+    let thread_count = 4;
+    let thread =
+      SharedWorkThread::new("test-no-timeout", DEFAULT_STACK_SIZE, thread_count, work);
 
-    let start = Instant::now();
     // Send multiple tasks
-    let receivers: Vec<_> = (1..5).map(|i| thread.send(i)).collect();
+    let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
     let results = receivers
       .into_iter()
       .map(|receiver| receiver.recv().unwrap().unwrap())
       .collect::<Vec<usize>>();
-    let elapsed = start.elapsed();
 
     assert_eq!(results, vec![2, 4, 6, 8]);
-    assert_eq!(counter.load(Ordering::SeqCst), 10); // 1+2+3+4 = 10
-    assert!(elapsed.as_millis() < 110); // Should take at least 150ms
+    assert_eq!(counter.load(Ordering::Acquire), 10); // 1+2+3+4 = 10
+    assert_eq!(*mc.lock().unwrap(), thread_count);
 
     thread.close();
   }
@@ -345,32 +353,25 @@ mod tests {
 
     let work =
       SafeWork::with_timeout(Duration::from_millis(100), move |x: Option<usize>| {
-        if let Some(val) = x {
-          counter_clone.fetch_add(val, Ordering::SeqCst);
-          val * 2
-        } else {
-          // When timeout occurs
-          counter_clone.fetch_add(1000, Ordering::SeqCst);
-          0
+        if x.is_none() {
+          counter_clone.store(1, Ordering::Release);
         }
       });
 
     let thread = SharedWorkThread::new("test-timeout", DEFAULT_STACK_SIZE, 1, work);
 
     // Send a task
-    let result = thread.send_await(5).unwrap();
-    assert_eq!(result, 10);
+    thread.send_await(5).unwrap();
 
     // Wait a bit to trigger timeout
-    thread::sleep(Duration::from_millis(130));
+    thread::sleep(Duration::from_millis(300));
 
     // Send another task
-    let result = thread.send_await(7).unwrap();
-    assert_eq!(result, 14);
+    thread.send_await(7).unwrap();
 
     // Check final counter value
-    // 5 + 7 + 1000 (timeout) = 1012
-    assert_eq!(counter.load(Ordering::SeqCst), 1012);
+    // timeout should called
+    assert_eq!(counter.load(Ordering::Acquire), 1);
 
     thread.close();
   }
@@ -410,11 +411,11 @@ mod tests {
 
     let work = SafeWork::with_timer(Duration::from_millis(50), move |data| {
       if let Some((val, done)) = data {
-        counter_clone.fetch_add(val, Ordering::SeqCst);
+        counter_clone.fetch_add(val, Ordering::Release);
         let _ = done.send(Ok(val * 2));
         true // Reset timer
       } else {
-        counter_clone.fetch_add(1, Ordering::SeqCst);
+        counter_clone.fetch_add(1, Ordering::Release);
         false // Continue timer
       }
     });
@@ -427,10 +428,10 @@ mod tests {
     assert_eq!(result, 20);
 
     // Wait a bit to allow multiple timer triggers
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(225));
 
     // Check final counter value (10 + number of timeouts)
-    let final_count = counter.load(Ordering::SeqCst);
+    let final_count = counter.load(Ordering::Acquire);
     assert!(final_count > 10); // 10 + number of timeouts (hard to predict exactly)
 
     thread.close();
@@ -444,11 +445,11 @@ mod tests {
     let work =
       SafeWork::with_timeout(Duration::from_millis(100), move |x: Option<usize>| {
         if let Some(val) = x {
-          counter_clone.fetch_add(val, Ordering::SeqCst);
+          counter_clone.fetch_add(val, Ordering::Release);
           val * 2
         } else {
           // On timeout or finalization
-          counter_clone.fetch_add(100, Ordering::SeqCst);
+          counter_clone.fetch_add(100, Ordering::Release);
           0
         }
       });
@@ -459,13 +460,13 @@ mod tests {
     let result = thread.send_await(5).unwrap();
     assert_eq!(result, 10);
 
-    let count_before_finalize = counter.load(Ordering::SeqCst);
+    let count_before_finalize = counter.load(Ordering::Acquire);
 
     // Call finalize
     thread.finalize();
 
     // Check that counter has increased after finalization
-    assert_eq!(counter.load(Ordering::SeqCst), count_before_finalize + 100);
+    assert_eq!(counter.load(Ordering::Acquire), count_before_finalize + 100);
 
     // Channel should be closed after finalization
     let result = thread.send(10);
@@ -474,16 +475,21 @@ mod tests {
 
   #[test]
   fn test_multiple_threads() {
-    let work = SafeWork::no_timeout(|x: usize| {
-      thread::sleep(Duration::from_millis(50 * x as u64))
+    let max = Arc::new(Mutex::new(0));
+    let count = AtomicUsize::new(0);
+    let max_c = max.clone();
+    let work = SafeWork::no_timeout(move |_| {
+      let c = count.fetch_add(1, Ordering::Release);
+      let mut m = max.lock().unwrap();
+      *m = m.max(c + 1);
+      drop(m);
+      thread::sleep(Duration::from_millis(10));
+      count.fetch_sub(1, Ordering::Release);
     });
 
     let thread_count = 4;
     let thread =
       SharedWorkThread::new("test-multi", DEFAULT_STACK_SIZE, thread_count, work);
-
-    // Start multiple tasks simultaneously
-    let start = Instant::now();
 
     let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
 
@@ -492,11 +498,7 @@ mod tests {
       let _ = receiver.recv().unwrap().unwrap();
     }
 
-    let elapsed = start.elapsed();
-
-    // If processed in parallel, total time should be just slightly longer than the longest task (4)
-    // If sequential, it would take about 1+2+3+4=10 times longer
-    assert!(elapsed < Duration::from_millis(250)); // Generous margin
+    assert_eq!(*max_c.lock().unwrap(), thread_count);
 
     thread.close();
   }

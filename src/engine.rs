@@ -93,7 +93,7 @@ impl Drop for Engine {
     if let Ok(_) =
       self
         .available
-        .compare_exchange(true, false, Ordering::Acquire, Ordering::Acquire)
+        .compare_exchange(true, false, Ordering::Release, Ordering::Acquire)
     {
       if let Err(err) = self.orchestrator.close() {
         logger::error(err);
