@@ -66,7 +66,7 @@ impl BufferPool {
       return Ok(cached);
     }
 
-    self.disk.write(index, &prev)?;
+    self.disk.write(evicted_index, &prev)?;
     Ok(cached)
   }
 
