@@ -2,6 +2,17 @@ use std::process::Command;
 
 const COV_DIR: &str = "./coverage/";
 
+fn remove_profraw() {
+  // Clean up profraw files
+  let paths = std::fs::read_dir(".").expect("failed to read directory.");
+  for path in paths
+    .map(|p| p.unwrap().path())
+    .filter(|p| p.extension().map_or(false, |ext| ext == "profraw"))
+  {
+    std::fs::remove_file(path).expect("failed to remove profraw file");
+  }
+}
+
 #[test]
 #[ignore]
 fn create_coverage() {
@@ -21,6 +32,7 @@ fn create_coverage() {
     .status()
     .expect("failed to run tests.");
   if !status.success() {
+    remove_profraw();
     panic!("failed to run tests.");
   }
 
@@ -49,14 +61,5 @@ fn create_coverage() {
   }
 
   println!("Coverage report generated.");
-
-  // Clean up profraw files
-  let paths = std::fs::read_dir(".").expect("failed to read directory.");
-  for path in paths {
-    let path = path.unwrap().path();
-    if path.extension().map_or(true, |ext| ext != "profraw") {
-      continue;
-    }
-    std::fs::remove_file(path).expect("failed to remove profraw file");
-  }
+  remove_profraw();
 }

@@ -307,6 +307,8 @@ mod tests {
   use std::thread;
   use std::time::Instant;
 
+  const DEFAULT_STACK_SIZE: usize = 10 << 10;
+
   #[test]
   fn test_shared_work_thread_no_timeout() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -318,7 +320,7 @@ mod tests {
       x * 2
     });
 
-    let thread = SharedWorkThread::new("test-no-timeout", 8192, 4, work);
+    let thread = SharedWorkThread::new("test-no-timeout", DEFAULT_STACK_SIZE, 4, work);
 
     let start = Instant::now();
     // Send multiple tasks
@@ -353,7 +355,7 @@ mod tests {
         }
       });
 
-    let thread = SharedWorkThread::new("test-timeout", 8192, 1, work);
+    let thread = SharedWorkThread::new("test-timeout", DEFAULT_STACK_SIZE, 1, work);
 
     // Send a task
     let result = thread.send_await(5).unwrap();
@@ -382,7 +384,7 @@ mod tests {
       x * 2
     });
 
-    let thread = SharedWorkThread::new("test-panic", 8192, 1, work);
+    let thread = SharedWorkThread::new("test-panic", DEFAULT_STACK_SIZE, 1, work);
 
     // Normal case
     let result = thread.send_await(10);
@@ -417,7 +419,7 @@ mod tests {
       }
     });
 
-    let thread = SharedWorkThread::new("test-timer", 8192, 1, work);
+    let thread = SharedWorkThread::new("test-timer", DEFAULT_STACK_SIZE, 1, work);
 
     // Send a task
     let receiver = thread.send(10);
@@ -451,7 +453,7 @@ mod tests {
         }
       });
 
-    let thread = SharedWorkThread::new("test-finalize", 8192, 1, work);
+    let thread = SharedWorkThread::new("test-finalize", DEFAULT_STACK_SIZE, 1, work);
 
     // Send a task
     let result = thread.send_await(5).unwrap();
@@ -477,7 +479,8 @@ mod tests {
     });
 
     let thread_count = 4;
-    let thread = SharedWorkThread::new("test-multi", 8192, thread_count, work);
+    let thread =
+      SharedWorkThread::new("test-multi", DEFAULT_STACK_SIZE, thread_count, work);
 
     // Start multiple tasks simultaneously
     let start = Instant::now();
