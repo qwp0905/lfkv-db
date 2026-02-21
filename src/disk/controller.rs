@@ -1,5 +1,5 @@
 use std::{
-  fs::{Metadata, OpenOptions},
+  fs::{remove_file, Metadata, OpenOptions},
   ops::{Div, Mul},
   path::PathBuf,
   sync::Arc,
@@ -95,7 +95,7 @@ impl<const N: usize> DiskController<N> {
   }
 
   pub fn unlink(self) -> Result {
-    std::fs::remove_file(self.path).map_err(Error::IO)
+    remove_file(self.path).map_err(Error::IO)
   }
 
   pub fn len(&self) -> Result<usize> {
