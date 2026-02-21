@@ -129,8 +129,7 @@ Background pipeline that:
 | `chrono` | Timestamp generation for WAL segment naming |
 | `sysinfo` | System memory detection for buffer pool sizing |
 | `thiserror` | Error type derivation |
-| `serde_json` | Record serialization |
-| `libc` | Direct `fsync` / `fdatasync` calls |
+| `serde_json` | Log serialization |
 
 ## License
 
