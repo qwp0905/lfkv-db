@@ -27,7 +27,6 @@ struct WALBuffer {
 pub struct WALConfig {
   pub base_dir: PathBuf,
   pub prefix: PathBuf,
-  pub max_buffer_size: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
@@ -136,7 +135,8 @@ impl WAL {
         DiskControllerConfig {
           path: self
             .prefix
-            .join(Local::now().timestamp_millis().to_string()),
+            .join(Local::now().timestamp_millis().to_string())
+            .join(".db"),
           read_threads: Some(1),
           write_threads: Some(3),
         },

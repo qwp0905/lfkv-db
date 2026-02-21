@@ -12,10 +12,11 @@ use sysinfo::System;
 
 use crate::{
   buffer_pool::BufferPoolConfig,
+  cursor::{initialize, Cursor, GarbageCollectionConfig},
+  error::{Error, Result},
   transaction::TxOrchestrator,
   utils::{logger, ToArc},
   wal::WALConfig,
-  Cursor, Error, GarbageCollectionConfig, Result,
 };
 
 pub struct EngineConfig<T>
@@ -25,16 +26,15 @@ where
   pub base_path: T,
   pub disk_batch_delay: Duration,
   pub disk_batch_size: usize,
-  pub defragmentation_interval: Duration,
   pub wal_file_size: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
   pub gc_trigger_interval: Duration,
   pub gc_trigger_count: usize,
+  pub buffer_pool_shard_count: usize,
 }
 
-const WAL_PATH: &str = "wal.db";
 const DISK_PATH: &str = "data.db";
 
 pub struct Engine {
@@ -51,29 +51,28 @@ impl Engine {
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
     let wal_config = WALConfig {
-      prefix: todo!(),
-      max_buffer_size: todo!(),
-      checkpoint_interval: todo!(),
-      group_commit_delay: todo!(),
-      group_commit_count: todo!(),
-      max_file_size: todo!(),
-      base_dir: todo!(),
+      prefix: "wal".into(),
+      checkpoint_interval: config.checkpoint_interval,
+      group_commit_delay: config.group_commit_delay,
+      group_commit_count: config.group_commit_count,
+      max_file_size: config.wal_file_size,
+      base_dir: config.base_path.as_ref().into(),
     };
     let buffer_pool_config = BufferPoolConfig {
-      shard_count: todo!(),
-      capacity: todo!(),
-      path: todo!(),
-      read_threads: todo!(),
-      write_threads: todo!(),
+      shard_count: config.buffer_pool_shard_count,
+      capacity: mem_size * 3 / 10,
+      path: config.base_path.as_ref().join(DISK_PATH),
+      read_threads: None,
+      write_threads: None,
     };
     let gc_config = GarbageCollectionConfig {
-      interval: todo!(),
-      count: todo!(),
+      interval: config.gc_trigger_interval,
+      count: config.gc_trigger_count,
     };
     let orchestrator =
       TxOrchestrator::new(buffer_pool_config, wal_config, gc_config)?.to_arc();
 
-    Cursor::initialize(orchestrator.clone())?;
+    initialize(orchestrator.clone())?;
 
     let engine = Self {
       orchestrator,
