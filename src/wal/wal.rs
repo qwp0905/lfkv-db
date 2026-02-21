@@ -12,10 +12,11 @@ use crossbeam::{channel::Sender, queue::ArrayQueue};
 
 use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
+  constant::FILE_SUFFIX,
   disk::{DiskController, DiskControllerConfig, Page, PagePool, PageRef, PAGE_SIZE},
+  error::{Error, Result},
   thread::{SingleWorkThread, WorkBuilder},
   utils::{ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
-  Error, Result,
 };
 
 struct WALBuffer {
@@ -136,7 +137,7 @@ impl WAL {
           path: self
             .prefix
             .join(Local::now().timestamp_millis().to_string())
-            .join(".db"),
+            .join(FILE_SUFFIX),
           read_threads: Some(1),
           write_threads: Some(3),
         },

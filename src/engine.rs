@@ -10,6 +10,7 @@ use std::{
 
 use sysinfo::System;
 
+use super::constant::{DATA_PATH, FILE_SUFFIX};
 use crate::{
   buffer_pool::BufferPoolConfig,
   cursor::{initialize, Cursor, GarbageCollectionConfig},
@@ -25,7 +26,6 @@ where
 {
   pub base_path: T,
   pub disk_batch_delay: Duration,
-  pub disk_batch_size: usize,
   pub wal_file_size: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
@@ -34,8 +34,6 @@ where
   pub gc_trigger_count: usize,
   pub buffer_pool_shard_count: usize,
 }
-
-const DISK_PATH: &str = "data.db";
 
 pub struct Engine {
   orchestrator: Arc<TxOrchestrator>,
@@ -61,7 +59,7 @@ impl Engine {
     let buffer_pool_config = BufferPoolConfig {
       shard_count: config.buffer_pool_shard_count,
       capacity: mem_size * 3 / 10,
-      path: config.base_path.as_ref().join(DISK_PATH),
+      path: config.base_path.as_ref().join(DATA_PATH).join(FILE_SUFFIX),
       read_threads: None,
       write_threads: None,
     };

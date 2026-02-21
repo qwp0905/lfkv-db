@@ -11,6 +11,7 @@ use chrono::Local;
 
 use super::{LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
+  constant::FILE_SUFFIX,
   disk::{DiskController, DiskControllerConfig, Page, PagePool},
   Error, Result,
 };
@@ -50,7 +51,8 @@ pub fn replay(
         DiskControllerConfig {
           path: PathBuf::from(base_dir)
             .join(prefix)
-            .join(Local::now().to_string()),
+            .join(Local::now().to_string())
+            .join(FILE_SUFFIX),
           read_threads: Some(1),
           write_threads: Some(3),
         },

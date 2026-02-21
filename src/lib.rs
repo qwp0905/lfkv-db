@@ -20,3 +20,5 @@ pub use error::*;
 mod utils;
 
 mod disk;
+
+mod constant;
