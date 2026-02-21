@@ -269,4 +269,11 @@ impl GarbageCollector {
       work
     }
   }
+
+  pub fn close(&self) {
+    self.main.close();
+    self.check.close();
+    self.entry.close();
+    self.release.close();
+  }
 }

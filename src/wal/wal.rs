@@ -69,38 +69,13 @@ impl WAL {
       disk,
     }
     .to_arc_mutex();
-    let waits = ArrayQueue::new(config.group_commit_count);
-    let buffer_cloned = buffer.clone();
-    let pool_cloned = page_pool.clone();
     let flush_th = WorkBuilder::new()
       .name("wal flush")
       .stack_size(1)
       .single()
       .with_timer(
         config.group_commit_delay,
-        move |v: Option<((), Sender<Result<bool>>)>| {
-          if let Some((_, done)) = v {
-            let _ = waits.push(done);
-            if !waits.is_full() {
-              return false;
-            }
-          }
-
-          let buffer = buffer_cloned.l();
-          let (i, p) = entry_to_page(&pool_cloned, &buffer.entry);
-          if let Err(_) = buffer.disk.write(i, &p) {
-            while let Some(done) = waits.pop() {
-              let _ = done.send(Ok(false));
-            }
-            return true;
-          };
-
-          let result = buffer.disk.fsync().is_ok();
-          while let Some(done) = waits.pop() {
-            let _ = done.send(Ok(result));
-          }
-          true
-        },
+        handle_flush(config.group_commit_count, buffer.clone(), page_pool.clone()),
       );
 
     Ok((
@@ -126,6 +101,11 @@ impl WAL {
       .send_await(())?
       .then(|| Ok(()))
       .unwrap_or(Err(Error::FlushFailed))
+  }
+
+  pub fn close(&self) {
+    self.flush_th.close();
+    self.buffer.l().disk.close();
   }
 
   #[inline]
@@ -210,4 +190,35 @@ fn entry_to_page(
   let mut page = page_pool.acquire();
   let _ = page.as_mut().writer().write(buffer.as_ref());
   (buffer.get_index(), page)
+}
+
+fn handle_flush(
+  count: usize,
+  buffer: Arc<Mutex<WALBuffer>>,
+  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
+) -> impl Fn(Option<((), Sender<Result<bool>>)>) -> bool {
+  let waits = ArrayQueue::new(count);
+  move |v: Option<((), Sender<Result<bool>>)>| {
+    if let Some((_, done)) = v {
+      let _ = waits.push(done);
+      if !waits.is_full() {
+        return false;
+      }
+    }
+
+    let buffer = buffer.l();
+    let (i, p) = entry_to_page(&page_pool, &buffer.entry);
+    if let Err(_) = buffer.disk.write(i, &p) {
+      while let Some(done) = waits.pop() {
+        let _ = done.send(Ok(false));
+      }
+      return true;
+    };
+
+    let result = buffer.disk.fsync().is_ok();
+    while let Some(done) = waits.pop() {
+      let _ = done.send(Ok(result));
+    }
+    true
+  }
 }

@@ -100,9 +100,9 @@ impl Drop for Engine {
         .available
         .compare_exchange(true, false, Ordering::Acquire, Ordering::Acquire)
     {
-      // self.wal.before_shutdown();
-      // self.buffer_pool.before_shutdown();
-      // self.freelist.before_shutdown();
+      if let Err(err) = self.orchestrator.close() {
+        logger::error(err);
+      };
     }
   }
 }

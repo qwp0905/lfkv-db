@@ -21,6 +21,7 @@ pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   checkpoint: Arc<SingleWorkThread<(), Result>>,
+  last_free: Arc<RwLock<usize>>,
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
@@ -76,7 +77,7 @@ impl TxOrchestrator {
       .no_timeout(handle_checkpoint(
         wal.clone(),
         buffer_pool.clone(),
-        last_free,
+        last_free.clone(),
         gc.clone(),
         recv,
         checkpoint_interval,
@@ -87,6 +88,7 @@ impl TxOrchestrator {
       checkpoint,
       wal,
       free_list,
+      last_free,
       buffer_pool,
       version_visibility,
       gc,
@@ -147,6 +149,20 @@ impl TxOrchestrator {
   }
   pub fn is_disk_empty(&self) -> Result<bool> {
     self.buffer_pool.is_empty()
+  }
+
+  pub fn close(&self) -> Result {
+    self.checkpoint.close();
+    run_checkpoint(
+      None,
+      &self.wal,
+      &self.buffer_pool,
+      &self.last_free,
+      &self.gc,
+    )?;
+    self.buffer_pool.close();
+    self.wal.close();
+    Ok(())
   }
 }
 

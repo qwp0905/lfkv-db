@@ -3,7 +3,8 @@ use std::{
   sync::{Mutex, MutexGuard},
 };
 
-use crate::{buffer_pool::lru::LRUShard, utils::ShortenedMutex};
+use super::LRUShard;
+use crate::utils::ShortenedMutex;
 
 struct Shard {
   lru: LRUShard<usize, usize>,

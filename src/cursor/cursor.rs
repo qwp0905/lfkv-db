@@ -393,3 +393,12 @@ impl Cursor {
     ))
   }
 }
+impl Drop for Cursor {
+  fn drop(&mut self) {
+    if self.committed {
+      return;
+    }
+
+    let _ = self.abort();
+  }
+}

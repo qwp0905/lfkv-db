@@ -4,11 +4,11 @@ use std::{
   sync::{Arc, RwLock},
 };
 
+use super::{LRUTable, PageSlot};
 use crate::{
-  buffer_pool::{table::LRUTable, PageSlot},
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
+  error::Result,
   utils::{Bitmap, ShortenedRwLock, ToArc},
-  Result,
 };
 
 pub struct BufferPoolConfig {
@@ -74,10 +74,15 @@ impl BufferPool {
       self.disk.write(self.table.get_index(id), &page)?;
       self.dirty.remove(id);
     }
+    self.disk.fsync()?;
     Ok(())
   }
 
   pub fn is_empty(&self) -> Result<bool> {
     Ok(self.disk.len()? == 0)
+  }
+
+  pub fn close(&self) {
+    self.disk.close();
   }
 }
