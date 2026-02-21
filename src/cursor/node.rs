@@ -124,7 +124,7 @@ pub struct InternalNode {
   right: Option<(Pointer, Key)>,
 }
 impl InternalNode {
-  pub fn inialialize(key: Key, left: Pointer, right: Pointer) -> Self {
+  pub fn initialize(key: Key, left: Pointer, right: Pointer) -> Self {
     Self::new(vec![key], vec![left, right], None)
   }
   fn new(keys: Vec<Key>, children: Vec<Pointer>, right: Option<(Pointer, Key)>) -> Self {

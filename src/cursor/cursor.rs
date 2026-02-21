@@ -236,7 +236,7 @@ impl Cursor {
     let new_root_index = {
       let mut new_root_page = self.orchestrator.alloc()?.for_write();
       let new_root =
-        InternalNode::inialialize(split_key, header.get_root(), split_pointer);
+        InternalNode::initialize(split_key, header.get_root(), split_pointer);
       new_root_page
         .as_mut()
         .serialize_from(&CursorNode::Internal(new_root))?;
