@@ -37,9 +37,9 @@ impl<K, V> Bucket<K, V> {
   pub fn get_value(&self) -> &V {
     &self.value
   }
-  pub fn get_value_mut(&mut self) -> &mut V {
-    &mut self.value
-  }
+  // pub fn get_value_mut(&mut self) -> &mut V {
+  //   &mut self.value
+  // }
 
   pub fn set_value(&mut self, value: V) -> V {
     replace(&mut self.value, value)
@@ -49,9 +49,9 @@ impl<K, V> Bucket<K, V> {
     &self.key
   }
 
-  pub fn take_value(self) -> V {
-    self.value
-  }
+  // pub fn take_value(self) -> V {
+  //   self.value
+  // }
   pub fn take(self) -> (K, V) {
     (self.key, self.value)
   }

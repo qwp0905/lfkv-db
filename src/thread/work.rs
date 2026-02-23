@@ -6,6 +6,7 @@ use crate::{error::Result, utils::logger};
 
 pub enum Context<T, R> {
   Work((T, Sender<Result<R>>)),
+  #[allow(unused)]
   Finalize,
   Term,
 }

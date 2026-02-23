@@ -16,11 +16,11 @@ impl<K, V> LRUList<K, V> {
     }
   }
 
-  pub fn clear(&mut self) {
-    self.head = None;
-    self.tail = None;
-    self.len_ = 0;
-  }
+  // pub fn clear(&mut self) {
+  //   self.head = None;
+  //   self.tail = None;
+  //   self.len_ = 0;
+  // }
 
   pub fn push_head(&mut self, bucket: &mut NonNull<Bucket<K, V>>) {
     self.len_ += 1;

@@ -269,6 +269,7 @@ where
     Self(SharedWorkThread::new(name, size, 1, work))
   }
 
+  #[allow(unused)]
   pub fn build<S: ToString, F, E>(
     name: S,
     size: usize,
@@ -296,6 +297,7 @@ where
     self.0.close();
   }
 
+  #[allow(unused)]
   pub fn finalize(&self) {
     self.0.finalize();
   }

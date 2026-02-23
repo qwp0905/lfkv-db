@@ -43,12 +43,12 @@ impl<K, V> LRUShard<K, V> {
     }
   }
 
-  pub fn clear(&mut self) {
-    self.old_entries.clear();
-    self.old_sub_list.clear();
-    self.new_entries.clear();
-    self.new_sub_list.clear();
-  }
+  // pub fn clear(&mut self) {
+  //   self.old_entries.clear();
+  //   self.old_sub_list.clear();
+  //   self.new_entries.clear();
+  //   self.new_sub_list.clear();
+  // }
 }
 impl<K, V> LRUShard<K, V>
 where
@@ -86,35 +86,35 @@ where
   {
     Some(self.get_bucket(key, hash, hasher)?.get_value())
   }
-  pub fn get_mut<Q: ?Sized, S>(
-    &mut self,
-    key: &Q,
-    hash: u64,
-    hasher: &S,
-  ) -> Option<&mut V>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq,
-    S: BuildHasher,
-  {
-    Some(self.get_bucket(key, hash, hasher)?.get_value_mut())
-  }
+  // pub fn get_mut<Q: ?Sized, S>(
+  //   &mut self,
+  //   key: &Q,
+  //   hash: u64,
+  //   hasher: &S,
+  // ) -> Option<&mut V>
+  // where
+  //   K: Borrow<Q>,
+  //   Q: Hash + Eq,
+  //   S: BuildHasher,
+  // {
+  //   Some(self.get_bucket(key, hash, hasher)?.get_value_mut())
+  // }
 
-  pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq,
-  {
-    if let Some(bucket) = self.new_entries.get(hash, equivalent(key)) {
-      return Some(unsafe { bucket.as_ref() }.get_value());
-    }
+  // pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>
+  // where
+  //   K: Borrow<Q>,
+  //   Q: Hash + Eq,
+  // {
+  //   if let Some(bucket) = self.new_entries.get(hash, equivalent(key)) {
+  //     return Some(unsafe { bucket.as_ref() }.get_value());
+  //   }
 
-    let bucket = match self.old_entries.get(hash, equivalent(key)) {
-      Some(b) => b,
-      None => return None,
-    };
-    Some(unsafe { bucket.as_ref() }.get_value())
-  }
+  //   let bucket = match self.old_entries.get(hash, equivalent(key)) {
+  //     Some(b) => b,
+  //     None => return None,
+  //   };
+  //   Some(unsafe { bucket.as_ref() }.get_value())
+  // }
 
   fn rebalance<S>(&mut self, hasher: &S)
   where
@@ -174,36 +174,36 @@ where
     None
   }
 
-  pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq,
-    S: BuildHasher,
-  {
-    if let Some(mut bucket) = self.new_entries.remove_entry(hash, equivalent(key)) {
-      self.new_sub_list.remove(&mut bucket);
-      let taken = unsafe { Box::from_raw(bucket.as_ptr()) };
-      return Some(taken.take_value());
-    }
+  // pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>
+  // where
+  //   K: Borrow<Q>,
+  //   Q: Hash + Eq,
+  //   S: BuildHasher,
+  // {
+  //   if let Some(mut bucket) = self.new_entries.remove_entry(hash, equivalent(key)) {
+  //     self.new_sub_list.remove(&mut bucket);
+  //     let taken = unsafe { Box::from_raw(bucket.as_ptr()) };
+  //     return Some(taken.take_value());
+  //   }
 
-    let mut bucket = match self.old_entries.remove_entry(hash, equivalent(key)) {
-      Some(bucket) => bucket,
-      None => return None,
-    };
-    self.old_sub_list.remove(&mut bucket);
-    self.rebalance(hasher);
-    let bucket = unsafe { Box::from_raw(bucket.as_ptr()) };
-    Some(bucket.take_value())
-  }
+  //   let mut bucket = match self.old_entries.remove_entry(hash, equivalent(key)) {
+  //     Some(bucket) => bucket,
+  //     None => return None,
+  //   };
+  //   self.old_sub_list.remove(&mut bucket);
+  //   self.rebalance(hasher);
+  //   let bucket = unsafe { Box::from_raw(bucket.as_ptr()) };
+  //   Some(bucket.take_value())
+  // }
 
-  pub fn has<Q: ?Sized>(&self, key: &Q, hash: u64) -> bool
-  where
-    K: Borrow<Q>,
-    Q: Hash + Eq,
-  {
-    self.new_entries.find(hash, equivalent(key)).is_some()
-      || self.old_entries.find(hash, equivalent(key)).is_some()
-  }
+  // pub fn has<Q: ?Sized>(&self, key: &Q, hash: u64) -> bool
+  // where
+  //   K: Borrow<Q>,
+  //   Q: Hash + Eq,
+  // {
+  //   self.new_entries.find(hash, equivalent(key)).is_some()
+  //     || self.old_entries.find(hash, equivalent(key)).is_some()
+  // }
 
   pub fn len(&self) -> usize {
     self.new_entries.len() + self.old_entries.len()
