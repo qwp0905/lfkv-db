@@ -1,36 +1,80 @@
 use std::{
-  fs::{remove_file, Metadata, OpenOptions},
+  fs::{remove_file, File, Metadata, OpenOptions},
   ops::{Div, Mul},
   path::PathBuf,
   sync::Arc,
 };
 
+use super::{Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
-  disk::{Page, PagePool, PageRef},
-  thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
+  error::{Error, Result},
+  thread::{SafeWork, SharedWorkThread, WorkBuilder},
   utils::ToArc,
-  Error, Result,
 };
 
-use super::{
-  create_flush_thread, create_metadata_thread, create_read_thread, create_write_thread,
-};
+enum DiskOperation<const N: usize> {
+  Read(u64, PageRef<N>),
+  Write(u64, Page<N>),
+  Flush,
+  Metadata,
+}
+enum OperationResult<const N: usize> {
+  Read(PageRef<N>),
+  Write,
+  Flush,
+  Metadata(Metadata),
+}
+impl<const N: usize> OperationResult<N> {
+  fn as_read(self) -> PageRef<N> {
+    match self {
+      OperationResult::Read(page) => page,
+      _ => unreachable!(),
+    }
+  }
+  fn as_meta(self) -> Metadata {
+    match self {
+      OperationResult::Metadata(meta) => meta,
+      _ => unreachable!(),
+    }
+  }
+}
 
-const DEFAULT_READ_THREADS: usize = 3;
-const DEFAULT_WRITE_THREADS: usize = 3;
+fn create_thread<'a, const N: usize>(
+  file: &'a File,
+) -> impl Fn(usize) -> Result<SafeWork<DiskOperation<N>, std::io::Result<OperationResult<N>>>>
+     + use<'a, N> {
+  |_| {
+    let fd = file.try_clone().map_err(Error::IO)?;
+    let work = SafeWork::no_timeout(move |operation: DiskOperation<N>| match operation {
+      DiskOperation::Read(offset, mut page) => {
+        fd.pread(page.as_mut().as_mut(), offset)?;
+        Ok(OperationResult::Read(page))
+      }
+      DiskOperation::Write(offset, page) => {
+        fd.pwrite(page.as_ref(), offset)?;
+        Ok(OperationResult::Write)
+      }
+      DiskOperation::Flush => {
+        fd.sync_all()?;
+        Ok(OperationResult::Flush)
+      }
+      DiskOperation::Metadata => Ok(OperationResult::Metadata(fd.metadata()?)),
+    });
+    Ok(work)
+  }
+}
+
+const DEFAULT_THREADS: usize = 3;
 
 pub struct DiskControllerConfig {
   pub path: PathBuf,
-  pub read_threads: Option<usize>,
-  pub write_threads: Option<usize>,
+  pub thread_count: Option<usize>,
 }
 
 pub struct DiskController<const N: usize> {
   path: PathBuf,
-  read_ths: Arc<SharedWorkThread<(usize, PageRef<N>), std::io::Result<PageRef<N>>>>,
-  write_ths: Arc<SharedWorkThread<(usize, Page<N>), std::io::Result<()>>>,
-  flush_th: Arc<SingleWorkThread<(), std::io::Result<()>>>,
-  meta_th: Arc<SingleWorkThread<(), std::io::Result<Metadata>>>,
+  background:
+    Arc<SharedWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
   page_pool: Arc<PagePool<N>>,
 }
 impl<const N: usize> DiskController<N> {
@@ -42,67 +86,54 @@ impl<const N: usize> DiskController<N> {
       .open(&config.path)
       .map_err(Error::IO)?;
 
-    let read_ths = WorkBuilder::new()
-      .name(format!("read {}", config.path.to_string_lossy()))
+    let background = WorkBuilder::new()
+      .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N.mul(150))
-      .shared(config.read_threads.unwrap_or(DEFAULT_READ_THREADS))
-      .build(create_read_thread(&file))?
-      .to_arc();
-
-    let write_ths = WorkBuilder::new()
-      .name(format!("write {}", config.path.to_string_lossy()))
-      .stack_size(N.mul(150))
-      .shared(config.write_threads.unwrap_or(DEFAULT_WRITE_THREADS))
-      .build(create_write_thread(&file))?
-      .to_arc();
-
-    let flush_th = WorkBuilder::new()
-      .name(format!("flush {}", config.path.to_string_lossy()))
-      .stack_size(1)
-      .single()
-      .no_timeout(create_flush_thread(&file)?)
-      .to_arc();
-
-    let meta_th = WorkBuilder::new()
-      .name(format!("flush {}", config.path.to_string_lossy()))
-      .stack_size(1)
-      .single()
-      .no_timeout(create_metadata_thread(&file)?)
+      .shared(config.thread_count.unwrap_or(DEFAULT_THREADS))
+      .build(create_thread(&file))?
       .to_arc();
 
     Ok(Self {
       path: config.path,
-      read_ths,
-      write_ths,
-      flush_th,
-      meta_th,
+      background,
       page_pool,
     })
   }
 
   pub fn read(&self, index: usize) -> Result<PageRef<N>> {
-    self
-      .read_ths
-      .send_await((index, self.page_pool.acquire()))?
-      .map_err(Error::IO)
+    Ok(
+      self
+        .background
+        .send_await(DiskOperation::Read(
+          (index * N) as u64,
+          self.page_pool.acquire(),
+        ))?
+        .map_err(Error::IO)?
+        .as_read(),
+    )
   }
 
   pub fn write<'a>(&self, index: usize, page: &'a PageRef<N>) -> Result {
     self
-      .write_ths
-      .send_await((index, page.as_ref().copy()))?
-      .map_err(Error::IO)
+      .background
+      .send_await(DiskOperation::Write(
+        (index * N) as u64,
+        page.as_ref().copy(),
+      ))?
+      .map_err(Error::IO)?;
+    Ok(())
   }
 
   pub fn fsync(&self) -> Result {
-    self.flush_th.send_await(())?.map_err(Error::IO)
+    self
+      .background
+      .send_await(DiskOperation::Flush)?
+      .map_err(Error::IO)?;
+    Ok(())
   }
 
   pub fn close(&self) {
-    self.write_ths.close();
-    self.read_ths.close();
-    self.flush_th.close();
-    self.meta_th.close();
+    self.background.close();
   }
 
   pub fn unlink(self) -> Result {
@@ -110,7 +141,11 @@ impl<const N: usize> DiskController<N> {
   }
 
   pub fn len(&self) -> Result<usize> {
-    let meta = self.meta_th.send_await(())?.map_err(Error::IO)?;
+    let meta = self
+      .background
+      .send_await(DiskOperation::Metadata)?
+      .map_err(Error::IO)?
+      .as_meta();
     Ok((meta.len() as usize).div(N))
   }
 }
@@ -129,8 +164,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      read_threads: None,
-      write_threads: None,
+      thread_count: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
@@ -163,8 +197,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      read_threads: None,
-      write_threads: None,
+      thread_count: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool)?;
@@ -182,8 +215,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      read_threads: None,
-      write_threads: None,
+      thread_count: None,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let co = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
@@ -214,8 +246,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      read_threads: Some(8),
-      write_threads: Some(8),
+      thread_count: Some(10),
     };
     let page_pool = Arc::new(PagePool::new(16));
 
@@ -292,8 +323,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      read_threads: None,
-      write_threads: None,
+      thread_count: Some(10),
     };
     let page_pool = Arc::new(PagePool::new(16));
 

@@ -58,8 +58,7 @@ impl Engine {
       shard_count: config.buffer_pool_shard_count,
       capacity: config.buffer_pool_memory_capacity / PAGE_SIZE,
       path: config.base_path.as_ref().join(DATA_PATH).join(FILE_SUFFIX),
-      read_threads: None,
-      write_threads: None,
+      io_thread_count: None,
     };
     let gc_config = GarbageCollectionConfig {
       interval: config.gc_trigger_interval,

@@ -15,8 +15,7 @@ pub struct BufferPoolConfig {
   pub shard_count: usize,
   pub capacity: usize,
   pub path: PathBuf,
-  pub read_threads: Option<usize>,
-  pub write_threads: Option<usize>,
+  pub io_thread_count: Option<usize>,
 }
 
 pub struct BufferPool {
@@ -29,8 +28,7 @@ impl BufferPool {
   pub fn open(config: BufferPoolConfig) -> Result<Self> {
     let dc = DiskControllerConfig {
       path: config.path,
-      read_threads: config.read_threads,
-      write_threads: config.write_threads,
+      thread_count: config.io_thread_count,
     };
     let page_pool = PagePool::new(config.capacity).to_arc();
     let disk = DiskController::open(dc, page_pool.clone())?.to_arc();

@@ -70,8 +70,7 @@ pub fn replay(
     let wal = DiskController::open(
       DiskControllerConfig {
         path,
-        read_threads: Some(1),
-        write_threads: Some(3),
+        thread_count: Some(3),
       },
       page_pool.clone(),
     )?;
@@ -167,8 +166,7 @@ pub fn open_file(
   prefix.push(FILE_SUFFIX);
   let config = DiskControllerConfig {
     path: prefix,
-    read_threads: Some(1),
-    write_threads: Some(3),
+    thread_count: Some(3),
   };
   DiskController::open(config, page_pool)
 }
