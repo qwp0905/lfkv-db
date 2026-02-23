@@ -13,6 +13,7 @@ use super::{LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   constant::FILE_SUFFIX,
   disk::{DiskController, DiskControllerConfig, Page, PagePool},
+  utils::logger,
   Error, Result,
 };
 
@@ -42,6 +43,7 @@ pub fn replay(
 
   let file_prefix = PathBuf::from(base_dir).join(prefix);
   if files.len() == 0 {
+    logger::info("previous wal segment not found.");
     return Ok((
       0,
       0,
@@ -159,13 +161,17 @@ pub fn replay(
 }
 
 pub fn open_file(
-  mut prefix: PathBuf,
+  prefix: PathBuf,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 ) -> Result<DiskController<WAL_BLOCK_SIZE>> {
-  prefix.push(Local::now().timestamp_millis().to_string());
-  prefix.push(FILE_SUFFIX);
   let config = DiskControllerConfig {
-    path: prefix,
+    path: format!(
+      "{}{}{}",
+      prefix.to_str().unwrap(),
+      Local::now().timestamp_millis(),
+      FILE_SUFFIX
+    )
+    .into(),
     thread_count: Some(3),
   };
   DiskController::open(config, page_pool)

@@ -57,7 +57,10 @@ impl Engine {
     let buffer_pool_config = BufferPoolConfig {
       shard_count: config.buffer_pool_shard_count,
       capacity: config.buffer_pool_memory_capacity / PAGE_SIZE,
-      path: config.base_path.as_ref().join(DATA_PATH).join(FILE_SUFFIX),
+      path: config
+        .base_path
+        .as_ref()
+        .join(format!("{}{}", DATA_PATH, FILE_SUFFIX)),
       io_thread_count: None,
     };
     let gc_config = GarbageCollectionConfig {

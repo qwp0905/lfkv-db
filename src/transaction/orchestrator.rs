@@ -34,7 +34,6 @@ impl TxOrchestrator {
     let (wal, last_tx_id, last_free, aborted, redo, segments) =
       WAL::replay(wal_config, checkpoint_queue)?;
     let wal = wal.to_arc();
-    // let last_free = last_free.to_arc_rwlock();
     for (_, i, page) in redo {
       buffer_pool
         .read(i)?
@@ -46,14 +45,10 @@ impl TxOrchestrator {
     buffer_pool.flush()?;
 
     let version_visibility = VersionVisibility::new(aborted, last_tx_id).to_arc();
+    let disk_len = buffer_pool.disk_len()?;
 
-    let free_list = FreeList::new(
-      last_free,
-      buffer_pool.disk_len()?,
-      buffer_pool.clone(),
-      wal.clone(),
-    )
-    .to_arc();
+    let free_list =
+      FreeList::new(last_free, disk_len, buffer_pool.clone(), wal.clone()).to_arc();
 
     let gc = GarbageCollector::start(
       buffer_pool.clone(),
@@ -63,14 +58,16 @@ impl TxOrchestrator {
     )
     .to_arc();
 
-    let log_id = wal.current_log_id();
-    gc.run()?;
-    buffer_pool.flush()?;
-    wal.append_checkpoint(free_list.get_last_free(), log_id)?;
-    wal.flush()?;
+    if disk_len != 0 {
+      let log_id = wal.current_log_id();
+      gc.run()?;
+      buffer_pool.flush()?;
+      wal.append_checkpoint(free_list.get_last_free(), log_id)?;
+      wal.flush()?;
 
-    for seg in segments {
-      seg.truncate()?;
+      for seg in segments {
+        seg.truncate()?;
+      }
     }
 
     let checkpoint = WorkBuilder::new()

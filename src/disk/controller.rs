@@ -8,7 +8,7 @@ use super::{Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
   thread::{SafeWork, SharedWorkThread, WorkBuilder},
-  utils::ToArc,
+  utils::{logger, ToArc},
 };
 
 enum DiskOperation<const N: usize> {
@@ -78,6 +78,10 @@ pub struct DiskController<const N: usize> {
 }
 impl<const N: usize> DiskController<N> {
   pub fn open(config: DiskControllerConfig, page_pool: Arc<PagePool<N>>) -> Result<Self> {
+    logger::info(format!(
+      "trying to open file {}",
+      config.path.to_string_lossy()
+    ));
     let file = OpenOptions::new()
       .read(true)
       .write(true)

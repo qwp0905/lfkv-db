@@ -62,7 +62,10 @@ impl WAL {
       )?;
 
     logger::info(format!(
-      "wal replay result: last_index {last_index} last_log_id {last_log_id} last_tx_id {last_tx_id} last_free {last_free}"
+      "wal replay result: last_index {last_index} last_log_id {last_log_id} last_tx_id {last_tx_id} last_free {last_free} aborted {} redo {} segments {}",
+      aborted.len(),
+      redo.len(),
+      segments.len()
     ));
     let buffer = WALBuffer {
       last_log_id,
