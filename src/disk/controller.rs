@@ -56,8 +56,19 @@ impl<const N: usize> DiskController<N> {
       .build(create_write_thread(&file))?
       .to_arc();
 
-    let flush_th = create_flush_thread(&file, &config.path)?.to_arc();
-    let meta_th = create_metadata_thread(&file, &config.path)?.to_arc();
+    let flush_th = WorkBuilder::new()
+      .name(format!("flush {}", config.path.to_string_lossy()))
+      .stack_size(1)
+      .single()
+      .no_timeout(create_flush_thread(&file)?)
+      .to_arc();
+
+    let meta_th = WorkBuilder::new()
+      .name(format!("flush {}", config.path.to_string_lossy()))
+      .stack_size(1)
+      .single()
+      .no_timeout(create_metadata_thread(&file)?)
+      .to_arc();
 
     Ok(Self {
       path: config.path,

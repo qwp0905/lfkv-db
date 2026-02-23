@@ -1,12 +1,11 @@
 use std::{
   fs::{File, Metadata},
   ops::Mul,
-  path::PathBuf,
 };
 
 use crate::{
   disk::{Page, PageRef},
-  thread::{SafeWork, SingleWorkThread, WorkBuilder},
+  thread::SafeWork,
   Error, Result,
 };
 
@@ -42,28 +41,14 @@ pub fn create_write_thread<'a, const N: usize>(
 
 pub fn create_flush_thread<'a>(
   file: &'a File,
-  path: &'a PathBuf,
-) -> Result<SingleWorkThread<(), std::io::Result<()>>> {
+) -> Result<impl Fn(()) -> std::io::Result<()>> {
   let fd = file.try_clone().map_err(Error::IO)?;
-  Ok(
-    WorkBuilder::new()
-      .name(format!("flush {}", path.to_string_lossy()))
-      .stack_size(2 << 10)
-      .single()
-      .no_timeout(move |_| fd.sync_all()),
-  )
+  Ok(move |_| fd.sync_all())
 }
 
 pub fn create_metadata_thread<'a>(
   file: &'a File,
-  path: &'a PathBuf,
-) -> Result<SingleWorkThread<(), std::io::Result<Metadata>>> {
+) -> Result<impl Fn(()) -> std::io::Result<Metadata>> {
   let fd = file.try_clone().map_err(Error::IO)?;
-  Ok(
-    WorkBuilder::new()
-      .name(format!("flush {}", path.to_string_lossy()))
-      .stack_size(2 << 10)
-      .single()
-      .no_timeout(move |_| fd.metadata()),
-  )
+  Ok(move |_| fd.metadata())
 }
