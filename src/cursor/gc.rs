@@ -49,13 +49,13 @@ impl GarbageCollector {
   ) -> Self {
     let release = WorkBuilder::new()
       .name("gc release entry")
-      .stack_size(1)
+      .stack_size(2 << 20)
       .shared(1)
       .build_unchecked(Self::run_release(buffer_pool.clone(), free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
-      .stack_size(1)
+      .stack_size(2 << 20)
       .shared(1)
       .build_unchecked(Self::run_entry(
         buffer_pool.clone(),
@@ -65,7 +65,7 @@ impl GarbageCollector {
       .to_arc();
     let check = WorkBuilder::new()
       .name("gc check top entry")
-      .stack_size(1)
+      .stack_size(2 << 20)
       .shared(1)
       .build_unchecked(Self::run_check(
         buffer_pool.clone(),
@@ -77,7 +77,7 @@ impl GarbageCollector {
     let count: Arc<Mutex<usize>> = Default::default();
     let main = WorkBuilder::new()
       .name("gc main")
-      .stack_size(1)
+      .stack_size(2 << 20)
       .single()
       .with_timeout(
         config.interval,

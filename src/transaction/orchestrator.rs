@@ -71,8 +71,8 @@ impl TxOrchestrator {
     }
 
     let checkpoint = WorkBuilder::new()
-      .name("")
-      .stack_size(1)
+      .name("checkpoint")
+      .stack_size(2 << 20)
       .single()
       .no_timeout(handle_checkpoint(
         wal.clone(),

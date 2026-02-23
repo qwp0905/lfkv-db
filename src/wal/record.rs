@@ -15,7 +15,10 @@ pub enum Operation {
   Start,
   Commit,
   Abort,
-  Checkpoint(usize, usize),
+  Checkpoint(
+    usize, // last free page index
+    usize, // last log id
+  ),
   Free(usize),
 }
 impl Operation {

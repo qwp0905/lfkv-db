@@ -69,7 +69,7 @@ impl WAL {
     .to_arc_mutex();
     let flush_th = WorkBuilder::new()
       .name("wal flush")
-      .stack_size(1)
+      .stack_size(2 << 20)
       .single()
       .with_timer(
         config.group_commit_delay,
