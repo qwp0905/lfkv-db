@@ -1,6 +1,5 @@
 use std::{
   fs::{remove_file, File, Metadata, OpenOptions},
-  ops::{Div, Mul},
   path::PathBuf,
   sync::Arc,
 };
@@ -88,7 +87,7 @@ impl<const N: usize> DiskController<N> {
 
     let background = WorkBuilder::new()
       .name(format!("disk {}", config.path.to_string_lossy()))
-      .stack_size(N.mul(150))
+      .stack_size(N * 500)
       .shared(config.thread_count.unwrap_or(DEFAULT_THREADS))
       .build(create_thread(&file))?
       .to_arc();
@@ -146,7 +145,7 @@ impl<const N: usize> DiskController<N> {
       .send_await(DiskOperation::Metadata)?
       .map_err(Error::IO)?
       .as_meta();
-    Ok((meta.len() as usize).div(N))
+    Ok((meta.len() as usize) / N)
   }
 }
 
@@ -157,7 +156,7 @@ mod tests {
   use std::thread;
   use tempfile::tempdir;
 
-  const TEST_PAGE_SIZE: usize = 4096;
+  const TEST_PAGE_SIZE: usize = 4 << 10;
 
   #[test]
   fn test_basic_operations() -> Result<()> {
