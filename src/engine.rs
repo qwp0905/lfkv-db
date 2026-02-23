@@ -97,6 +97,7 @@ impl Drop for Engine {
         .available
         .compare_exchange(true, false, Ordering::Release, Ordering::Acquire)
     {
+      logger::info("engine shutdown");
       if let Err(err) = self.orchestrator.close() {
         logger::error(err);
       };

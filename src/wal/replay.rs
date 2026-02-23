@@ -2,7 +2,6 @@ use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
   fs::read_dir,
   mem::replace,
-  ops::Div,
   path::PathBuf,
   sync::Arc,
 };
@@ -80,7 +79,7 @@ pub fn replay(
     let len = wal.len()?;
     let mut records = vec![];
 
-    for i in 0..len.div(WAL_BLOCK_SIZE) {
+    for i in 0..len {
       for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
         records.push((i, record))
       }
@@ -150,8 +149,8 @@ pub fn replay(
   let aborted = BTreeSet::from_iter(apply.into_keys());
   Ok((
     last_index,
-    log_id,
-    tx_id,
+    log_id + 1,
+    tx_id + 1,
     free.last().map(|i| *i).unwrap_or(0),
     aborted,
     commited,

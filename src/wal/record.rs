@@ -7,6 +7,7 @@ use crate::{
 
 pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
 
+#[derive(Debug)]
 pub enum Operation {
   Insert(
     usize, // index of the page
@@ -26,7 +27,7 @@ impl Operation {
     match self {
       Operation::Insert(index, page) => {
         let mut v = vec![0];
-        v.extend_from_slice(&index.to_le_bytes());
+        v.extend_from_slice(&index.to_be_bytes());
         v.extend_from_slice(page.as_ref());
         v
       }
@@ -35,19 +36,20 @@ impl Operation {
       Operation::Abort => vec![3],
       Operation::Checkpoint(index, log_id) => {
         let mut v = vec![4];
-        v.extend_from_slice(&log_id.to_le_bytes());
-        v.extend_from_slice(&index.to_le_bytes());
+        v.extend_from_slice(&log_id.to_be_bytes());
+        v.extend_from_slice(&index.to_be_bytes());
         v
       }
       Operation::Free(index) => {
         let mut v = vec![5];
-        v.extend_from_slice(&index.to_le_bytes());
+        v.extend_from_slice(&index.to_be_bytes());
         v
       }
     }
   }
 }
 
+#[derive(Debug)]
 pub struct LogRecord {
   pub log_id: usize,
   pub tx_id: usize,
@@ -88,8 +90,8 @@ impl LogRecord {
   pub fn to_bytes(&self) -> Vec<u8> {
     let mut vec = Vec::new();
 
-    vec.extend_from_slice(&self.log_id.to_le_bytes());
-    vec.extend_from_slice(&self.tx_id.to_le_bytes());
+    vec.extend_from_slice(&self.log_id.to_be_bytes());
+    vec.extend_from_slice(&self.tx_id.to_be_bytes());
     vec.extend_from_slice(&self.operation.to_bytes());
     vec
   }
@@ -108,15 +110,15 @@ impl TryFrom<Vec<u8>> for LogRecord {
       return Err(Error::InvalidFormat);
     }
     let log_id =
-      usize::from_le_bytes(value[0..8].try_into().map_err(|_| Error::InvalidFormat)?);
+      usize::from_be_bytes(value[0..8].try_into().map_err(|_| Error::InvalidFormat)?);
     let tx_id =
-      usize::from_le_bytes(value[8..16].try_into().map_err(|_| Error::InvalidFormat)?);
+      usize::from_be_bytes(value[8..16].try_into().map_err(|_| Error::InvalidFormat)?);
     let operation = match value[16] {
       0 => {
         if len.ne(&PAGE_SIZE.add(17).add(8)) {
           return Err(Error::InvalidFormat);
         }
-        let index = usize::from_le_bytes(
+        let index = usize::from_be_bytes(
           value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         let data = value[25..].try_into().map_err(|_| Error::InvalidFormat)?;
@@ -129,10 +131,10 @@ impl TryFrom<Vec<u8>> for LogRecord {
         if len.lt(&33) {
           return Err(Error::InvalidFormat);
         }
-        let log_id = usize::from_le_bytes(
+        let log_id = usize::from_be_bytes(
           value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
         );
-        let index = usize::from_le_bytes(
+        let index = usize::from_be_bytes(
           value[25..33].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         Operation::Checkpoint(index, log_id)
@@ -141,7 +143,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
         if len.lt(&25) {
           return Err(Error::InvalidFormat);
         }
-        let index = usize::from_le_bytes(
+        let index = usize::from_be_bytes(
           value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         Operation::Free(index)
@@ -152,6 +154,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
   }
 }
 
+#[derive(Debug)]
 pub struct LogEntry {
   data: Vec<u8>,
   index: usize,
@@ -173,12 +176,12 @@ impl LogEntry {
     if self.data.len().add(buf.len().add(2)).gt(&WAL_BLOCK_SIZE) {
       return Err(Error::EOF);
     }
-    let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
+    let len = u16::from_be_bytes(self.data[0..2].try_into().unwrap());
     self
       .data
-      .extend_from_slice(&(buf.len() as u16).to_le_bytes());
+      .extend_from_slice(&(buf.len() as u16).to_be_bytes());
     self.data.extend_from_slice(&buf);
-    self.data[0..2].copy_from_slice(&len.add(1).to_le_bytes());
+    self.data[0..2].copy_from_slice(&len.add(1).to_be_bytes());
     Ok(())
   }
 }
@@ -205,5 +208,34 @@ impl TryFrom<&Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
 impl AsRef<[u8]> for LogEntry {
   fn as_ref(&self) -> &[u8] {
     &self.data
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_entry() {
+    let index = 1;
+    let mut entry = LogEntry::new(index);
+
+    let r1 = LogRecord::new_start(1, 1);
+    let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
+    let r3 = LogRecord::new_commit(3, 1);
+    entry.append(&r1).expect("unknown error");
+    entry.append(&r2).expect("unknown error");
+    entry.append(&r3).expect("unknown error");
+
+    let page: Page<WAL_BLOCK_SIZE> = entry.into();
+
+    let d: Vec<LogRecord> = (&page).try_into().expect("parse error");
+
+    assert_eq!(d[0].log_id, r1.log_id);
+    assert_eq!(d[0].tx_id, r1.log_id);
+    assert_eq!(d[1].log_id, r2.log_id);
+    assert_eq!(d[1].tx_id, r2.tx_id);
+    assert_eq!(d[2].tx_id, r2.tx_id);
+    assert_eq!(d[2].tx_id, r2.tx_id);
   }
 }

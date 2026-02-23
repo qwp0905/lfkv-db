@@ -305,9 +305,30 @@ mod tests {
       .expect("desiralize error")
       .as_internal()
       .expect("desirialize internal error");
-    dbg!(&d);
     assert_eq!(d.children.len(), 0);
     assert_eq!(d.keys.len(), 0);
     assert_eq!(d.right, None)
+  }
+
+  #[test]
+  fn test_serialize_leaf() {
+    let mut page = Page::new();
+
+    let key = vec![49, 50, 51];
+    let ptr = 100;
+    let prev = None;
+    let next = Some(1100);
+
+    let node = CursorNode::Leaf(LeafNode::new(vec![(key.clone(), ptr)], next, prev));
+    page.serialize_from(&node).expect("serialize error");
+
+    let d = page
+      .deserialize::<CursorNode>()
+      .expect("desiralize error")
+      .as_leaf()
+      .expect("desirialize leaf error");
+    assert_eq!(d.entries, vec![(key, ptr)]);
+    assert_eq!(d.next, next);
+    assert_eq!(d.prev, prev);
   }
 }

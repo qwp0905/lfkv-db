@@ -6,6 +6,7 @@ use crate::{
   Error,
 };
 
+#[derive(Debug)]
 pub enum RecordData {
   Data(Vec<u8>),
   Tombstone,
@@ -19,6 +20,7 @@ impl RecordData {
   }
 }
 
+#[derive(Debug)]
 pub struct VersionRecord {
   pub owner: usize,
   pub version: usize,
@@ -34,6 +36,7 @@ impl VersionRecord {
   }
 }
 
+#[derive(Debug)]
 pub struct DataEntry {
   next: Option<Pointer>,
   versions: VecDeque<VersionRecord>,

@@ -60,7 +60,7 @@ impl Cursor {
     Ok(())
   }
 
-  pub fn get(&self, key: &Vec<u8>) -> Result<Vec<u8>> {
+  pub fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
@@ -88,7 +88,7 @@ impl Cursor {
         CursorNode::Leaf(leaf) => match leaf.find(key) {
           NodeFindResult::Found(_, i) => break index = i,
           NodeFindResult::Move(i) => index = i,
-          NodeFindResult::NotFound(_) => return Err(Error::NotFound),
+          NodeFindResult::NotFound(_) => return Ok(None),
         },
       }
     }
@@ -104,8 +104,8 @@ impl Cursor {
       for record in entry.find(self.tx_id) {
         if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
           match &record.data {
-            RecordData::Data(data) => return Ok(data.clone()),
-            RecordData::Tombstone => return Err(Error::NotFound),
+            RecordData::Data(data) => return Ok(Some(data.clone())),
+            RecordData::Tombstone => return Ok(None),
           }
         }
       }

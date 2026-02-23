@@ -9,7 +9,7 @@ use crate::{
   error::Result,
   thread::{SingleWorkThread, WorkBuilder},
   transaction::FreeList,
-  utils::ToArc,
+  utils::{logger, ToArc},
   wal::{WALConfig, WALSegment, WAL},
   GarbageCollectionConfig, GarbageCollector,
 };
@@ -59,6 +59,7 @@ impl TxOrchestrator {
     .to_arc();
 
     if disk_len != 0 {
+      logger::info("create initial checkpoint");
       let log_id = wal.current_log_id();
       gc.run()?;
       buffer_pool.flush()?;
@@ -162,8 +163,11 @@ impl TxOrchestrator {
       &self.free_list,
       &self.gc,
     )?;
+    logger::info("last checkpoint completed.");
     self.buffer_pool.close();
+    logger::info("buffer pool closed.");
     self.wal.close();
+    logger::info("wal closed.");
     Ok(())
   }
 }
