@@ -149,6 +149,9 @@ impl TxOrchestrator {
   pub fn is_disk_empty(&self) -> Result<bool> {
     self.buffer_pool.is_empty()
   }
+  pub fn initial_state(&self, index: usize) {
+    self.free_list.set_next_index(index);
+  }
 
   pub fn close(&self) -> Result {
     self.checkpoint.close();

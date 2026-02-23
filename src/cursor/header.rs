@@ -12,10 +12,8 @@ pub struct TreeHeader {
 }
 
 impl TreeHeader {
-  pub fn initial_state() -> Self {
-    Self {
-      root: HEADER_INDEX + 1,
-    }
+  pub fn new(root: usize) -> Self {
+    Self { root }
   }
 
   pub fn get_root(&self) -> usize {

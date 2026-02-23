@@ -5,17 +5,14 @@ use crate::{
   Error, Result,
 };
 
+#[derive(Debug)]
 pub enum CursorNode {
   Internal(InternalNode),
   Leaf(LeafNode),
 }
 impl CursorNode {
   pub fn initial_state() -> Self {
-    Self::Internal(InternalNode {
-      keys: Default::default(),
-      children: Default::default(),
-      right: None,
-    })
+    Self::Leaf(LeafNode::new(Default::default(), None, None))
   }
   pub fn as_leaf(self) -> Result<LeafNode> {
     match self {
@@ -118,6 +115,7 @@ impl Serializable for CursorNode {
     }
   }
 }
+#[derive(Debug)]
 pub struct InternalNode {
   keys: Vec<Key>,
   children: Vec<Pointer>,
@@ -201,6 +199,7 @@ pub enum NodeFindResult {
   Move(Pointer),
   NotFound(usize),
 }
+#[derive(Debug)]
 pub struct LeafNode {
   entries: Vec<(Key, Pointer)>,
   prev: Option<Pointer>,
@@ -286,5 +285,29 @@ impl LeafNode {
 
   pub fn top(&self) -> &Key {
     &self.entries[0].0
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::{disk::Page, serialize::SerializeFrom};
+
+  use super::*;
+
+  #[test]
+  fn test_serialize_internal() {
+    let mut page = Page::new();
+    let node = CursorNode::Internal(InternalNode::new(vec![], vec![], None));
+    page.serialize_from(&node).expect("serialize error");
+
+    let d = page
+      .deserialize::<CursorNode>()
+      .expect("desiralize error")
+      .as_internal()
+      .expect("desirialize internal error");
+    dbg!(&d);
+    assert_eq!(d.children.len(), 0);
+    assert_eq!(d.keys.len(), 0);
+    assert_eq!(d.right, None)
   }
 }

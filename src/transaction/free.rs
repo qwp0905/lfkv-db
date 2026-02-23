@@ -75,6 +75,10 @@ impl FreeList {
     self.state.rl().last_free
   }
 
+  pub fn set_next_index(&self, index: usize) {
+    self.state.wl().next_index = index;
+  }
+
   pub fn alloc(&self) -> Result<PageSlot<'_>> {
     let mut state = self.state.wl();
     if state.last_free == 0 {

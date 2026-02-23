@@ -14,18 +14,16 @@ pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
     return Ok(());
   }
 
-  let root = CursorNode::initial_state();
-  let header = TreeHeader::initial_state();
-  orchestrator
-    .fetch(header.get_root())?
-    .for_write()
-    .as_mut()
-    .serialize_from(&root)?;
-  orchestrator
-    .fetch(HEADER_INDEX)?
-    .for_write()
-    .as_mut()
-    .serialize_from(&header)?;
+  orchestrator.initial_state(HEADER_INDEX + 1);
+  let node = CursorNode::initial_state();
+  let mut node_slot = orchestrator.alloc()?.for_write();
+  node_slot.as_mut().serialize_from(&node)?;
+
+  let root = TreeHeader::new(node_slot.get_index());
+  let mut root_slot = orchestrator.fetch(HEADER_INDEX)?.for_write();
+  orchestrator.log(0, &root_slot)?;
+  root_slot.as_mut().serialize_from(&root)?;
+
   Ok(())
 }
 
@@ -137,6 +135,7 @@ impl Cursor {
         .for_read()
         .as_ref()
         .deserialize()?;
+
       match node {
         CursorNode::Internal(internal) => match internal.find(key) {
           Ok(i) => stack.push(replace(&mut index, i)),
