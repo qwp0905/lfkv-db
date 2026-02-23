@@ -1,7 +1,4 @@
-use std::{
-  sync::{Arc, RwLock},
-  time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError};
 
@@ -12,7 +9,7 @@ use crate::{
   error::Result,
   thread::{SingleWorkThread, WorkBuilder},
   transaction::FreeList,
-  utils::{ShortenedRwLock, ToArc, ToArcRwLock},
+  utils::ToArc,
   wal::{WALConfig, WALSegment, WAL},
   GarbageCollectionConfig, GarbageCollector,
 };
@@ -21,7 +18,6 @@ pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   checkpoint: Arc<SingleWorkThread<(), Result>>,
-  last_free: Arc<RwLock<usize>>,
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
@@ -38,7 +34,7 @@ impl TxOrchestrator {
     let (wal, last_tx_id, last_free, aborted, redo, segments) =
       WAL::replay(wal_config, checkpoint_queue)?;
     let wal = wal.to_arc();
-    let last_free = last_free.to_arc_rwlock();
+    // let last_free = last_free.to_arc_rwlock();
     for (_, i, page) in redo {
       buffer_pool
         .read(i)?
@@ -47,10 +43,17 @@ impl TxOrchestrator {
         .writer()
         .write(page.as_ref())?;
     }
+    buffer_pool.flush()?;
+
     let version_visibility = VersionVisibility::new(aborted, last_tx_id).to_arc();
 
-    let free_list =
-      FreeList::new(last_free.clone(), buffer_pool.clone(), wal.clone()).to_arc();
+    let free_list = FreeList::new(
+      last_free,
+      buffer_pool.disk_len()?,
+      buffer_pool.clone(),
+      wal.clone(),
+    )
+    .to_arc();
 
     let gc = GarbageCollector::start(
       buffer_pool.clone(),
@@ -63,7 +66,7 @@ impl TxOrchestrator {
     let log_id = wal.current_log_id();
     gc.run()?;
     buffer_pool.flush()?;
-    wal.append_checkpoint(*last_free.rl(), log_id)?;
+    wal.append_checkpoint(free_list.get_last_free(), log_id)?;
     wal.flush()?;
 
     for seg in segments {
@@ -77,7 +80,7 @@ impl TxOrchestrator {
       .no_timeout(handle_checkpoint(
         wal.clone(),
         buffer_pool.clone(),
-        last_free.clone(),
+        free_list.clone(),
         gc.clone(),
         recv,
         checkpoint_interval,
@@ -88,7 +91,6 @@ impl TxOrchestrator {
       checkpoint,
       wal,
       free_list,
-      last_free,
       buffer_pool,
       version_visibility,
       gc,
@@ -157,7 +159,7 @@ impl TxOrchestrator {
       None,
       &self.wal,
       &self.buffer_pool,
-      &self.last_free,
+      &self.free_list,
       &self.gc,
     )?;
     self.buffer_pool.close();
@@ -169,7 +171,7 @@ impl TxOrchestrator {
 fn handle_checkpoint(
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
-  last_free: Arc<RwLock<usize>>,
+  free_list: Arc<FreeList>,
   gc: Arc<GarbageCollector>,
   recv: Receiver<WALSegment>,
   timeout: Duration,
@@ -180,7 +182,7 @@ fn handle_checkpoint(
       Err(RecvTimeoutError::Timeout) => None,
       Err(_) => return Ok(()),
     };
-    let _ = run_checkpoint(segment, &wal, &buffer_pool, &last_free, &gc);
+    let _ = run_checkpoint(segment, &wal, &buffer_pool, &free_list, &gc);
   }
 }
 
@@ -188,14 +190,14 @@ fn run_checkpoint(
   segment: Option<WALSegment>,
   wal: &WAL,
   buffer_pool: &BufferPool,
-  last_free: &RwLock<usize>,
+  free_list: &FreeList,
   gc: &GarbageCollector,
 ) -> Result {
   let log_id = wal.current_log_id();
   segment.as_ref().map(|s| s.flush()).unwrap_or(Ok(()))?;
   gc.run()?;
   buffer_pool.flush()?;
-  wal.append_checkpoint(*last_free.rl(), log_id)?;
+  wal.append_checkpoint(free_list.get_last_free(), log_id)?;
   segment.map(|s| s.truncate()).unwrap_or(Ok(()))?;
   wal.flush()?;
   Ok(())

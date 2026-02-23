@@ -12,6 +12,19 @@ use crate::{
   wal::WAL,
 };
 
+struct FreeState {
+  last_free: usize,
+  next_index: usize,
+}
+impl FreeState {
+  fn new(last_free: usize, next_index: usize) -> Self {
+    Self {
+      last_free,
+      next_index,
+    }
+  }
+}
+
 pub struct FreePage {
   next: usize,
 }
@@ -40,39 +53,50 @@ impl Serializable for FreePage {
 }
 
 pub struct FreeList {
-  last_free: Arc<RwLock<usize>>,
+  state: RwLock<FreeState>,
   buffer_pool: Arc<BufferPool>,
   wal: Arc<WAL>,
 }
 impl FreeList {
   pub fn new(
-    last_free: Arc<RwLock<usize>>,
+    last_free: usize,
+    next_index: usize,
     buffer_pool: Arc<BufferPool>,
     wal: Arc<WAL>,
   ) -> Self {
     Self {
-      last_free,
+      state: RwLock::new(FreeState::new(last_free, next_index)),
       buffer_pool,
       wal,
     }
   }
 
+  pub fn get_last_free(&self) -> usize {
+    self.state.rl().last_free
+  }
+
   pub fn alloc(&self) -> Result<PageSlot<'_>> {
-    let mut index = self.last_free.wl();
-    let slot = self.buffer_pool.read(*index)?;
-    *index = slot
+    let mut state = self.state.wl();
+    if state.last_free == 0 {
+      let index = state.next_index;
+      state.next_index += 1;
+      return self.buffer_pool.read(index);
+    }
+
+    let slot = self.buffer_pool.read(state.last_free)?;
+    state.last_free = slot
       .for_read()
       .as_ref()
       .deserialize::<FreePage>()?
       .get_next();
-    Ok(slot)
+    return Ok(slot);
   }
 
   pub fn release(&self, index: usize) -> Result {
     let page = self.buffer_pool.read(index)?;
-    let mut prev = self.last_free.wl();
+    let mut state = self.state.wl();
     self.wal.append_free(index)?;
-    let free = FreePage::new(replace(&mut prev, index));
+    let free = FreePage::new(replace(&mut state.last_free, index));
     page.for_write().as_mut().serialize_from(&free)?;
     Ok(())
   }

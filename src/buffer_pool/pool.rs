@@ -85,4 +85,8 @@ impl BufferPool {
   pub fn close(&self) {
     self.disk.close();
   }
+
+  pub fn disk_len(&self) -> Result<usize> {
+    self.disk.len()
+  }
 }

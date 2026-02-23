@@ -22,14 +22,14 @@ pub fn replay(
   max_index: usize,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 ) -> Result<(
-  usize,
-  usize,
-  usize,
-  usize,
-  BTreeSet<usize>,
-  Vec<(usize, usize, Page)>,
-  DiskController<WAL_BLOCK_SIZE>,
-  Vec<WALSegment>,
+  usize,                          // last index
+  usize,                          // last_log_id
+  usize,                          // last_tx_id
+  usize,                          // last_free
+  BTreeSet<usize>,                // aborted
+  Vec<(usize, usize, Page)>,      // redo records
+  DiskController<WAL_BLOCK_SIZE>, // wal file controller
+  Vec<WALSegment>,                // previous segments
 )> {
   let mut files = Vec::new();
   for file in read_dir(base_dir).map_err(Error::IO)? {
@@ -150,7 +150,7 @@ pub fn replay(
     last_index,
     log_id,
     tx_id,
-    free.last().map(|i| *i).unwrap_or_default(),
+    free.last().map(|i| *i).unwrap_or(0),
     aborted,
     commited,
     wal,

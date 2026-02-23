@@ -74,3 +74,6 @@ impl<const N: usize> PageStore<N> {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {}

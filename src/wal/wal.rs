@@ -1,7 +1,6 @@
 use std::{
   collections::BTreeSet,
   mem::replace,
-  ops::{Add, Div},
   path::PathBuf,
   sync::{Arc, Mutex},
   time::Duration,
@@ -14,7 +13,7 @@ use crate::{
   disk::{DiskController, Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
   thread::{SingleWorkThread, WorkBuilder},
-  utils::{ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
+  utils::{logger, ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
 };
 
 struct WALBuffer {
@@ -46,14 +45,14 @@ impl WAL {
     checkpoint: Sender<WALSegment>,
   ) -> Result<(
     Self,
-    usize,
-    usize,
-    BTreeSet<usize>,
-    Vec<(usize, usize, Page)>,
-    Vec<WALSegment>,
+    usize,                     // last tx id
+    usize,                     // last free
+    BTreeSet<usize>,           // aborted
+    Vec<(usize, usize, Page)>, // redo records
+    Vec<WALSegment>,           // previous wal segments
   )> {
-    let max_index = config.max_file_size.div(WAL_BLOCK_SIZE);
-    let page_pool = PagePool::new(1).to_arc();
+    let max_index = config.max_file_size / WAL_BLOCK_SIZE;
+    let page_pool = PagePool::new(max_index).to_arc();
     let (last_index, last_log_id, last_tx_id, last_free, aborted, redo, disk, segments) =
       replay(
         config.base_dir.to_string_lossy().as_ref(),
@@ -61,6 +60,10 @@ impl WAL {
         max_index,
         page_pool.clone(),
       )?;
+
+    logger::info(format!(
+      "wal replay result: last_index {last_index} last_log_id {last_log_id} last_tx_id {last_tx_id} last_free {last_free}"
+    ));
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
@@ -126,7 +129,7 @@ impl WAL {
     let (i, p) = entry_to_page(&self.page_pool, &buffer.entry);
     buffer.disk.write(i, &p)?;
 
-    let index = buffer.entry.get_index().add(1);
+    let index = buffer.entry.get_index() + 1;
 
     if index == self.max_index {
       buffer.entry = LogEntry::new(0);
