@@ -33,7 +33,7 @@ impl BufferPool {
     let page_pool = PagePool::new(config.capacity).to_arc();
     let disk = DiskController::open(disk_config, page_pool.clone())?.to_arc();
 
-    let frame_cap = (config.capacity * 9) / 10; // 90% of page pool capacity
+    let frame_cap = (config.capacity * 9) / 10; // 90% of page pool capacity 10% buffer for disk io
     let mut frame = Vec::with_capacity(frame_cap);
     frame.resize_with(frame_cap, || RwLock::new(page_pool.acquire()));
 
