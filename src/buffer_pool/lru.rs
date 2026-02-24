@@ -127,7 +127,6 @@ where
       };
       let h = hasher.hash_one(key);
       let mut bucket = self.new_entries.remove_entry(h, equivalent(key)).unwrap();
-      self.new_sub_list.remove(&mut bucket);
       self.old_sub_list.push_head(&mut bucket);
       self.old_entries.insert(h, bucket, make_hasher(hasher));
     }
@@ -215,3 +214,98 @@ where
 }
 unsafe impl<K, V> Sync for LRUShard<K, V> {}
 unsafe impl<K, V> Send for LRUShard<K, V> {}
+
+#[cfg(test)]
+mod tests {
+  use std::hash::RandomState;
+
+  use super::*;
+
+  fn h(hasher: &RandomState, key: usize) -> u64 {
+    hasher.hash_one(key)
+  }
+
+  #[test]
+  fn test_insert_and_get() {
+    let mut shard = LRUShard::<usize, usize>::new(10);
+    let hasher = RandomState::new();
+
+    assert_eq!(shard.insert(1, 100, h(&hasher, 1), &hasher), None);
+    assert_eq!(shard.insert(2, 200, h(&hasher, 2), &hasher), None);
+
+    assert_eq!(shard.get(&1, h(&hasher, 1), &hasher), Some(&100));
+    assert_eq!(shard.get(&2, h(&hasher, 2), &hasher), Some(&200));
+    assert_eq!(shard.get(&3, h(&hasher, 3), &hasher), None);
+    assert_eq!(shard.len(), 2);
+  }
+
+  #[test]
+  fn test_insert_duplicate_key() {
+    let mut shard = LRUShard::<usize, usize>::new(10);
+    let hasher = RandomState::new();
+
+    assert_eq!(shard.insert(1, 100, h(&hasher, 1), &hasher), None);
+    assert_eq!(shard.insert(1, 200, h(&hasher, 1), &hasher), Some(100));
+    assert_eq!(shard.get(&1, h(&hasher, 1), &hasher), Some(&200));
+    assert_eq!(shard.len(), 1);
+  }
+
+  #[test]
+  fn test_is_full() {
+    let cap = 5;
+    let mut shard = LRUShard::<usize, usize>::new(cap);
+    let hasher = RandomState::new();
+
+    for i in 0..cap {
+      assert!(!shard.is_full());
+      shard.insert(i, i * 10, h(&hasher, i), &hasher);
+    }
+    assert!(shard.is_full());
+  }
+
+  #[test]
+  fn test_evict() {
+    let cap = 3;
+    let mut shard = LRUShard::<usize, usize>::new(cap);
+    let hasher = RandomState::new();
+
+    for i in 0..cap {
+      shard.insert(i, i * 10, h(&hasher, i), &hasher);
+    }
+
+    // evict returns the oldest entry from old sub-list
+    let evicted = shard.evict(&hasher).unwrap();
+    assert_eq!(evicted, (0, 0));
+    assert_eq!(shard.len(), 2);
+  }
+
+  #[test]
+  fn test_get_promotes_to_new() {
+    let cap = 5;
+    let mut shard = LRUShard::<usize, usize>::new(cap);
+    let hasher = RandomState::new();
+
+    for i in 0..cap {
+      shard.insert(i, i * 10, h(&hasher, i), &hasher);
+    }
+    assert_eq!(shard.old_sub_list.len(), 5);
+    assert_eq!(shard.new_sub_list.len(), 0);
+
+    // get promotes from old to new
+    assert_eq!(shard.get(&0, h(&hasher, 0), &hasher), Some(&0));
+    assert_eq!(shard.new_sub_list.len(), 1);
+    assert_eq!(shard.old_sub_list.len(), 4);
+
+    // promoted entry should not be evicted first
+    let first_evicted = shard.evict(&hasher).unwrap();
+    assert_ne!(first_evicted.0, 0);
+  }
+
+  #[test]
+  fn test_evict_empty() {
+    let mut shard = LRUShard::<usize, usize>::new(10);
+    let hasher = RandomState::new();
+
+    assert!(shard.evict(&hasher).is_none());
+  }
+}

@@ -41,21 +41,21 @@ pub struct LRUTable {
 }
 impl LRUTable {
   pub fn new(shard_count: usize, capacity: usize) -> Self {
-    let per = capacity / shard_count;
+    let cap_per_shard = capacity / shard_count;
     let mut shards = Vec::with_capacity(shard_count);
     for i in 0..shard_count {
-      let s = Shard {
-        reverse: vec![0; per],
-        offset: i * per,
-        lru: LRUShard::new(per),
+      let shard = Shard {
+        reverse: vec![0; cap_per_shard],
+        offset: i * cap_per_shard,
+        lru: LRUShard::new(cap_per_shard),
       };
-      shards.push(Mutex::new(s))
+      shards.push(Mutex::new(shard))
     }
 
     Self {
       shards,
       hasher: Default::default(),
-      capacity: per,
+      capacity: cap_per_shard,
     }
   }
   fn get_shard(&self, key: usize) -> (u64, &Mutex<Shard>) {

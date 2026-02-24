@@ -24,16 +24,16 @@ impl<K, V> LRUList<K, V> {
 
   pub fn push_head(&mut self, bucket: &mut NonNull<Bucket<K, V>>) {
     self.len_ += 1;
-    match &self.tail {
-      Some(_) => {
-        unsafe { bucket.as_mut() }.set_next(self.head);
-        self.head = Some(*bucket);
-      }
+    match &self.head {
+      Some(mut head) => unsafe {
+        head.as_mut().set_prev(Some(*bucket));
+        bucket.as_mut().set_next(Some(head));
+      },
       None => {
         self.tail = Some(*bucket);
-        self.head = Some(*bucket)
       }
     }
+    self.head = Some(*bucket)
   }
 
   pub fn remove(&mut self, bucket: &mut NonNull<Bucket<K, V>>) {
