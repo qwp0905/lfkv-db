@@ -72,7 +72,6 @@ impl LRUTable {
     };
 
     let offset = shard.offset;
-
     if !shard.lru.is_full() {
       let i = shard.lru.len();
       shard.reverse[i] = index;
@@ -91,3 +90,6 @@ impl LRUTable {
     shard.reverse[frame_id - shard.offset]
   }
 }
+
+#[cfg(test)]
+mod tests {}

@@ -26,17 +26,17 @@ pub struct BufferPool {
 }
 impl BufferPool {
   pub fn open(config: BufferPoolConfig) -> Result<Self> {
-    let dc = DiskControllerConfig {
+    let disk_config = DiskControllerConfig {
       path: config.path,
       thread_count: config.io_thread_count,
     };
     let page_pool = PagePool::new(config.capacity).to_arc();
-    let disk = DiskController::open(dc, page_pool.clone())?.to_arc();
+    let disk = DiskController::open(disk_config, page_pool.clone())?.to_arc();
 
-    let mut frame = Vec::with_capacity((config.capacity << 1) / 3);
-    frame.resize_with((config.capacity << 1) / 3, || {
-      RwLock::new(page_pool.acquire())
-    });
+    let frame_cap = (config.capacity << 1) / 3;
+    let mut frame = Vec::with_capacity(frame_cap);
+    frame.resize_with(frame_cap, || RwLock::new(page_pool.acquire()));
+
     Ok(Self {
       frame,
       disk,
