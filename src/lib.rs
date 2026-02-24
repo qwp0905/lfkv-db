@@ -11,6 +11,9 @@ mod thread;
 mod engine;
 pub use engine::*;
 
+mod builder;
+pub use builder::*;
+
 mod cursor;
 pub use cursor::*;
 

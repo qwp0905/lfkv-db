@@ -37,7 +37,6 @@ impl GarbageCollector {
   }
 
   pub fn run(&self) -> Result {
-    *self.count.l() = 0;
     self.main.send_await(())?
   }
 

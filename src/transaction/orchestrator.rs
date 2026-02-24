@@ -6,12 +6,12 @@ use super::VersionVisibility;
 
 use crate::{
   buffer_pool::{BufferPool, BufferPoolConfig, PageSlot, PageSlotWrite},
+  cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
   thread::{SingleWorkThread, WorkBuilder},
   transaction::FreeList,
   utils::{logger, ToArc},
   wal::{WALConfig, WALSegment, WAL},
-  GarbageCollectionConfig, GarbageCollector,
 };
 
 pub struct TxOrchestrator {
@@ -28,9 +28,11 @@ impl TxOrchestrator {
     wal_config: WALConfig,
     gc_config: GarbageCollectionConfig,
   ) -> Result<Self> {
+    logger::info("trying to open buffer pool");
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
     let (checkpoint_queue, recv) = unbounded();
+
     let (wal, last_tx_id, last_free, aborted, redo, segments) =
       WAL::replay(wal_config, checkpoint_queue)?;
     let wal = wal.to_arc();
@@ -118,7 +120,6 @@ impl TxOrchestrator {
     self.wal.append_commit(tx_id)?;
     self.wal.flush()?;
     self.version_visibility.deactive(&tx_id);
-    self.gc.notify();
     Ok(())
   }
 

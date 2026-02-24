@@ -6,7 +6,6 @@ fn main() {
   let engine = Arc::new(
     Engine::bootstrap(EngineConfig {
       base_path: "./.local",
-      disk_batch_delay: Duration::from_millis(10),
       wal_file_size: 16 << 20,
       checkpoint_interval: Duration::from_secs(30),
       group_commit_delay: Duration::from_millis(10),

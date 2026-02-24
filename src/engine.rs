@@ -24,7 +24,6 @@ where
   T: AsRef<Path>,
 {
   pub base_path: T,
-  pub disk_batch_delay: Duration,
   pub wal_file_size: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,

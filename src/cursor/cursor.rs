@@ -112,7 +112,7 @@ impl Cursor {
 
       match entry.get_next() {
         Some(i) => index = i,
-        None => return Err(Error::NotFound),
+        None => return Ok(None),
       }
     }
   }
