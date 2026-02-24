@@ -1,9 +1,8 @@
 use std::ops::{Add, AddAssign, Index, IndexMut};
 
 use crate::error::{Error, Result};
-use crate::utils::size;
 
-pub const PAGE_SIZE: usize = size::kb(4);
+pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Page<const T: usize = PAGE_SIZE> {
