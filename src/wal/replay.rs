@@ -19,7 +19,7 @@ use crate::{
 pub fn replay(
   base_dir: &str,
   prefix: &str,
-  max_index: usize,
+  max_len: usize,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 ) -> Result<(
   usize,                          // last index
@@ -140,7 +140,7 @@ pub fn replay(
     };
   }
   let mut last_index = index + 1;
-  if last_index == max_index {
+  if last_index == max_len {
     last_index = 0;
     last_file = Some(open_file(file_prefix, page_pool)?)
   }
