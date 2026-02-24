@@ -1,7 +1,6 @@
 use std::{
   borrow::Borrow,
   hash::{BuildHasher, Hash},
-  ops::Mul,
   ptr::NonNull,
 };
 
@@ -120,7 +119,7 @@ where
   where
     S: BuildHasher,
   {
-    while self.new_sub_list.len().mul(3) > self.old_sub_list.len().mul(5) {
+    while self.new_sub_list.len() * 3 > self.old_sub_list.len() * 5 {
       let key = match self.new_sub_list.pop_tail() {
         Some(bucket) => unsafe { bucket.as_ref() }.get_key(),
         None => break,
