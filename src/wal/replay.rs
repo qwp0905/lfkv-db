@@ -12,8 +12,8 @@ use super::{LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   constant::FILE_SUFFIX,
   disk::{DiskController, DiskControllerConfig, Page, PagePool},
+  error::{Error, Result},
   utils::logger,
-  Error, Result,
 };
 
 pub fn replay(
@@ -62,7 +62,7 @@ pub fn replay(
 
   let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
   let mut commited = Vec::<(usize, usize, Page)>::new();
-  let mut f = None;
+  let mut last_free = 0;
   let mut last_file = None;
   let mut segments = Vec::new();
 
@@ -96,7 +96,7 @@ pub fn replay(
       match record.operation {
         Operation::Checkpoint(free, log_id) => {
           redo.split_off(&log_id);
-          f = Some(free);
+          last_free = free;
         }
         _ => drop(redo.insert(record.log_id, record)),
       };
@@ -107,14 +107,11 @@ pub fn replay(
     }
   }
 
-  let mut free = f.map(|i| vec![i]).unwrap_or_default();
+  // let mut free = f.map(|i| vec![i]).unwrap_or_default();
   for record in redo.into_values() {
     tx_id = tx_id.max(record.tx_id);
     match record.operation {
       Operation::Insert(i, page) => {
-        if free.last().map(|&f| f == i).unwrap_or(false) {
-          free.pop();
-        };
         apply
           .entry(record.tx_id)
           .or_default()
@@ -132,15 +129,16 @@ pub fn replay(
         apply.remove(&record.tx_id);
       }
       Operation::Checkpoint(_, _) => {}
-      Operation::Free(index) => {
-        free.push(index);
-      }
+      Operation::Free(index) => last_free = index,
     };
   }
   let mut last_index = index + 1;
   if last_index == max_len {
     last_index = 0;
-    last_file = Some(open_file(file_prefix, page_pool)?)
+    if let Some(last) = replace(&mut last_file, Some(open_file(file_prefix, page_pool)?))
+    {
+      segments.push(WALSegment::new(last));
+    }
   }
 
   let wal = last_file.unwrap();
@@ -149,7 +147,7 @@ pub fn replay(
     last_index,
     log_id + 1,
     tx_id + 1,
-    free.last().map(|i| *i).unwrap_or(0),
+    last_free,
     aborted,
     commited,
     wal,
@@ -164,7 +162,7 @@ pub fn open_file(
   let config = DiskControllerConfig {
     path: format!(
       "{}{}{}",
-      prefix.to_str().unwrap(),
+      prefix.to_string_lossy(),
       Local::now().timestamp_millis(),
       FILE_SUFFIX
     )

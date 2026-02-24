@@ -93,6 +93,7 @@ impl FreeList {
       .as_ref()
       .deserialize::<FreePage>()?
       .get_next();
+    self.wal.append_free(state.last_free)?;
     return Ok(slot);
   }
 
