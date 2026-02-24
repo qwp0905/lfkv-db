@@ -264,23 +264,24 @@ mod tests {
   }
 
   #[test]
-  fn test_evict() {
-    let cap = 3;
+  fn test_evict_order() {
+    let cap = 5;
     let mut shard = LRUShard::<usize, usize>::new(cap);
     let hasher = RandomState::new();
 
+    // insert 0~4, all go to old
     for i in 0..cap {
       shard.insert(i, i * 10, h(&hasher, i), &hasher);
     }
 
-    // evict returns the oldest entry from old sub-list
-    let evicted = shard.evict(&hasher).unwrap();
-    assert_eq!(evicted, (0, 0));
-    assert_eq!(shard.len(), 2);
+    // evict all: oldest first (FIFO within old)
+    let evicted: Vec<usize> = (0..cap).map(|_| shard.evict(&hasher).unwrap().0).collect();
+    assert_eq!(evicted, vec![0, 1, 2, 3, 4]);
+    assert_eq!(shard.len(), 0);
   }
 
   #[test]
-  fn test_get_promotes_to_new() {
+  fn test_get_promotes_and_evict_order() {
     let cap = 5;
     let mut shard = LRUShard::<usize, usize>::new(cap);
     let hasher = RandomState::new();
@@ -288,17 +289,25 @@ mod tests {
     for i in 0..cap {
       shard.insert(i, i * 10, h(&hasher, i), &hasher);
     }
-    assert_eq!(shard.old_sub_list.len(), 5);
-    assert_eq!(shard.new_sub_list.len(), 0);
 
-    // get promotes from old to new
-    assert_eq!(shard.get(&0, h(&hasher, 0), &hasher), Some(&0));
-    assert_eq!(shard.new_sub_list.len(), 1);
-    assert_eq!(shard.old_sub_list.len(), 4);
+    // access 0 and 1 to promote them
+    shard.get(&0, h(&hasher, 0), &hasher);
+    shard.get(&1, h(&hasher, 1), &hasher);
 
-    // promoted entry should not be evicted first
-    let first_evicted = shard.evict(&hasher).unwrap();
-    assert_ne!(first_evicted.0, 0);
+    // evict all and collect keys
+    let mut evicted = Vec::new();
+    while let Some((k, _)) = shard.evict(&hasher) {
+      evicted.push(k);
+    }
+
+    // non-accessed entries (2, 3, 4) should be evicted before accessed ones (0, 1)
+    let pos = |k: usize| evicted.iter().position(|e| *e == k).unwrap();
+    assert!(pos(2) < pos(0));
+    assert!(pos(3) < pos(0));
+    assert!(pos(4) < pos(0));
+    assert!(pos(2) < pos(1));
+    assert!(pos(3) < pos(1));
+    assert!(pos(4) < pos(1));
   }
 
   #[test]
