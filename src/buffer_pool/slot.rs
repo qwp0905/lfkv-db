@@ -28,12 +28,18 @@ impl<'a> PageSlot<'a> {
     self.index
   }
 
-  pub fn for_read(&self) -> PageSlotRead<'a> {
+  pub fn for_read<'b>(&self) -> PageSlotRead<'b>
+  where
+    'a: 'b,
+  {
     PageSlotRead {
       guard: self.page.rl(),
     }
   }
-  pub fn for_write(&self) -> PageSlotWrite<'a> {
+  pub fn for_write<'b>(&self) -> PageSlotWrite<'b>
+  where
+    'a: 'b,
+  {
     PageSlotWrite {
       guard: self.page.wl(),
       dirty: self.dirty,
