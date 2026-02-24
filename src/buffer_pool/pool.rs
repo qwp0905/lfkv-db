@@ -15,7 +15,7 @@ pub struct BufferPoolConfig {
   pub shard_count: usize,
   pub capacity: usize,
   pub path: PathBuf,
-  pub io_thread_count: Option<usize>,
+  pub io_thread_count: usize,
 }
 
 pub struct BufferPool {

@@ -63,11 +63,9 @@ fn create_thread<'a, const N: usize>(
   }
 }
 
-const DEFAULT_THREADS: usize = 3;
-
 pub struct DiskControllerConfig {
   pub path: PathBuf,
-  pub thread_count: Option<usize>,
+  pub thread_count: usize,
 }
 
 pub struct DiskController<const N: usize> {
@@ -92,7 +90,7 @@ impl<const N: usize> DiskController<N> {
     let background = WorkBuilder::new()
       .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N * 500)
-      .shared(config.thread_count.unwrap_or(DEFAULT_THREADS))
+      .shared(config.thread_count)
       .build(create_thread(&file))?
       .to_arc();
 
@@ -167,7 +165,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      thread_count: None,
+      thread_count: 3,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
@@ -200,7 +198,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      thread_count: None,
+      thread_count: 3,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let finder = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool)?;
@@ -218,7 +216,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      thread_count: None,
+      thread_count: 3,
     };
     let page_pool = Arc::new(PagePool::new(16));
     let co = DiskController::<TEST_PAGE_SIZE>::open(config, page_pool.clone())?;
@@ -249,7 +247,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      thread_count: Some(10),
+      thread_count: 20,
     };
     let page_pool = Arc::new(PagePool::new(16));
 
@@ -326,7 +324,7 @@ mod tests {
     let dir = tempdir().map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
-      thread_count: Some(10),
+      thread_count: 20,
     };
     let page_pool = Arc::new(PagePool::new(16));
 

@@ -15,6 +15,7 @@ where
   gc_trigger_count: Option<usize>,
   buffer_pool_shard_count: Option<usize>,
   buffer_pool_memory_capacity: Option<usize>,
+  io_thread_count: Option<usize>,
 }
 impl<T> EngineBuilder<T>
 where
@@ -31,6 +32,7 @@ where
       gc_trigger_count: None,
       buffer_pool_shard_count: None,
       buffer_pool_memory_capacity: None,
+      io_thread_count: None,
     }
   }
 
@@ -82,6 +84,7 @@ where
       buffer_pool_memory_capacity: self
         .buffer_pool_memory_capacity
         .unwrap_or(DEFAULT_BUFFER_POOL_MEMORY_CAPACITY),
+      io_thread_count: self.io_thread_count.unwrap_or(DEFAULT_IO_THREAD_COUNT),
     };
     Engine::bootstrap(config)
   }
@@ -95,3 +98,4 @@ const DEFAULT_GC_TRIGGER_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_GC_TRIGGER_COUNT: usize = 100;
 const DEFAULT_BUFFER_POOL_SHARD_COUNT: usize = 1 << 4; // 16
 const DEFAULT_BUFFER_POOL_MEMORY_CAPACITY: usize = 30 << 30; // 32 mb
+const DEFAULT_IO_THREAD_COUNT: usize = 3;
