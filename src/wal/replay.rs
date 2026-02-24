@@ -112,11 +112,9 @@ pub fn replay(
     tx_id = tx_id.max(record.tx_id);
     match record.operation {
       Operation::Insert(i, page) => {
-        if let Some(f) = free.last() {
-          if *f == i {
-            free.pop();
-          }
-        }
+        if free.last().map(|&f| f == i).unwrap_or(false) {
+          free.pop();
+        };
         apply
           .entry(record.tx_id)
           .or_default()
