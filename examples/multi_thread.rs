@@ -1,22 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use lfkv_db::{Engine, EngineConfig};
+use lfkv_db::EngineBuilder;
 
 fn main() {
-  let engine = Arc::new(
-    Engine::bootstrap(EngineConfig {
-      base_path: "./.local",
-      wal_file_size: 16 << 20,
-      checkpoint_interval: Duration::from_secs(30),
-      group_commit_delay: Duration::from_millis(10),
-      group_commit_count: 100,
-      gc_trigger_count: 1000,
-      gc_trigger_interval: Duration::from_secs(60),
-      buffer_pool_shard_count: 1,
-      buffer_pool_memory_capacity: 100 << 20,
-    })
-    .unwrap(),
-  );
+  let engine = Arc::new(EngineBuilder::new("./.local").build().unwrap());
   let mut v = vec![];
   for i in 0..2 {
     let e = engine.clone();
