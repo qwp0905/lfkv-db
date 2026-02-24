@@ -297,7 +297,7 @@ mod tests {
   #[test]
   fn test_serialize_internal() {
     let mut page = Page::new();
-    let node = CursorNode::Internal(InternalNode::new(vec![], vec![], None));
+    let node = CursorNode::Internal(InternalNode::new(vec![], vec![10], None));
     page.serialize_from(&node).expect("serialize error");
 
     let d = page
@@ -305,8 +305,10 @@ mod tests {
       .expect("desiralize error")
       .as_internal()
       .expect("desirialize internal error");
-    assert_eq!(d.children.len(), 0);
+
     assert_eq!(d.keys.len(), 0);
+    assert_eq!(d.children.len(), 1);
+    assert_eq!(d.children[0], 10);
     assert_eq!(d.right, None)
   }
 
