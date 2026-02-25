@@ -27,7 +27,7 @@ impl<'a> CursorIterator<'a> {
     }
   }
 
-  pub fn try_next(&mut self) -> Result<Option<Vec<u8>>> {
+  pub fn try_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     if self.closed {
       return Ok(None);
     }
@@ -53,7 +53,7 @@ impl<'a> CursorIterator<'a> {
               match &record.data {
                 RecordData::Data(data) => {
                   self.pos = i + 1;
-                  return Ok(Some(data.clone()));
+                  return Ok(Some((key.clone(), data.clone())));
                 }
                 RecordData::Tombstone => continue 'leaf,
               }

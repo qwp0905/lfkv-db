@@ -40,7 +40,7 @@ impl BufferPool {
     Ok(Self {
       frame,
       disk,
-      table: LRUTable::new(config.shard_count, config.capacity),
+      table: LRUTable::new(config.shard_count, frame_cap),
       dirty: Bitmap::new(config.capacity),
     })
   }
