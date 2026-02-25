@@ -60,6 +60,14 @@ where
     self.buffer_pool_memory_capacity = Some(capacity);
     self
   }
+  pub fn gc_trigger_count(mut self, count: usize) -> Self {
+    self.gc_trigger_count = Some(count);
+    self
+  }
+  pub fn gc_trigger_interval(mut self, interval: Duration) -> Self {
+    self.gc_trigger_interval = Some(interval);
+    self
+  }
 
   pub fn build(self) -> Result<Engine> {
     let config = EngineConfig {
@@ -93,9 +101,9 @@ where
 const DEFAULT_WAL_FILE_SIZE: usize = 8 << 30; // 8 mb
 const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
-const DEFAULT_GROUP_COMMIT_COUNT: usize = 10;
+const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;
 const DEFAULT_GC_TRIGGER_INTERVAL: Duration = Duration::from_secs(30);
-const DEFAULT_GC_TRIGGER_COUNT: usize = 100;
+const DEFAULT_GC_TRIGGER_COUNT: usize = 1000;
 const DEFAULT_BUFFER_POOL_SHARD_COUNT: usize = 1 << 4; // 16
 const DEFAULT_BUFFER_POOL_MEMORY_CAPACITY: usize = 30 << 30; // 32 mb
 const DEFAULT_IO_THREAD_COUNT: usize = 3;
