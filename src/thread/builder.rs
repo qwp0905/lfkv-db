@@ -3,11 +3,9 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::channel::Sender;
-
 use crate::Result;
 
-use super::{SafeWork, SharedWorkThread, SingleWorkThread};
+use super::{OneshotFulfill, SafeWork, SharedWorkThread, SingleWorkThread};
 
 pub struct WorkBuilder {
   name: String,
@@ -44,14 +42,15 @@ pub struct SharedWorkBuilder {
   count: usize,
 }
 impl SharedWorkBuilder {
-  pub fn build<T, R, F, E>(
+  pub fn build<T, R, F, E, W>(
     self,
     build: F,
   ) -> std::result::Result<SharedWorkThread<T, R>, E>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    F: Fn(usize) -> std::result::Result<SafeWork<T, R>, E>,
+    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+    F: Fn(usize) -> std::result::Result<W, E>,
   {
     SharedWorkThread::build(
       self.builder.name,
@@ -65,9 +64,9 @@ impl SharedWorkBuilder {
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    F: Fn(usize) -> SafeWork<T, R>,
+    F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
   {
-    SharedWorkThread::build_unchecked(
+    SharedWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
       self.count,
@@ -109,7 +108,11 @@ impl SafeWorkBuilder {
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    F: Fn(Option<(T, Sender<Result<R>>)>) -> bool + Send + RefUnwindSafe + Sync + 'static,
+    F: Fn(Option<(T, OneshotFulfill<Result<R>>)>) -> bool
+      + Send
+      + RefUnwindSafe
+      + Sync
+      + 'static,
   {
     SingleWorkThread::new(
       self.builder.name,

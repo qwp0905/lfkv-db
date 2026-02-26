@@ -8,7 +8,7 @@ use crate::{
   buffer_pool::BufferPool,
   error::Result,
   serialize::SerializeFrom,
-  thread::{SafeWork, SendAll, SharedWorkThread, SingleWorkThread, WorkBuilder},
+  thread::{SendAll, SharedWorkThread, SingleWorkThread, WorkBuilder},
   transaction::{FreeList, VersionVisibility},
   utils::{ShortenedMutex, ToArc},
 };
@@ -190,24 +190,22 @@ fn run_main(
 fn run_release(
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
-) -> impl Fn(usize) -> SafeWork<Pointer, Result> {
-  move |_| {
-    let orchestrator = buffer_pool.clone();
-    let free_list = free_list.clone();
-    SafeWork::no_timeout(move |pointer: Pointer| {
-      let mut p = Some(pointer);
+) -> impl Fn(Pointer) -> Result {
+  let orchestrator = buffer_pool.clone();
+  let free_list = free_list.clone();
+  move |pointer: Pointer| {
+    let mut p = Some(pointer);
 
-      while let Some(i) = p.take() {
-        p = orchestrator
-          .read(i)?
-          .for_read()
-          .as_ref()
-          .deserialize::<DataEntry>()?
-          .get_next();
-        free_list.release(i)?;
-      }
-      Ok(())
-    })
+    while let Some(i) = p.take() {
+      p = orchestrator
+        .read(i)?
+        .for_read()
+        .as_ref()
+        .deserialize::<DataEntry>()?
+        .get_next();
+      free_list.release(i)?;
+    }
+    Ok(())
   }
 }
 
@@ -215,35 +213,32 @@ fn run_entry(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
-) -> impl Fn(usize) -> SafeWork<Pointer, Result> {
-  move |_| {
-    let buffer_pool = buffer_pool.clone();
-    let release_c = release_c.clone();
-    let version_visibility = version_visibility.clone();
-    let work = SafeWork::no_timeout(move |pointer: Pointer| {
-      let mut index = Some(pointer);
-      while let Some(i) = index.take() {
-        let mut latch = buffer_pool.read(i)?.for_write();
-        let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
-        let next = entry.get_next();
+) -> impl Fn(Pointer) -> Result {
+  let buffer_pool = buffer_pool.clone();
+  let release_c = release_c.clone();
+  let version_visibility = version_visibility.clone();
+  move |pointer: Pointer| {
+    let mut index = Some(pointer);
+    while let Some(i) = index.take() {
+      let mut latch = buffer_pool.read(i)?.for_write();
+      let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
+      let next = entry.get_next();
 
-        let expired = entry.remove_until(version_visibility.min_version());
-        let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
-        if expired || modified {
-          latch.as_mut().serialize_from(&entry)?;
-        }
-        if !expired {
-          index = next;
-          continue;
-        }
-        if let Some(n) = next {
-          release_c.send_no_wait(n);
-        }
-        break;
+      let expired = entry.remove_until(version_visibility.min_version());
+      let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
+      if expired || modified {
+        latch.as_mut().serialize_from(&entry)?;
       }
-      Ok(())
-    });
-    work
+      if !expired {
+        index = next;
+        continue;
+      }
+      if let Some(n) = next {
+        release_c.send_no_wait(n);
+      }
+      break;
+    }
+    Ok(())
   }
 }
 
@@ -252,31 +247,28 @@ fn run_check(
   version_visibility: Arc<VersionVisibility>,
   entry_c: Arc<SharedWorkThread<Pointer, Result>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
-) -> impl Fn(usize) -> SafeWork<Pointer, Result<bool>> {
-  move |_| {
-    let buffer_pool = buffer_pool.clone();
-    let version_visibility = version_visibility.clone();
-    let entry_c = entry_c.clone();
-    let release_c = release_c.clone();
-    let work = SafeWork::no_timeout(move |pointer: Pointer| {
-      let mut latch = buffer_pool.read(pointer)?.for_write();
-      let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
-      let next = entry.get_next();
+) -> impl Fn(Pointer) -> Result<bool> {
+  let buffer_pool = buffer_pool.clone();
+  let version_visibility = version_visibility.clone();
+  let entry_c = entry_c.clone();
+  let release_c = release_c.clone();
+  move |pointer: Pointer| {
+    let mut latch = buffer_pool.read(pointer)?.for_write();
+    let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
+    let next = entry.get_next();
 
-      let expired = entry.remove_until(version_visibility.min_version());
-      let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
+    let expired = entry.remove_until(version_visibility.min_version());
+    let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
 
-      let result = modified || expired;
+    let result = modified || expired;
 
-      let c = (!result).then_some(&entry_c).unwrap_or(&release_c);
-      if result {
-        latch.as_mut().serialize_from(&entry)?;
-      }
-      if let Some(i) = next {
-        c.send_no_wait(i);
-      }
-      Ok(entry.is_empty())
-    });
-    work
+    let c = (!result).then_some(&entry_c).unwrap_or(&release_c);
+    if result {
+      latch.as_mut().serialize_from(&entry)?;
+    }
+    if let Some(i) = next {
+      c.send_no_wait(i);
+    }
+    Ok(entry.is_empty())
   }
 }

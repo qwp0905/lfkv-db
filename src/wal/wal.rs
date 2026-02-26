@@ -12,7 +12,7 @@ use super::{open_file, replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{DiskController, Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
-  thread::{SingleWorkThread, WorkBuilder},
+  thread::{OneshotFulfill, SingleWorkThread, WorkBuilder},
   utils::{logger, ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
 };
 
@@ -191,9 +191,9 @@ fn handle_flush(
   count: usize,
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
-) -> impl Fn(Option<((), Sender<Result<bool>>)>) -> bool {
+) -> impl Fn(Option<((), OneshotFulfill<Result<bool>>)>) -> bool {
   let waits = ArrayQueue::new(count);
-  move |v: Option<((), Sender<Result<bool>>)>| {
+  move |v: Option<((), OneshotFulfill<Result<bool>>)>| {
     if let Some((_, done)) = v {
       let _ = waits.push(done);
       if !waits.is_full() {
@@ -205,14 +205,14 @@ fn handle_flush(
     let (i, p) = entry_to_page(&page_pool, &buffer.entry);
     if let Err(_) = buffer.disk.write(i, &p) {
       while let Some(done) = waits.pop() {
-        let _ = done.send(Ok(false));
+        done.fulfill(Ok(false));
       }
       return true;
     };
 
     let result = buffer.disk.fsync().is_ok();
     while let Some(done) = waits.pop() {
-      let _ = done.send(Ok(result));
+      done.fulfill(Ok(result));
     }
     true
   }

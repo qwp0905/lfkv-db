@@ -1,7 +1,7 @@
 use std::panic::UnwindSafe;
 
 use super::SharedWorkThread;
-use crate::{utils::UnwrappedReceiver, Result};
+use crate::Result;
 
 pub trait SendAll<T, R> {
   fn send_all_to(self, thread: &SharedWorkThread<T, R>) -> Result<Vec<R>>;
@@ -19,7 +19,7 @@ where
       receivers.push(thread.send(v));
     }
     for r in receivers {
-      result.push(r.must_recv()?)
+      result.push(r.wait()?)
     }
     Ok(result)
   }

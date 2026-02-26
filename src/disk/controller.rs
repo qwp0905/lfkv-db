@@ -1,5 +1,5 @@
 use std::{
-  fs::{remove_file, File, Metadata, OpenOptions},
+  fs::{remove_file, Metadata, OpenOptions},
   path::PathBuf,
   sync::Arc,
 };
@@ -7,7 +7,7 @@ use std::{
 use super::{Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
-  thread::{SafeWork, SharedWorkThread, WorkBuilder},
+  thread::{SharedWorkThread, WorkBuilder},
   utils::{logger, ToArc},
 };
 
@@ -35,31 +35,6 @@ impl<const N: usize> OperationResult<N> {
       OperationResult::Metadata(meta) => meta,
       _ => unreachable!(),
     }
-  }
-}
-
-fn create_thread<'a, const N: usize>(
-  file: &'a File,
-) -> impl Fn(usize) -> Result<SafeWork<DiskOperation<N>, std::io::Result<OperationResult<N>>>>
-     + use<'a, N> {
-  |_| {
-    let fd = file.try_clone().map_err(Error::IO)?;
-    let work = SafeWork::no_timeout(move |operation: DiskOperation<N>| match operation {
-      DiskOperation::Read(offset, mut page) => {
-        fd.pread(page.as_mut().as_mut(), offset)?;
-        Ok(OperationResult::Read(page))
-      }
-      DiskOperation::Write(offset, page) => {
-        fd.pwrite(page.as_ref(), offset)?;
-        Ok(OperationResult::Write)
-      }
-      DiskOperation::Flush => {
-        fd.sync_all()?;
-        Ok(OperationResult::Flush)
-      }
-      DiskOperation::Metadata => Ok(OperationResult::Metadata(fd.metadata()?)),
-    });
-    Ok(work)
   }
 }
 
@@ -91,7 +66,20 @@ impl<const N: usize> DiskController<N> {
       .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N * 500)
       .shared(config.thread_count)
-      .build(create_thread(&file))?
+      .build(move |_| {
+        let fd = file.try_clone().map_err(Error::IO)?;
+        let work = move |operation: DiskOperation<N>| match operation {
+          DiskOperation::Read(offset, mut page) => fd
+            .pread(page.as_mut().as_mut(), offset)
+            .map(|_| OperationResult::Read(page)),
+          DiskOperation::Write(offset, page) => fd
+            .pwrite(page.as_ref(), offset)
+            .map(|_| OperationResult::Write),
+          DiskOperation::Flush => fd.sync_all().map(|_| OperationResult::Flush),
+          DiskOperation::Metadata => Ok(OperationResult::Metadata(fd.metadata()?)),
+        };
+        Ok(work)
+      })?
       .to_arc();
 
     Ok(Self {
