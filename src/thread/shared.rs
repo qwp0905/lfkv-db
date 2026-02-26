@@ -1,14 +1,13 @@
 use std::{
   panic::{RefUnwindSafe, UnwindSafe},
   sync::Arc,
-  thread::{park_timeout, Builder, JoinHandle, Thread},
+  thread::{park_timeout, yield_now, Builder, JoinHandle, Thread},
   time::Duration,
 };
 
 use crossbeam::{
   atomic::AtomicCell,
   deque::{Injector, Stealer, Worker},
-  utils::Backoff,
 };
 
 use crate::{error::Result, utils::ToArc};
@@ -36,6 +35,7 @@ fn steal<A>(
 }
 
 const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
+const YIELD_LIMIT: usize = 16;
 
 fn worker_loop<T, R>(
   local: Worker<Context<T, R>>,
@@ -47,28 +47,31 @@ where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
-  let backoff = Backoff::new();
-  move || loop {
-    let task = match steal(&local, &global, &stealers) {
-      Some(t) => t,
-      None => {
-        if !backoff.is_completed() {
-          backoff.snooze();
-        } else {
-          park_timeout(THREAD_PARK_TIMEOUT);
+  move || {
+    let mut count = 0;
+    loop {
+      let task = match steal(&local, &global, &stealers) {
+        Some(t) => t,
+        None => {
+          if count < YIELD_LIMIT {
+            count += 1;
+            yield_now();
+          } else {
+            park_timeout(THREAD_PARK_TIMEOUT);
+          }
+          continue;
         }
-        continue;
-      }
-    };
+      };
 
-    backoff.reset();
-    match task {
-      Context::Work((data, out)) => out.fulfill(work.call(data)),
-      Context::Term => {
-        while let Some(c) = local.pop() {
-          global.push(c)
+      count = 0;
+      match task {
+        Context::Work((data, out)) => out.fulfill(work.call(data)),
+        Context::Term => {
+          while let Some(c) = local.pop() {
+            global.push(c)
+          }
+          return;
         }
-        return;
       }
     }
   }
