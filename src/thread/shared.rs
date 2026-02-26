@@ -37,6 +37,12 @@ fn steal<A>(
 const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
 const YIELD_LIMIT: usize = 16;
 
+fn return_task<A>(global: &Injector<A>, local: &Worker<A>) {
+  while let Some(v) = local.pop() {
+    global.push(v);
+  }
+}
+
 fn worker_loop<T, R>(
   local: Worker<Context<T, R>>,
   global: Arc<Injector<Context<T, R>>>,
@@ -50,28 +56,20 @@ where
   move || {
     let mut count = 0;
     loop {
-      let task = match steal(&local, &global, &stealers) {
-        Some(t) => t,
-        None => {
-          if count < YIELD_LIMIT {
-            count += 1;
-            yield_now();
-          } else {
-            park_timeout(THREAD_PARK_TIMEOUT);
-          }
-          continue;
+      if let Some(task) = steal(&local, &global, &stealers) {
+        count = 0;
+        match task {
+          Context::Work((data, out)) => out.fulfill(work.call(data)),
+          Context::Term => return return_task(&global, &local),
         }
-      };
+        continue;
+      }
 
-      count = 0;
-      match task {
-        Context::Work((data, out)) => out.fulfill(work.call(data)),
-        Context::Term => {
-          while let Some(c) = local.pop() {
-            global.push(c)
-          }
-          return;
-        }
+      if count >= YIELD_LIMIT {
+        park_timeout(THREAD_PARK_TIMEOUT);
+      } else {
+        count += 1;
+        yield_now();
       }
     }
   }
