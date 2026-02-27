@@ -193,8 +193,8 @@ fn run_checkpoint(
   gc.run()?;
   buffer_pool.flush()?;
   wal.append_checkpoint(free_list.get_last_free(), log_id)?;
+  r.map(|f| f.wait()).unwrap_or(Ok(()))?;
   segment.map(|s| s.unlink()).unwrap_or(Ok(()))?;
-  r.map(|f| f.wait()).unwrap_or_else(|| Ok(()))?;
   wal.flush()?;
   Ok(())
 }
