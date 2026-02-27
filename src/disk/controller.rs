@@ -44,7 +44,6 @@ pub struct DiskControllerConfig {
 }
 
 pub struct DiskController<const N: usize> {
-  // path: PathBuf,
   background:
     Arc<SharedWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
   page_pool: Arc<PagePool<N>>,
