@@ -27,7 +27,7 @@ pub fn replay(
   usize,                     // last_free
   BTreeSet<usize>,           // aborted
   Vec<(usize, usize, Page)>, // redo records
-  Option<WALSegment>,        // wal file controller
+  Option<WALSegment>,        // wal file segment
   Vec<WALSegment>,           // previous segments
 )> {
   let mut files = Vec::new();

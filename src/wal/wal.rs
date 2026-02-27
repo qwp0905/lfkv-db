@@ -18,7 +18,7 @@ use crate::{
 struct WALBuffer {
   last_log_id: usize,
   entry: LogEntry,
-  disk: WALSegment,
+  segment: WALSegment,
 }
 
 pub struct WALConfig {
@@ -53,15 +53,23 @@ impl WAL {
   )> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
-    let (last_index, last_log_id, last_tx_id, last_free, aborted, redo, disk, segments) =
-      replay(
-        config.base_dir.to_string_lossy().as_ref(),
-        config.prefix.to_string_lossy().as_ref(),
-        max_index,
-        config.group_commit_count,
-        config.group_commit_delay,
-        page_pool.clone(),
-      )?;
+    let (
+      last_index,
+      last_log_id,
+      last_tx_id,
+      last_free,
+      aborted,
+      redo,
+      current_seg,
+      segments,
+    ) = replay(
+      config.base_dir.to_string_lossy().as_ref(),
+      config.prefix.to_string_lossy().as_ref(),
+      max_index,
+      config.group_commit_count,
+      config.group_commit_delay,
+      page_pool.clone(),
+    )?;
 
     logger::info(format!(
       "wal replay result: last_index {last_index} last_log_id {last_log_id} last_tx_id {last_tx_id} last_free {last_free} aborted {} redo {} segments {}",
@@ -74,7 +82,7 @@ impl WAL {
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
-      disk: match disk {
+      segment: match current_seg {
         Some(seg) => seg,
         None => WALSegment::open_new(
           &prefix,
@@ -107,14 +115,14 @@ impl WAL {
     {
       let buffer = self.buffer.l();
       let (i, p) = self.entry_to_page(&buffer.entry);
-      buffer.disk.write(i, &p)?;
-      buffer.disk.fsync()
+      buffer.segment.write(i, &p)?;
+      buffer.segment.fsync()
     }
     .wait()
   }
 
   pub fn close(&self) {
-    self.buffer.l().disk.close()
+    self.buffer.l().segment.close()
   }
 
   #[inline]
@@ -135,13 +143,13 @@ impl WAL {
     };
 
     let (i, p) = self.entry_to_page(&buffer.entry);
-    buffer.disk.write(i, &p)?;
+    buffer.segment.write(i, &p)?;
     let mut index = buffer.entry.get_index() + 1;
     if index == self.max_index {
       index = 0;
       let new_seg =
         WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?;
-      let old = replace(&mut buffer.disk, new_seg);
+      let old = replace(&mut buffer.segment, new_seg);
       self.checkpoint.must_send(old);
     }
 
