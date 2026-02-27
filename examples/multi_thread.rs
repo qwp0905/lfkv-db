@@ -8,7 +8,7 @@ fn main() {
     EngineBuilder::new("./.local")
       .group_commit_count(1000)
       .group_commit_delay(Duration::from_millis(10))
-      .buffer_pool_memory_capacity(30 << 30)
+      .buffer_pool_memory_capacity(100 << 20)
       .buffer_pool_shard_count(1 << 6)
       .gc_trigger_count(300)
       .build()
@@ -18,11 +18,12 @@ fn main() {
   let count = 10000i64;
 
   let threads_count = 32;
+  let mut threads = Vec::new();
   let (tx, rx) = unbounded::<(i64, Sender<()>)>();
   for i in 0..threads_count {
     let rx = rx.clone();
     let e = engine.clone();
-    std::thread::Builder::new()
+    let th = std::thread::Builder::new()
       .name(format!("{i}th thread"))
       .stack_size(3 << 20)
       .spawn(move || {
@@ -35,6 +36,7 @@ fn main() {
         }
       })
       .unwrap();
+    threads.push(th)
   }
 
   let start = chrono::Local::now();
@@ -45,7 +47,11 @@ fn main() {
   }
 
   v.into_iter().for_each(|r| r.recv().unwrap());
+  drop(tx);
   println!("{} ms", (chrono::Local::now() - start).num_milliseconds());
+  for th in threads {
+    let _ = th.join();
+  }
 
   let mut t = engine.new_transaction().expect("scan start error");
   let mut iter = t.scan_all().expect("scan all error");
@@ -54,4 +60,7 @@ fn main() {
   }
 
   t.commit().expect("scan commit error");
+
+  drop(engine);
+  println!("done");
 }
