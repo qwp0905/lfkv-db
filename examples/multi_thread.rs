@@ -57,7 +57,11 @@ fn main() {
   let mut t = engine.new_transaction().expect("scan start error");
   let mut iter = t.scan_all().expect("scan all error");
   while let Ok(Some((k, v))) = iter.try_next() {
-    println!("{:?} {:?}", k, String::from_utf8_lossy(&v))
+    println!(
+      "{:?} {:?}",
+      String::from_utf8_lossy(&k),
+      String::from_utf8_lossy(&v)
+    )
   }
 
   t.commit().expect("scan commit error");
