@@ -75,9 +75,7 @@ pub fn replay(
       wal.read(i, &mut page)?;
 
       let (r, complete) = page.as_ref().into();
-      for record in r {
-        records.push((i, record))
-      }
+      records.extend(r.into_iter().map(|record| (i, record)));
       if complete {
         break;
       }
