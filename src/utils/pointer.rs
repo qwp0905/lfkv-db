@@ -19,12 +19,3 @@ impl<T> ToArcMutex for T {
     Mutex::new(self).to_arc()
   }
 }
-
-// pub trait ToArcRwLock {
-//   fn to_arc_rwlock(self) -> Arc<RwLock<Self>>;
-// }
-// impl<T> ToArcRwLock for T {
-//   fn to_arc_rwlock(self) -> Arc<RwLock<Self>> {
-//     RwLock::new(self).to_arc()
-//   }
-// }
