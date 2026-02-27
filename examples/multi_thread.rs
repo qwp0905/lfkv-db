@@ -25,7 +25,7 @@ fn main() {
     let e = engine.clone();
     let th = std::thread::Builder::new()
       .name(format!("{i}th thread"))
-      .stack_size(3 << 20)
+      .stack_size(2 << 20)
       .spawn(move || {
         while let Ok((i, t)) = rx.recv() {
           let mut r = e.new_transaction().expect("start error");
