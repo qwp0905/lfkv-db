@@ -99,11 +99,10 @@ impl LogRecord {
     vec.extend_from_slice(&self.log_id.to_be_bytes());
     vec.extend_from_slice(&self.tx_id.to_be_bytes());
     vec.extend_from_slice(&self.operation.to_bytes());
-    let mut sum = 0u32;
-    for i in 4..vec.len() {
-      sum += vec[i] as u32;
-    }
-    vec[0..4].copy_from_slice(&sum.to_be_bytes());
+    let checksum = (4..vec.len())
+      .map(|i| vec[i] as u32)
+      .fold(0u32, |a, c| a + c);
+    vec[0..4].copy_from_slice(&checksum.to_be_bytes());
     vec
   }
 }
@@ -123,11 +122,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
 
     let checksum =
       u32::from_be_bytes(value[0..4].try_into().map_err(|_| Error::InvalidFormat)?);
-    let mut sum = 0u32;
-    for i in 4..len {
-      sum += value[i] as u32;
-    }
-    if sum != checksum {
+    if (4..len).map(|i| value[i] as u32).fold(0u32, |a, c| a + c) != checksum {
       return Err(Error::InvalidFormat);
     }
 
