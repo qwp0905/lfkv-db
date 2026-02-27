@@ -94,11 +94,16 @@ impl LogRecord {
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
-    let mut vec = Vec::new();
+    let mut vec = vec![0, 0, 0, 0]; // checksum
 
     vec.extend_from_slice(&self.log_id.to_be_bytes());
     vec.extend_from_slice(&self.tx_id.to_be_bytes());
     vec.extend_from_slice(&self.operation.to_bytes());
+    let mut sum = 0u32;
+    for i in 4..vec.len() {
+      sum += vec[i] as u32;
+    }
+    vec[0..4].copy_from_slice(&sum.to_be_bytes());
     vec
   }
 }
@@ -112,45 +117,56 @@ impl TryFrom<Vec<u8>> for LogRecord {
 
   fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
     let len = value.len();
-    if len.lt(&17) {
+    if len < 21 {
       return Err(Error::InvalidFormat);
     }
+
+    let checksum =
+      u32::from_be_bytes(value[0..4].try_into().map_err(|_| Error::InvalidFormat)?);
+    let mut sum = 0u32;
+    for i in 4..len {
+      sum += value[i] as u32;
+    }
+    if sum != checksum {
+      return Err(Error::InvalidFormat);
+    }
+
     let log_id =
-      usize::from_be_bytes(value[0..8].try_into().map_err(|_| Error::InvalidFormat)?);
+      usize::from_be_bytes(value[4..12].try_into().map_err(|_| Error::InvalidFormat)?);
     let tx_id =
-      usize::from_be_bytes(value[8..16].try_into().map_err(|_| Error::InvalidFormat)?);
-    let operation = match value[16] {
+      usize::from_be_bytes(value[12..20].try_into().map_err(|_| Error::InvalidFormat)?);
+    let operation = match value[20] {
       1 => {
-        if len.ne(&PAGE_SIZE.add(17).add(8)) {
+        if len != PAGE_SIZE + 29 {
           return Err(Error::InvalidFormat);
         }
         let index = usize::from_be_bytes(
-          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
         );
-        let data = value[25..].try_into().map_err(|_| Error::InvalidFormat)?;
+        let data = value[29..].try_into().map_err(|_| Error::InvalidFormat)?;
         Operation::Insert(index, data)
       }
       2 => Operation::Start,
       3 => Operation::Commit,
       4 => Operation::Abort,
       5 => {
-        if len.lt(&33) {
+        if len < 37 {
           return Err(Error::InvalidFormat);
         }
         let log_id = usize::from_be_bytes(
-          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         let index = usize::from_be_bytes(
-          value[25..33].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[29..37].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         Operation::Checkpoint(index, log_id)
       }
       6 => {
-        if len.lt(&25) {
+        if len < 29 {
           return Err(Error::InvalidFormat);
         }
         let index = usize::from_be_bytes(
-          value[17..25].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
         );
         Operation::Free(index)
       }
@@ -196,21 +212,31 @@ impl From<LogEntry> for Page<WAL_BLOCK_SIZE> {
     value.data.into()
   }
 }
-impl TryFrom<&Page<WAL_BLOCK_SIZE>> for Vec<LogRecord> {
-  type Error = Error;
-
-  fn try_from(value: &Page<WAL_BLOCK_SIZE>) -> std::result::Result<Self, Self::Error> {
-    let mut scanner = value.scanner();
-    let len = scanner.read_u16()?;
+impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
+  fn from(value: &Page<WAL_BLOCK_SIZE>) -> Self {
     let mut data = vec![];
+    let mut scanner = value.scanner();
+    let len = match scanner.read_u16() {
+      Ok(l) => l,
+      Err(_) => return (data, true), // ignore error cause of partial write
+    };
     for _ in 0..len {
-      let size = scanner.read_u16()?;
-      let record = scanner.read_n(size as usize)?.to_vec().try_into()?;
-      data.push(record);
+      let size = match scanner.read_u16() {
+        Ok(s) => s,
+        Err(_) => return (data, true), // ignore error cause of partial write
+      };
+      match scanner
+        .read_n(size as usize)
+        .and_then(|p| p.to_vec().try_into())
+      {
+        Ok(record) => data.push(record),
+        Err(_) => return (data, true), // ignore error cause of partial write
+      }
     }
-    Ok(data)
+    (data, false)
   }
 }
+
 impl AsRef<[u8]> for LogEntry {
   fn as_ref(&self) -> &[u8] {
     &self.data
@@ -303,7 +329,8 @@ mod tests {
     entry.append(&r3).expect("append r3");
 
     let page: Page<WAL_BLOCK_SIZE> = entry.into();
-    let d: Vec<LogRecord> = (&page).try_into().expect("parse error");
+    let (d, complete) = (&page).into();
+    assert_eq!(complete, false);
 
     assert_eq!(d.len(), 3);
     assert_eq!(d[0].log_id, 1);

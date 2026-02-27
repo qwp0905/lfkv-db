@@ -70,12 +70,16 @@ pub fn replay(
     let len = wal.len()?;
     let mut records = vec![];
 
-    for i in 0..len {
+    for i in 0..=len {
       let mut page = page_pool.acquire();
       wal.read(i, &mut page)?;
 
-      for record in Vec::<LogRecord>::try_from(page.as_ref())? {
+      let (r, complete) = page.as_ref().into();
+      for record in r {
         records.push((i, record))
+      }
+      if complete {
+        break;
       }
     }
     records.sort_by_key(|(_, r)| r.log_id);
