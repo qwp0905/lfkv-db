@@ -101,7 +101,10 @@ where
                 Err(_) => {}
               };
             }
-            Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => {
+              let _ = work.call(None);
+              return;
+            }
           };
         }
       }

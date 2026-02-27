@@ -34,14 +34,6 @@ impl<T> Oneshot<T> {
     }
   }
 }
-impl<T> Clone for OneshotFulfill<T> {
-  fn clone(&self) -> Self {
-    Self {
-      value: self.value.clone(),
-      caller: self.caller.clone(),
-    }
-  }
-}
 
 pub struct OneshotFulfill<T> {
   value: Arc<AtomicCell<Option<T>>>,
@@ -55,6 +47,15 @@ impl<T> OneshotFulfill<T> {
     }
   }
 }
+impl<T> Clone for OneshotFulfill<T> {
+  fn clone(&self) -> Self {
+    Self {
+      value: self.value.clone(),
+      caller: self.caller.clone(),
+    }
+  }
+}
+
 unsafe impl<T: Send> Sync for OneshotFulfill<T> {}
 unsafe impl<T: Send> Send for OneshotFulfill<T> {}
 
