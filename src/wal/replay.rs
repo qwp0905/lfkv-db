@@ -4,14 +4,12 @@ use std::{
   mem::replace,
   path::PathBuf,
   sync::Arc,
+  time::Duration,
 };
-
-use chrono::Local;
 
 use super::{LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
-  constant::FILE_SUFFIX,
-  disk::{DiskController, DiskControllerConfig, Page, PagePool},
+  disk::{Page, PagePool},
   error::{Error, Result},
   utils::logger,
 };
@@ -20,16 +18,18 @@ pub fn replay(
   base_dir: &str,
   prefix: &str,
   max_len: usize,
+  flush_count: usize,
+  flush_interval: Duration,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
 ) -> Result<(
-  usize,                          // last index
-  usize,                          // last_log_id
-  usize,                          // last_tx_id
-  usize,                          // last_free
-  BTreeSet<usize>,                // aborted
-  Vec<(usize, usize, Page)>,      // redo records
-  DiskController<WAL_BLOCK_SIZE>, // wal file controller
-  Vec<WALSegment>,                // previous segments
+  usize,                     // last index
+  usize,                     // last_log_id
+  usize,                     // last_tx_id
+  usize,                     // last_free
+  BTreeSet<usize>,           // aborted
+  Vec<(usize, usize, Page)>, // redo records
+  WALSegment,                // wal file controller
+  Vec<WALSegment>,           // previous segments
 )> {
   let mut files = Vec::new();
   for file in read_dir(base_dir).map_err(Error::IO)? {
@@ -40,7 +40,7 @@ pub fn replay(
     files.push(file.path())
   }
 
-  let file_prefix = PathBuf::from(base_dir).join(prefix);
+  let file_prefix = &PathBuf::from(base_dir).join(prefix);
   if files.len() == 0 {
     logger::info("previous wal segment not found.");
     return Ok((
@@ -50,7 +50,7 @@ pub fn replay(
       0,
       Default::default(),
       Default::default(),
-      open_file(file_prefix, page_pool)?,
+      WALSegment::open_new(file_prefix, flush_count, flush_interval)?,
       Default::default(),
     ));
   }
@@ -68,19 +68,15 @@ pub fn replay(
 
   files.sort();
   for path in files.into_iter() {
-    let wal = DiskController::open(
-      DiskControllerConfig {
-        path,
-        thread_count: 3,
-      },
-      page_pool.clone(),
-    )?;
-
+    let wal = WALSegment::open_exists(path, flush_count, flush_interval)?;
     let len = wal.len()?;
     let mut records = vec![];
 
     for i in 0..len {
-      for record in Vec::<LogRecord>::try_from(wal.read(i)?.as_ref())? {
+      let mut page = page_pool.acquire();
+      wal.read(i, &mut page)?;
+
+      for record in Vec::<LogRecord>::try_from(page.as_ref())? {
         records.push((i, record))
       }
     }
@@ -103,11 +99,10 @@ pub fn replay(
     }
 
     if let Some(last) = replace(&mut last_file, Some(wal)) {
-      segments.push(WALSegment::new(last));
+      segments.push(last);
     }
   }
 
-  // let mut free = f.map(|i| vec![i]).unwrap_or_default();
   for record in redo.into_values() {
     tx_id = tx_id.max(record.tx_id);
     match record.operation {
@@ -135,13 +130,22 @@ pub fn replay(
   let mut last_index = index + 1;
   if last_index == max_len {
     last_index = 0;
-    if let Some(last) = replace(&mut last_file, Some(open_file(file_prefix, page_pool)?))
-    {
-      segments.push(WALSegment::new(last));
+    if let Some(last) = replace(
+      &mut last_file,
+      Some(WALSegment::open_new(
+        file_prefix,
+        flush_count,
+        flush_interval,
+      )?),
+    ) {
+      segments.push(last);
     }
   }
+  let last_file = match last_file {
+    Some(f) => f,
+    None => WALSegment::open_new(file_prefix, flush_count, flush_interval)?,
+  };
 
-  let wal = last_file.unwrap();
   let aborted = BTreeSet::from_iter(apply.into_keys());
   Ok((
     last_index,
@@ -150,24 +154,7 @@ pub fn replay(
     last_free,
     aborted,
     commited,
-    wal,
+    last_file,
     segments,
   ))
-}
-
-pub fn open_file(
-  prefix: PathBuf,
-  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
-) -> Result<DiskController<WAL_BLOCK_SIZE>> {
-  let config = DiskControllerConfig {
-    path: format!(
-      "{}{}{}",
-      prefix.to_string_lossy(),
-      Local::now().timestamp_millis(),
-      FILE_SUFFIX
-    )
-    .into(),
-    thread_count: 3,
-  };
-  DiskController::open(config, page_pool)
 }

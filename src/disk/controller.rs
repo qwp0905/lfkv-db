@@ -1,5 +1,5 @@
 use std::{
-  fs::{remove_file, Metadata, OpenOptions},
+  fs::{Metadata, OpenOptions},
   path::PathBuf,
   sync::Arc,
 };
@@ -44,7 +44,7 @@ pub struct DiskControllerConfig {
 }
 
 pub struct DiskController<const N: usize> {
-  path: PathBuf,
+  // path: PathBuf,
   background:
     Arc<SharedWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
   page_pool: Arc<PagePool<N>>,
@@ -83,7 +83,7 @@ impl<const N: usize> DiskController<N> {
       .to_arc();
 
     Ok(Self {
-      path: config.path,
+      // path: config.path,
       background,
       page_pool,
     })
@@ -123,10 +123,6 @@ impl<const N: usize> DiskController<N> {
 
   pub fn close(&self) {
     self.background.close();
-  }
-
-  pub fn unlink(self) -> Result {
-    remove_file(self.path).map_err(Error::IO)
   }
 
   pub fn len(&self) -> Result<usize> {

@@ -6,20 +6,19 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::{channel::Sender, queue::ArrayQueue};
+use crossbeam::channel::Sender;
 
-use super::{open_file, replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
+use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
-  disk::{DiskController, Page, PagePool, PageRef, PAGE_SIZE},
+  disk::{Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
-  thread::{OneshotFulfill, SingleWorkThread, WorkBuilder},
   utils::{logger, ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
 };
 
 struct WALBuffer {
   last_log_id: usize,
   entry: LogEntry,
-  disk: DiskController<WAL_BLOCK_SIZE>,
+  disk: WALSegment,
 }
 
 pub struct WALConfig {
@@ -33,11 +32,12 @@ pub struct WALConfig {
 
 pub struct WAL {
   prefix: PathBuf,
-  flush_th: SingleWorkThread<(), bool>,
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
   checkpoint: Sender<WALSegment>,
+  flush_count: usize,
+  flush_interval: Duration,
 }
 impl WAL {
   pub fn replay(
@@ -58,6 +58,8 @@ impl WAL {
         config.base_dir.to_string_lossy().as_ref(),
         config.prefix.to_string_lossy().as_ref(),
         max_index,
+        config.group_commit_count,
+        config.group_commit_delay,
         page_pool.clone(),
       )?;
 
@@ -73,23 +75,16 @@ impl WAL {
       disk,
     }
     .to_arc_mutex();
-    let flush_th = WorkBuilder::new()
-      .name("wal flush")
-      .stack_size(2 << 20)
-      .single()
-      .with_timer(
-        config.group_commit_delay,
-        handle_flush(config.group_commit_count, buffer.clone(), page_pool.clone()),
-      );
 
     Ok((
       Self {
         prefix: PathBuf::from(config.base_dir).join(config.prefix),
         buffer,
         page_pool,
-        flush_th,
         max_index,
         checkpoint,
+        flush_count: config.group_commit_count,
+        flush_interval: config.group_commit_delay,
       },
       last_tx_id,
       last_free,
@@ -100,26 +95,27 @@ impl WAL {
   }
 
   pub fn flush(&self) -> Result<()> {
-    self
-      .flush_th
-      .send_await(())?
-      .then(|| Ok(()))
-      .unwrap_or(Err(Error::FlushFailed))
+    {
+      let buffer = self.buffer.l();
+      let (i, p) = self.entry_to_page(&buffer.entry);
+      buffer.disk.write(i, &p)?;
+      buffer.disk.fsync()
+    }
+    .wait()
   }
 
   pub fn close(&self) {
-    self.flush_th.close();
-    self.buffer.l().disk.close();
+    self.buffer.l().disk.close()
   }
 
   #[inline]
-  fn append<F>(&self, mut f: F) -> Result
+  fn append<F>(&self, create_record: F) -> Result
   where
-    F: FnMut(usize) -> LogRecord,
+    F: Fn(usize) -> LogRecord,
   {
     let mut buffer = self.buffer.l();
     let log_id = buffer.last_log_id;
-    let record = f(log_id);
+    let record = create_record(log_id);
     match buffer.entry.append(&record) {
       Ok(_) => {
         buffer.last_log_id += 1;
@@ -127,26 +123,23 @@ impl WAL {
       }
       Err(Error::EOF) => {}
       Err(err) => return Err(err),
-    }
+    };
 
-    let (i, p) = entry_to_page(&self.page_pool, &buffer.entry);
+    let (i, p) = self.entry_to_page(&buffer.entry);
     buffer.disk.write(i, &p)?;
-
-    let index = buffer.entry.get_index() + 1;
-
+    let mut index = buffer.entry.get_index() + 1;
     if index == self.max_index {
-      buffer.entry = LogEntry::new(0);
-      let new_segment = open_file(self.prefix.clone(), self.page_pool.clone())?;
-
-      self
-        .checkpoint
-        .must_send(WALSegment::new(replace(&mut buffer.disk, new_segment)));
+      index = 0;
+      self.checkpoint.must_send(replace(
+        &mut buffer.disk,
+        WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?,
+      ));
     }
 
     buffer.entry = LogEntry::new(index);
     let _ = buffer.entry.append(&record);
-
     buffer.last_log_id += 1;
+
     Ok(())
   }
   pub fn current_log_id(&self) -> usize {
@@ -176,44 +169,10 @@ impl WAL {
   pub fn append_abort(&self, tx_id: usize) -> Result {
     self.append(|log_id| LogRecord::new_abort(log_id, tx_id))
   }
-}
 
-fn entry_to_page(
-  page_pool: &PagePool<WAL_BLOCK_SIZE>,
-  buffer: &LogEntry,
-) -> (usize, PageRef<WAL_BLOCK_SIZE>) {
-  let mut page = page_pool.acquire();
-  let _ = page.as_mut().writer().write(buffer.as_ref());
-  (buffer.get_index(), page)
-}
-
-fn handle_flush(
-  count: usize,
-  buffer: Arc<Mutex<WALBuffer>>,
-  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
-) -> impl Fn(Option<((), OneshotFulfill<Result<bool>>)>) -> bool {
-  let waits = ArrayQueue::new(count);
-  move |v: Option<((), OneshotFulfill<Result<bool>>)>| {
-    if let Some((_, done)) = v {
-      let _ = waits.push(done);
-      if !waits.is_full() {
-        return false;
-      }
-    }
-
-    let buffer = buffer.l();
-    let (i, p) = entry_to_page(&page_pool, &buffer.entry);
-    if let Err(_) = buffer.disk.write(i, &p) {
-      while let Some(done) = waits.pop() {
-        done.fulfill(Ok(false));
-      }
-      return true;
-    };
-
-    let result = buffer.disk.fsync().is_ok();
-    while let Some(done) = waits.pop() {
-      done.fulfill(Ok(result));
-    }
-    true
+  fn entry_to_page(&self, buffer: &LogEntry) -> (usize, PageRef<WAL_BLOCK_SIZE>) {
+    let mut page = self.page_pool.acquire();
+    let _ = page.as_mut().writer().write(buffer.as_ref());
+    (buffer.get_index(), page)
   }
 }

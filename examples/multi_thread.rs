@@ -16,12 +16,14 @@ fn main() {
   let mut v = vec![];
   let count = 1000i64;
 
+  let start = chrono::Local::now();
   for i in 0..count {
     let e = engine.clone();
     let (tx, rx) = crossbeam::channel::unbounded();
     v.push(rx);
     std::thread::Builder::new()
       .name(format!("{i}th thread"))
+      .stack_size(3 << 20)
       .spawn(move || {
         let mut r = e.new_transaction().expect("start error");
         let vec = format!("123{}", i).as_bytes().to_vec();
@@ -33,12 +35,13 @@ fn main() {
   }
 
   v.into_iter().for_each(|r| r.recv().unwrap());
+  println!("{} ms", (chrono::Local::now() - start).num_milliseconds())
 
-  let mut t = engine.new_transaction().expect("scan start error");
-  let mut iter = t.scan_all().expect("scan all error");
-  while let Ok(Some((k, v))) = iter.try_next() {
-    println!("{:?} {:?}", k, String::from_utf8_lossy(&v))
-  }
+  // let mut t = engine.new_transaction().expect("scan start error");
+  // let mut iter = t.scan_all().expect("scan all error");
+  // while let Ok(Some((k, v))) = iter.try_next() {
+  //   println!("{:?} {:?}", k, String::from_utf8_lossy(&v))
+  // }
 
-  t.commit().expect("scan commit error");
+  // t.commit().expect("scan commit error");
 }

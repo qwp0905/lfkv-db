@@ -69,7 +69,7 @@ impl TxOrchestrator {
       wal.flush()?;
 
       for seg in segments {
-        seg.truncate()?;
+        seg.unlink()?;
       }
     }
 
@@ -198,12 +198,13 @@ fn run_checkpoint(
   free_list: &FreeList,
   gc: &GarbageCollector,
 ) -> Result {
+  let r = segment.as_ref().map(|s| s.fsync());
   let log_id = wal.current_log_id();
-  segment.as_ref().map(|s| s.flush()).unwrap_or(Ok(()))?;
   gc.run()?;
   buffer_pool.flush()?;
   wal.append_checkpoint(free_list.get_last_free(), log_id)?;
-  segment.map(|s| s.truncate()).unwrap_or(Ok(()))?;
+  segment.map(|s| s.unlink()).unwrap_or(Ok(()))?;
+  r.map(|f| f.wait()).unwrap_or_else(|| Ok(()))?;
   wal.flush()?;
   Ok(())
 }
