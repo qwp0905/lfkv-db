@@ -50,13 +50,13 @@ impl GarbageCollector {
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
-      .shared(1)
+      .shared(3)
       .build_unchecked(run_release(buffer_pool.clone(), free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(2 << 20)
-      .shared(1)
+      .shared(3)
       .build_unchecked(run_entry(
         buffer_pool.clone(),
         version_visibility.clone(),
@@ -66,7 +66,7 @@ impl GarbageCollector {
     let check = WorkBuilder::new()
       .name("gc check top entry")
       .stack_size(2 << 20)
-      .shared(1)
+      .shared(3)
       .build_unchecked(run_check(
         buffer_pool.clone(),
         version_visibility.clone(),

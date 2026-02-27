@@ -17,7 +17,7 @@ fn main() {
   let mut v = vec![];
   let count = 10000i64;
 
-  let threads_count = 32;
+  let threads_count = 100;
   let mut threads = Vec::new();
   let (tx, rx) = unbounded::<(i64, Sender<()>)>();
   for i in 0..threads_count {
@@ -53,13 +53,13 @@ fn main() {
     let _ = th.join();
   }
 
-  let mut t = engine.new_transaction().expect("scan start error");
-  let mut iter = t.scan_all().expect("scan all error");
-  while let Ok(Some((k, v))) = iter.try_next() {
-    println!("{:?} {:?}", k, String::from_utf8_lossy(&v))
-  }
+  // let mut t = engine.new_transaction().expect("scan start error");
+  // let mut iter = t.scan_all().expect("scan all error");
+  // while let Ok(Some((k, v))) = iter.try_next() {
+  //   println!("{:?} {:?}", k, String::from_utf8_lossy(&v))
+  // }
 
-  t.commit().expect("scan commit error");
+  // t.commit().expect("scan commit error");
 
   drop(engine);
   println!("done");
