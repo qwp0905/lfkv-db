@@ -83,7 +83,6 @@ impl<const N: usize> DiskController<N> {
       .to_arc();
 
     Ok(Self {
-      // path: config.path,
       background,
       page_pool,
     })

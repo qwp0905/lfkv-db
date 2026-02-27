@@ -2,7 +2,6 @@ use std::{
   collections::{BTreeMap, BTreeSet, HashMap},
   fs::read_dir,
   mem::replace,
-  path::PathBuf,
   sync::Arc,
   time::Duration,
 };
@@ -28,7 +27,7 @@ pub fn replay(
   usize,                     // last_free
   BTreeSet<usize>,           // aborted
   Vec<(usize, usize, Page)>, // redo records
-  WALSegment,                // wal file controller
+  Option<WALSegment>,        // wal file controller
   Vec<WALSegment>,           // previous segments
 )> {
   let mut files = Vec::new();
@@ -40,7 +39,6 @@ pub fn replay(
     files.push(file.path())
   }
 
-  let file_prefix = &PathBuf::from(base_dir).join(prefix);
   if files.len() == 0 {
     logger::info("previous wal segment not found.");
     return Ok((
@@ -50,7 +48,7 @@ pub fn replay(
       0,
       Default::default(),
       Default::default(),
-      WALSegment::open_new(file_prefix, flush_count, flush_interval)?,
+      None,
       Default::default(),
     ));
   }
@@ -130,21 +128,10 @@ pub fn replay(
   let mut last_index = index + 1;
   if last_index == max_len {
     last_index = 0;
-    if let Some(last) = replace(
-      &mut last_file,
-      Some(WALSegment::open_new(
-        file_prefix,
-        flush_count,
-        flush_interval,
-      )?),
-    ) {
+    if let Some(last) = last_file.take() {
       segments.push(last);
     }
   }
-  let last_file = match last_file {
-    Some(f) => f,
-    None => WALSegment::open_new(file_prefix, flush_count, flush_interval)?,
-  };
 
   let aborted = BTreeSet::from_iter(apply.into_keys());
   Ok((

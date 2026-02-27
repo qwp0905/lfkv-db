@@ -69,16 +69,25 @@ impl WAL {
       redo.len(),
       segments.len()
     ));
+
+    let prefix = PathBuf::from(config.base_dir).join(config.prefix);
     let buffer = WALBuffer {
       last_log_id,
       entry: LogEntry::new(last_index),
-      disk,
+      disk: match disk {
+        Some(seg) => seg,
+        None => WALSegment::open_new(
+          &prefix,
+          config.group_commit_count,
+          config.group_commit_delay,
+        )?,
+      },
     }
     .to_arc_mutex();
 
     Ok((
       Self {
-        prefix: PathBuf::from(config.base_dir).join(config.prefix),
+        prefix,
         buffer,
         page_pool,
         max_index,
@@ -130,10 +139,10 @@ impl WAL {
     let mut index = buffer.entry.get_index() + 1;
     if index == self.max_index {
       index = 0;
-      self.checkpoint.must_send(replace(
-        &mut buffer.disk,
-        WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?,
-      ));
+      let new_seg =
+        WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?;
+      let old = replace(&mut buffer.disk, new_seg);
+      self.checkpoint.must_send(old);
     }
 
     buffer.entry = LogEntry::new(index);
