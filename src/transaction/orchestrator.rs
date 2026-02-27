@@ -1,6 +1,4 @@
-use std::{sync::Arc, time::Duration};
-
-use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError};
+use std::sync::Arc;
 
 use super::VersionVisibility;
 
@@ -8,7 +6,7 @@ use crate::{
   buffer_pool::{BufferPool, BufferPoolConfig, PageSlot, PageSlotWrite},
   cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
-  thread::{SingleWorkThread, WorkBuilder},
+  thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   transaction::FreeList,
   utils::{logger, ToArc},
   wal::{WALConfig, WALSegment, WAL},
@@ -17,7 +15,7 @@ use crate::{
 pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
-  checkpoint: Arc<SingleWorkThread<(), Result>>,
+  checkpoint: SingleWorkThread<WALSegment, Result>,
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
@@ -31,10 +29,10 @@ impl TxOrchestrator {
     logger::info("trying to open buffer pool");
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
-    let (checkpoint_queue, recv) = unbounded();
+    let ch = SingleWorkInput::new();
 
     let (wal, last_tx_id, last_free, aborted, redo, segments) =
-      WAL::replay(wal_config, checkpoint_queue)?;
+      WAL::replay(wal_config, ch.clone())?;
     let wal = wal.to_arc();
     for (_, i, page) in redo {
       buffer_pool
@@ -77,15 +75,16 @@ impl TxOrchestrator {
       .name("checkpoint")
       .stack_size(2 << 20)
       .single()
-      .no_timeout(handle_checkpoint(
-        wal.clone(),
-        buffer_pool.clone(),
-        free_list.clone(),
-        gc.clone(),
-        recv,
+      .with_channel::<WALSegment, Result>(ch)
+      .with_timeout(
         checkpoint_interval,
-      ))
-      .to_arc();
+        handle_checkpoint(
+          wal.clone(),
+          buffer_pool.clone(),
+          free_list.clone(),
+          gc.clone(),
+        ),
+      )?;
 
     Ok(Self {
       checkpoint,
@@ -178,17 +177,8 @@ fn handle_checkpoint(
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
   gc: Arc<GarbageCollector>,
-  recv: Receiver<WALSegment>,
-  timeout: Duration,
-) -> impl Fn(()) -> Result {
-  move |_| loop {
-    let segment = match recv.recv_timeout(timeout) {
-      Ok(v) => Some(v),
-      Err(RecvTimeoutError::Timeout) => None,
-      Err(_) => return Ok(()),
-    };
-    let _ = run_checkpoint(segment, &wal, &buffer_pool, &free_list, &gc);
-  }
+) -> impl Fn(Option<WALSegment>) -> Result {
+  move |segment| run_checkpoint(segment, &wal, &buffer_pool, &free_list, &gc)
 }
 
 fn run_checkpoint(

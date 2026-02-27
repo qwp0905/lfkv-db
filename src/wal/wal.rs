@@ -6,13 +6,12 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::channel::Sender;
-
 use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
-  utils::{logger, ShortenedMutex, ToArc, ToArcMutex, UnwrappedSender},
+  thread::SingleWorkInput,
+  utils::{logger, ShortenedMutex, ToArc, ToArcMutex},
 };
 
 struct WALBuffer {
@@ -35,14 +34,14 @@ pub struct WAL {
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
-  checkpoint: Sender<WALSegment>,
+  checkpoint: SingleWorkInput<WALSegment, Result>,
   flush_count: usize,
   flush_interval: Duration,
 }
 impl WAL {
   pub fn replay(
     config: WALConfig,
-    checkpoint: Sender<WALSegment>,
+    checkpoint: SingleWorkInput<WALSegment, Result>,
   ) -> Result<(
     Self,
     usize,                     // last tx id
@@ -150,7 +149,7 @@ impl WAL {
       let new_seg =
         WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?;
       let old = replace(&mut buffer.segment, new_seg);
-      self.checkpoint.must_send(old);
+      let _ = self.checkpoint.send(old);
     }
 
     buffer.entry = LogEntry::new(index);
