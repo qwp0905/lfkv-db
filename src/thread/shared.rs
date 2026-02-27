@@ -247,7 +247,7 @@ mod tests {
     let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
 
     // Collect all results
-    for receiver in receivers.iter() {
+    for receiver in receivers.into_iter() {
       let _ = receiver.wait().unwrap();
     }
 

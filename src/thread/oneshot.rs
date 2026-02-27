@@ -24,7 +24,7 @@ pub struct Oneshot<T> {
   caller: Arc<AtomicCell<Option<Thread>>>,
 }
 impl<T> Oneshot<T> {
-  pub fn wait(&self) -> T {
+  pub fn wait(self) -> T {
     self.caller.store(Some(current()));
     loop {
       match self.value.take() {
@@ -40,7 +40,7 @@ pub struct OneshotFulfill<T> {
   caller: Arc<AtomicCell<Option<Thread>>>,
 }
 impl<T> OneshotFulfill<T> {
-  pub fn fulfill(&self, result: T) {
+  pub fn fulfill(self, result: T) {
     self.value.store(Some(result));
     if let Some(th) = self.caller.take() {
       th.unpark();
