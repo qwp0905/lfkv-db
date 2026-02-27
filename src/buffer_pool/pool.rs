@@ -69,9 +69,15 @@ impl BufferPool {
   }
 
   pub fn flush(&self) -> Result {
+    let mut waits = Vec::new();
     for id in self.dirty.iter() {
       let page = self.frame[id].rl();
-      self.disk.write(self.table.get_index(id), &page)?;
+      let done = self.disk.write_async(self.table.get_index(id), &page);
+      waits.push((done, id))
+    }
+
+    for (done, id) in waits {
+      done.wait()?;
       self.dirty.remove(id);
     }
     self.disk.fsync()?;

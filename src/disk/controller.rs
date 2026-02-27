@@ -7,7 +7,7 @@ use std::{
 use super::{Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
-  thread::{SharedWorkThread, WorkBuilder},
+  thread::{Oneshot, SharedWorkThread, WorkBuilder},
   utils::{logger, ToArc},
 };
 
@@ -41,6 +41,16 @@ impl<const N: usize> OperationResult<N> {
 pub struct DiskControllerConfig {
   pub path: PathBuf,
   pub thread_count: usize,
+}
+
+pub struct WriteResult<const N: usize>(
+  Oneshot<Result<std::io::Result<OperationResult<N>>>>,
+);
+impl<const N: usize> WriteResult<N> {
+  pub fn wait(self) -> Result {
+    self.0.wait()?.map_err(Error::IO)?;
+    Ok(())
+  }
 }
 
 pub struct DiskController<const N: usize> {
@@ -109,6 +119,13 @@ impl<const N: usize> DiskController<N> {
       ))?
       .map_err(Error::IO)?;
     Ok(())
+  }
+  pub fn write_async<'a>(&self, index: usize, page: &'a PageRef<N>) -> WriteResult<N> {
+    let o = self.background.send(DiskOperation::Write(
+      (index * N) as u64,
+      page.as_ref().copy(),
+    ));
+    WriteResult(o)
   }
 
   pub fn fsync(&self) -> Result {
