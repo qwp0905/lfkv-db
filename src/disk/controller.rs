@@ -43,10 +43,10 @@ pub struct DiskControllerConfig {
   pub thread_count: usize,
 }
 
-pub struct WriteResult<const N: usize>(
+pub struct WriteAsync<const N: usize>(
   Oneshot<Result<std::io::Result<OperationResult<N>>>>,
 );
-impl<const N: usize> WriteResult<N> {
+impl<const N: usize> WriteAsync<N> {
   pub fn wait(self) -> Result {
     self.0.wait()?.map_err(Error::IO)?;
     Ok(())
@@ -111,21 +111,14 @@ impl<const N: usize> DiskController<N> {
   }
 
   pub fn write<'a>(&self, index: usize, page: &'a PageRef<N>) -> Result {
-    self
-      .background
-      .send_await(DiskOperation::Write(
-        (index * N) as u64,
-        page.as_ref().copy(),
-      ))?
-      .map_err(Error::IO)?;
-    Ok(())
+    self.write_async(index, page).wait()
   }
-  pub fn write_async<'a>(&self, index: usize, page: &'a PageRef<N>) -> WriteResult<N> {
+  pub fn write_async<'a>(&self, index: usize, page: &'a PageRef<N>) -> WriteAsync<N> {
     let o = self.background.send(DiskOperation::Write(
       (index * N) as u64,
       page.as_ref().copy(),
     ));
-    WriteResult(o)
+    WriteAsync(o)
   }
 
   pub fn fsync(&self) -> Result {
