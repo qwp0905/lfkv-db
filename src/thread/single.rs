@@ -33,9 +33,7 @@ impl<T, R> SingleWorkInput<T, R> {
     self.sender.send(ctx).unwrap();
     o
   }
-}
-impl<T, R> Clone for SingleWorkInput<T, R> {
-  fn clone(&self) -> Self {
+  pub fn copy(&self) -> Self {
     Self {
       sender: self.sender.clone(),
       receiver: None,

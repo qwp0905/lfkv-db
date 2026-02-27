@@ -29,10 +29,10 @@ impl TxOrchestrator {
     logger::info("trying to open buffer pool");
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
-    let ch = SingleWorkInput::new();
+    let checkpoint_ch = SingleWorkInput::new();
 
     let (wal, last_tx_id, last_free, aborted, redo, segments) =
-      WAL::replay(wal_config, ch.clone())?;
+      WAL::replay(wal_config, checkpoint_ch.copy())?;
     let wal = wal.to_arc();
     for (_, i, page) in redo {
       buffer_pool
@@ -75,7 +75,7 @@ impl TxOrchestrator {
       .name("checkpoint")
       .stack_size(2 << 20)
       .single()
-      .with_channel::<WALSegment, Result>(ch)
+      .with_channel::<WALSegment, Result>(checkpoint_ch)
       .with_timeout(
         checkpoint_interval,
         handle_checkpoint(
