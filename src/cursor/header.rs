@@ -39,3 +39,40 @@ impl Serializable for TreeHeader {
     Ok(Self { root })
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use crate::{disk::Page, serialize::SerializeFrom};
+
+  use super::*;
+
+  #[test]
+  fn test_tree_header_roundtrip() {
+    let mut page = Page::new();
+    let header = TreeHeader::new(42);
+    page.serialize_from(&header).expect("serialize error");
+
+    let decoded: TreeHeader = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.get_root(), 42);
+  }
+
+  #[test]
+  fn test_tree_header_zero_root() {
+    let mut page = Page::new();
+    let header = TreeHeader::new(0);
+    page.serialize_from(&header).expect("serialize error");
+
+    let decoded: TreeHeader = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.get_root(), 0);
+  }
+
+  #[test]
+  fn test_tree_header_large_root() {
+    let mut page = Page::new();
+    let header = TreeHeader::new(usize::MAX);
+    page.serialize_from(&header).expect("serialize error");
+
+    let decoded: TreeHeader = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.get_root(), usize::MAX);
+  }
+}

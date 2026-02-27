@@ -52,6 +52,33 @@ impl Serializable for FreePage {
   }
 }
 
+#[cfg(test)]
+mod tests {
+  use crate::{disk::Page, serialize::SerializeFrom};
+
+  use super::*;
+
+  #[test]
+  fn test_free_page_roundtrip() {
+    let mut page = Page::new();
+    let free = FreePage::new(99);
+    page.serialize_from(&free).expect("serialize error");
+
+    let decoded: FreePage = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.get_next(), 99);
+  }
+
+  #[test]
+  fn test_free_page_zero_next() {
+    let mut page = Page::new();
+    let free = FreePage::new(0);
+    page.serialize_from(&free).expect("serialize error");
+
+    let decoded: FreePage = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.get_next(), 0);
+  }
+}
+
 pub struct FreeList {
   state: RwLock<FreeState>,
   buffer_pool: Arc<BufferPool>,
