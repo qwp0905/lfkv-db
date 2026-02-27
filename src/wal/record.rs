@@ -23,28 +23,34 @@ pub enum Operation {
   Free(usize),
 }
 impl Operation {
+  fn type_u8(&self) -> u8 {
+    match self {
+      Operation::Insert(_, _) => 1,
+      Operation::Start => 2,
+      Operation::Commit => 3,
+      Operation::Abort => 4,
+      Operation::Checkpoint(_, _) => 5,
+      Operation::Free(_) => 6,
+    }
+  }
   fn to_bytes(&self) -> Vec<u8> {
+    let mut v = vec![self.type_u8()];
     match self {
       Operation::Insert(index, page) => {
-        let mut v = vec![0];
         v.extend_from_slice(&index.to_be_bytes());
         v.extend_from_slice(page.as_ref());
         v
       }
-      Operation::Start => vec![1],
-      Operation::Commit => vec![2],
-      Operation::Abort => vec![3],
       Operation::Checkpoint(index, log_id) => {
-        let mut v = vec![4];
         v.extend_from_slice(&log_id.to_be_bytes());
         v.extend_from_slice(&index.to_be_bytes());
         v
       }
       Operation::Free(index) => {
-        let mut v = vec![5];
         v.extend_from_slice(&index.to_be_bytes());
         v
       }
+      _ => v,
     }
   }
 }
@@ -114,7 +120,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
     let tx_id =
       usize::from_be_bytes(value[8..16].try_into().map_err(|_| Error::InvalidFormat)?);
     let operation = match value[16] {
-      0 => {
+      1 => {
         if len.ne(&PAGE_SIZE.add(17).add(8)) {
           return Err(Error::InvalidFormat);
         }
@@ -124,10 +130,10 @@ impl TryFrom<Vec<u8>> for LogRecord {
         let data = value[25..].try_into().map_err(|_| Error::InvalidFormat)?;
         Operation::Insert(index, data)
       }
-      1 => Operation::Start,
-      2 => Operation::Commit,
-      3 => Operation::Abort,
-      4 => {
+      2 => Operation::Start,
+      3 => Operation::Commit,
+      4 => Operation::Abort,
+      5 => {
         if len.lt(&33) {
           return Err(Error::InvalidFormat);
         }
@@ -139,7 +145,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
         );
         Operation::Checkpoint(index, log_id)
       }
-      5 => {
+      6 => {
         if len.lt(&25) {
           return Err(Error::InvalidFormat);
         }
@@ -215,27 +221,136 @@ impl AsRef<[u8]> for LogEntry {
 mod tests {
   use super::*;
 
+  fn assert_roundtrip(record: &LogRecord) -> LogRecord {
+    let bytes = record.to_bytes();
+    let parsed: LogRecord = bytes.try_into().expect("deserialize failed");
+    assert_eq!(parsed.log_id, record.log_id);
+    assert_eq!(parsed.tx_id, record.tx_id);
+    parsed
+  }
+
   #[test]
-  fn test_entry() {
-    let index = 1;
-    let mut entry = LogEntry::new(index);
+  fn test_start_roundtrip() {
+    let r = LogRecord::new_start(1, 42);
+    let parsed = assert_roundtrip(&r);
+    assert!(matches!(parsed.operation, Operation::Start));
+  }
+
+  #[test]
+  fn test_commit_roundtrip() {
+    let r = LogRecord::new_commit(2, 42);
+    let parsed = assert_roundtrip(&r);
+    assert!(matches!(parsed.operation, Operation::Commit));
+  }
+
+  #[test]
+  fn test_abort_roundtrip() {
+    let r = LogRecord::new_abort(3, 42);
+    let parsed = assert_roundtrip(&r);
+    assert!(matches!(parsed.operation, Operation::Abort));
+  }
+
+  #[test]
+  fn test_insert_roundtrip() {
+    let mut page = Page::new();
+    page.as_mut()[0] = 0xAB;
+    page.as_mut()[PAGE_SIZE - 1] = 0xCD;
+
+    let r = LogRecord::new_insert(4, 42, 99, page);
+    let parsed = assert_roundtrip(&r);
+    match parsed.operation {
+      Operation::Insert(index, data) => {
+        assert_eq!(index, 99);
+        assert_eq!(data.as_ref()[0], 0xAB);
+        assert_eq!(data.as_ref()[PAGE_SIZE - 1], 0xCD);
+      }
+      _ => panic!("expected Insert"),
+    }
+  }
+
+  #[test]
+  fn test_checkpoint_roundtrip() {
+    let r = LogRecord::new_checkpoint(5, 100, 200);
+    let parsed = assert_roundtrip(&r);
+    match parsed.operation {
+      Operation::Checkpoint(last_free, last_log_id) => {
+        assert_eq!(last_free, 100);
+        assert_eq!(last_log_id, 200);
+      }
+      _ => panic!("expected Checkpoint"),
+    }
+  }
+
+  #[test]
+  fn test_free_roundtrip() {
+    let r = LogRecord::new_free(6, 55);
+    let parsed = assert_roundtrip(&r);
+    match parsed.operation {
+      Operation::Free(index) => assert_eq!(index, 55),
+      _ => panic!("expected Free"),
+    }
+  }
+
+  #[test]
+  fn test_entry_roundtrip() {
+    let mut entry = LogEntry::new(1);
 
     let r1 = LogRecord::new_start(1, 1);
     let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
     let r3 = LogRecord::new_commit(3, 1);
-    entry.append(&r1).expect("unknown error");
-    entry.append(&r2).expect("unknown error");
-    entry.append(&r3).expect("unknown error");
+    entry.append(&r1).expect("append r1");
+    entry.append(&r2).expect("append r2");
+    entry.append(&r3).expect("append r3");
 
     let page: Page<WAL_BLOCK_SIZE> = entry.into();
-
     let d: Vec<LogRecord> = (&page).try_into().expect("parse error");
 
-    assert_eq!(d[0].log_id, r1.log_id);
-    assert_eq!(d[0].tx_id, r1.log_id);
-    assert_eq!(d[1].log_id, r2.log_id);
-    assert_eq!(d[1].tx_id, r2.tx_id);
-    assert_eq!(d[2].tx_id, r2.tx_id);
-    assert_eq!(d[2].tx_id, r2.tx_id);
+    assert_eq!(d.len(), 3);
+    assert_eq!(d[0].log_id, 1);
+    assert_eq!(d[0].tx_id, 1);
+    assert!(matches!(d[0].operation, Operation::Start));
+    assert_eq!(d[1].log_id, 2);
+    assert_eq!(d[1].tx_id, 1);
+    assert!(matches!(d[1].operation, Operation::Insert(10, _)));
+    assert_eq!(d[2].log_id, 3);
+    assert_eq!(d[2].tx_id, 1);
+    assert!(matches!(d[2].operation, Operation::Commit));
+  }
+
+  #[test]
+  fn test_entry_overflow() {
+    let mut entry = LogEntry::new(0);
+    let mut count = 0;
+    loop {
+      let r = LogRecord::new_start(0, 0);
+      if entry.append(&r).is_err() {
+        break;
+      }
+      count += 1;
+    }
+    assert!(count > 0);
+
+    // insert records are larger, so fewer fit before exceeding WAL_BLOCK_SIZE
+    let mut entry2 = LogEntry::new(0);
+    let r = LogRecord::new_insert(0, 0, 0, Page::new());
+    let mut insert_count = 0;
+    loop {
+      if entry2.append(&r).is_err() {
+        break;
+      }
+      insert_count += 1;
+    }
+    assert!(insert_count > 0);
+    assert!(insert_count < count);
+  }
+
+  #[test]
+  fn test_invalid_format() {
+    let short: Vec<u8> = vec![0; 10];
+    assert!(LogRecord::try_from(short).is_err());
+
+    let mut bad_op = vec![0u8; 17];
+    bad_op[16] = 255; // invalid operation type
+    assert!(LogRecord::try_from(bad_op).is_err());
   }
 }
