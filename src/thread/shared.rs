@@ -1,16 +1,16 @@
 use std::{
   panic::{RefUnwindSafe, UnwindSafe},
-  sync::Arc,
+  sync::{Arc, Mutex},
   thread::{park_timeout, yield_now, Builder, JoinHandle},
   time::Duration,
 };
 
-use crossbeam::{
-  atomic::AtomicCell,
-  deque::{Injector, Stealer, Worker},
-};
+use crossbeam::deque::{Injector, Stealer, Worker};
 
-use crate::{error::Result, utils::ToArc};
+use crate::{
+  error::Result,
+  utils::{ShortenedMutex, ToArc},
+};
 
 use super::{oneshot, Context, Oneshot, SafeFn};
 
@@ -76,7 +76,7 @@ where
 }
 
 pub struct SharedWorkThread<T, R = ()> {
-  threads: AtomicCell<Vec<JoinHandle<()>>>,
+  threads: Mutex<Vec<JoinHandle<()>>>,
   global: Arc<Injector<Context<T, R>>>,
 }
 impl<T, R> SharedWorkThread<T, R>
@@ -120,7 +120,7 @@ where
 
     Ok(Self {
       global,
-      threads: AtomicCell::new(threads),
+      threads: Mutex::new(threads),
     })
   }
   pub fn new<S: ToString, F>(name: S, size: usize, count: usize, build: F) -> Self
@@ -158,11 +158,11 @@ where
   }
 
   pub fn close(&self) {
-    let threads = self.threads.take();
+    let mut threads = self.threads.l();
     for _ in 0..threads.len() {
       self.global.push(Context::Term);
     }
-    for th in threads {
+    for th in threads.drain(..) {
       th.thread().unpark();
       let _ = th.join();
     }
