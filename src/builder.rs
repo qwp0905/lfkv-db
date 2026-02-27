@@ -68,6 +68,10 @@ where
     self.gc_trigger_interval = Some(interval);
     self
   }
+  pub fn io_thread_count(mut self, count: usize) -> Self {
+    self.io_thread_count = Some(count);
+    self
+  }
 
   pub fn build(self) -> Result<Engine> {
     let config = EngineConfig {

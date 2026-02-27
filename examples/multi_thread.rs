@@ -6,11 +6,12 @@ use lfkv_db::EngineBuilder;
 fn main() {
   let engine = Arc::new(
     EngineBuilder::new("./.local")
-      .group_commit_count(1000)
+      .group_commit_count(100)
       .group_commit_delay(Duration::from_millis(10))
       .buffer_pool_memory_capacity(100 << 20)
       .buffer_pool_shard_count(1 << 6)
       .gc_trigger_count(300)
+      .io_thread_count(5)
       .build()
       .expect("bootstrap error"),
   );
