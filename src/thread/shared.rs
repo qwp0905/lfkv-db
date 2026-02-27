@@ -1,7 +1,7 @@
 use std::{
   panic::{RefUnwindSafe, UnwindSafe},
   sync::Arc,
-  thread::{park_timeout, yield_now, Builder, JoinHandle, Thread},
+  thread::{park_timeout, yield_now, Builder, JoinHandle},
   time::Duration,
 };
 
@@ -77,7 +77,6 @@ where
 
 pub struct SharedWorkThread<T, R = ()> {
   threads: AtomicCell<Vec<JoinHandle<()>>>,
-  refs: Vec<Thread>,
   global: Arc<Injector<Context<T, R>>>,
 }
 impl<T, R> SharedWorkThread<T, R>
@@ -104,7 +103,6 @@ where
     let stealers = stealers.to_arc();
 
     let mut threads = Vec::with_capacity(count);
-    let mut refs = Vec::with_capacity(count);
     for (i, local) in workers.into_iter().enumerate() {
       let thread = Builder::new()
         .name(format!("{} {}", name.to_string(), i))
@@ -117,13 +115,11 @@ where
         ))
         .unwrap();
 
-      refs.push(thread.thread().clone());
       threads.push(thread);
     }
 
     Ok(Self {
       global,
-      refs,
       threads: AtomicCell::new(threads),
     })
   }
@@ -162,15 +158,12 @@ where
   }
 
   pub fn close(&self) {
-    for _ in 0..self.refs.len() {
+    let threads = self.threads.take();
+    for _ in 0..threads.len() {
       self.global.push(Context::Term);
     }
-    for r in &self.refs {
-      r.unpark();
-    }
-
-    let threads = self.threads.take();
     for th in threads {
+      th.thread().unpark();
       let _ = th.join();
     }
   }
