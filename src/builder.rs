@@ -109,5 +109,5 @@ const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;
 const DEFAULT_GC_TRIGGER_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_GC_TRIGGER_COUNT: usize = 1000;
 const DEFAULT_BUFFER_POOL_SHARD_COUNT: usize = 1 << 4; // 16
-const DEFAULT_BUFFER_POOL_MEMORY_CAPACITY: usize = 30 << 20; // 32 mb
+const DEFAULT_BUFFER_POOL_MEMORY_CAPACITY: usize = 32 << 20; // 32 mb
 const DEFAULT_IO_THREAD_COUNT: usize = 3;
