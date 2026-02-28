@@ -264,7 +264,6 @@ impl Cursor {
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
         drop(latch);
-        self.abort()?;
         return Err(Error::WriteConflict);
       }
     }
