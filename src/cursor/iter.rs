@@ -1,4 +1,4 @@
-use super::{CursorNode, DataEntry, Key, LeafNode, RecordData};
+use super::{CursorNode, DataEntry, Key, LeafNode};
 use crate::{error::Result, transaction::TxOrchestrator};
 
 pub struct CursorIterator<'a> {
@@ -50,12 +50,12 @@ impl<'a> CursorIterator<'a> {
 
           for record in entry.get_versions() {
             if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
-              match &record.data {
-                RecordData::Data(data) => {
+              match record.data.get_data() {
+                Some(data) => {
                   self.pos = i + 1;
                   return Ok(Some((key.clone(), data.clone())));
                 }
-                RecordData::Tombstone => continue 'leaf,
+                None => continue 'leaf,
               }
             }
           }

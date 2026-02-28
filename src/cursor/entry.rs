@@ -188,7 +188,11 @@ mod tests {
   fn test_entry_with_data_roundtrip() {
     let mut page = Page::new();
     let mut entry = DataEntry::new();
-    entry.append(VersionRecord::new(1, 100, RecordData::Data(vec![10, 20, 30])));
+    entry.append(VersionRecord::new(
+      1,
+      100,
+      RecordData::Data(vec![10, 20, 30]),
+    ));
     page.serialize_from(&entry).expect("serialize error");
 
     let decoded: DataEntry = page.deserialize().expect("deserialize error");
