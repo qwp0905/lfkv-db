@@ -38,13 +38,5 @@ pub enum Error {
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),
 }
-impl Error {
-  pub fn unknown<E>(e: E) -> Error
-  where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
-  {
-    Error::Unknown(e.into())
-  }
-}
 
 pub type Result<T = ()> = std::result::Result<T, Error>;
