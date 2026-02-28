@@ -6,14 +6,13 @@ use std::{
 };
 
 use chrono::Local;
-use crossbeam::queue::ArrayQueue;
 
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
   disk::{PageRef, Pread, Pwrite},
   error::Result,
-  thread::{Oneshot, OneshotFulfill, SingleWorkThread, WorkBuilder},
+  thread::{Oneshot, SingleWorkThread, WorkBuilder},
   utils::ToArc,
   Error,
 };
@@ -52,7 +51,12 @@ impl WALSegment {
       .name(format!("{} flush", path.as_ref().to_string_lossy()))
       .stack_size(2 << 20)
       .single()
-      .with_timer(flush_interval, handle_flush(flush_count, file.clone()));
+      .buffering(
+        flush_interval,
+        flush_count,
+        |(_, r)| r,
+        handle_flush(file.clone()),
+      );
     Ok(Self {
       disk: file,
       flush,
@@ -109,28 +113,6 @@ impl WALSegment {
   }
 }
 
-fn handle_flush(
-  count: usize,
-  file: Arc<File>,
-) -> impl Fn(Option<((), OneshotFulfill<Result<bool>>)>) -> bool {
-  let waits = ArrayQueue::new(count);
-  move |v: Option<((), OneshotFulfill<Result<bool>>)>| {
-    if let Some((_, done)) = v {
-      let _ = waits.push(done);
-      if !waits.is_full() {
-        return false;
-      }
-    }
-
-    if waits.is_empty() {
-      return true;
-    }
-
-    let result = file.sync_all().is_ok();
-    while let Some(done) = waits.pop() {
-      done.fulfill(Ok(result));
-    }
-
-    true
-  }
+fn handle_flush(file: Arc<File>) -> impl Fn(()) -> bool {
+  move |_| file.sync_all().is_ok()
 }

@@ -29,21 +29,10 @@ where
 }
 
 pub enum SafeWork<T, R> {
-  // NoTimeout(SafeFn<T, R>),
   WithTimeout(Duration, SafeFn<Option<T>, R>),
-  WithTimer(
-    Duration,
-    SafeFn<Option<(T, OneshotFulfill<Result<R>>)>, bool>,
-  ),
+  Buffering(Duration, usize, SafeFn<(T, bool), R>, SafeFn<(), bool>),
 }
 impl<T, R> SafeWork<T, R> {
-  // pub fn no_timeout<F>(f: F) -> Self
-  // where
-  //   F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
-  // {
-  //   SafeWork::NoTimeout(SafeFn(f.to_arc()))
-  // }
-
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
@@ -51,15 +40,17 @@ impl<T, R> SafeWork<T, R> {
     SafeWork::WithTimeout(timeout, SafeFn(f.to_arc()))
   }
 
-  pub fn with_timer<F>(timeout: Duration, f: F) -> Self
+  pub fn buffering<F, E>(timeout: Duration, count: usize, each: F, before_each: E) -> Self
   where
-    F: Fn(Option<(T, OneshotFulfill<Result<R>>)>) -> bool
-      + Send
-      + RefUnwindSafe
-      + Sync
-      + 'static,
+    F: Fn((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
+    E: Fn(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimer(timeout, SafeFn(f.to_arc()))
+    SafeWork::Buffering(
+      timeout,
+      count,
+      SafeFn(each.to_arc()),
+      SafeFn(before_each.to_arc()),
+    )
   }
 }
 impl<T, R> SafeWork<T, R>
@@ -69,11 +60,6 @@ where
 {
   pub fn run(&self, rx: Receiver<Context<T, R>>) {
     match self {
-      // SafeWork::NoTimeout(work) => {
-      //   while let Ok(Context::Work((v, done))) = rx.recv() {
-      //     done.fulfill(work.call(v));
-      //   }
-      // }
       SafeWork::WithTimeout(timeout, work) => loop {
         match rx.recv_timeout(*timeout) {
           Ok(Context::Work((v, done))) => done.fulfill(work.call(Some(v))),
@@ -83,29 +69,38 @@ where
           Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => return,
         };
       },
-      SafeWork::WithTimer(duration, work) => {
-        let mut timer = duration.as_timer();
+      SafeWork::Buffering(timeout, count, each, before_each) => {
+        let mut buffer = Vec::with_capacity(*count);
+        let mut timer = timeout.as_timer();
         loop {
           match rx.recv_timeout(timer.get_remain()) {
             Ok(Context::Work((v, done))) => {
-              match work.call(Some((v, done.clone()))) {
-                Ok(true) => timer.reset(),
-                Ok(false) => timer.check(),
-                Err(err) => done.fulfill(Err(err)),
-              };
+              buffer.push((v, done));
+              if buffer.len() < *count {
+                timer.check();
+                continue;
+              }
             }
-            Err(RecvTimeoutError::Timeout) => {
-              match work.call(None) {
-                Ok(true) => timer.reset(),
-                Ok(false) => timer.check(),
-                Err(_) => {}
-              };
-            }
+            Err(RecvTimeoutError::Timeout) => {}
             Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => {
-              let _ = work.call(None);
+              let r = before_each.call(()).unwrap_or(false);
+              for (v, done) in buffer.drain(..) {
+                done.fulfill(each.call((v, r)));
+              }
               return;
             }
-          };
+          }
+
+          if buffer.is_empty() {
+            timer.reset();
+            continue;
+          }
+
+          let r = before_each.call(()).unwrap_or(false);
+          for (v, done) in buffer.drain(..) {
+            done.fulfill(each.call((v, r)));
+          }
+          timer.reset();
         }
       }
     }

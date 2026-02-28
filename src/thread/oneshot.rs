@@ -47,14 +47,6 @@ impl<T> OneshotFulfill<T> {
     }
   }
 }
-impl<T> Clone for OneshotFulfill<T> {
-  fn clone(&self) -> Self {
-    Self {
-      value: self.value.clone(),
-      caller: self.caller.clone(),
-    }
-  }
-}
 
 unsafe impl<T: Send> Sync for OneshotFulfill<T> {}
 unsafe impl<T: Send> Send for OneshotFulfill<T> {}
