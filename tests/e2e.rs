@@ -361,3 +361,94 @@ fn test_entry_split() {
   assert_eq!(v.len(), 100);
   assert_eq!(v[0], (iterations - 1) as u8);
 }
+
+// ============================================================
+// 12. Large-scale Insert + Scan + Recovery (B-Tree node splits)
+// ============================================================
+#[test]
+fn test_btree_node_split_and_recovery() {
+  let dir = TempDir::new().unwrap();
+  let key_count: usize = 5000;
+
+  // Phase 1: worker pool (100 threads) concurrently insert → forces leaf + internal node splits
+  {
+    let engine = Arc::new(build_engine(&dir));
+    let thread_count = 100;
+    let (task_tx, task_rx) = crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
+
+    let mut workers = Vec::new();
+    for _ in 0..thread_count {
+      let rx = task_rx.clone();
+      let e = engine.clone();
+      workers.push(thread::spawn(move || {
+        while let Ok((i, done)) = rx.recv() {
+          let mut cursor = e.new_transaction().unwrap();
+          let key = format!("key-{:06}", i).into_bytes();
+          let value = format!("val-{:06}", i).into_bytes();
+          cursor.insert(key, value).unwrap();
+          cursor.commit().unwrap();
+          done.send(()).unwrap();
+        }
+      }));
+    }
+
+    let mut completions = Vec::new();
+    for i in 0..key_count {
+      let (done_tx, done_rx) = crossbeam::channel::unbounded();
+      task_tx.send((i, done_tx)).unwrap();
+      completions.push(done_rx);
+    }
+    completions.into_iter().for_each(|r| r.recv().unwrap());
+    drop(task_tx);
+    for w in workers {
+      w.join().expect("worker panicked");
+    }
+
+    // scan all and verify order + completeness
+    let tx = engine.new_transaction().unwrap();
+    let mut iter = tx.scan_all().unwrap();
+    let mut count = 0;
+    let mut prev_key: Option<Vec<u8>> = None;
+    while let Some((k, v)) = iter.try_next().unwrap() {
+      // keys should be in sorted order
+      if let Some(ref pk) = prev_key {
+        assert!(k > *pk, "keys not sorted: {:?} >= {:?}", pk, k);
+      }
+      prev_key = Some(k.clone());
+
+      // value matches key
+      let expected_val = String::from_utf8_lossy(&k).replacen("key", "val", 1).into_bytes();
+      assert_eq!(v, expected_val, "value mismatch for key {:?}", String::from_utf8_lossy(&k));
+      count += 1;
+    }
+    assert_eq!(count, key_count, "scan should return all {} keys", key_count);
+
+    // point-read spot checks
+    for i in [0, 1, 500, 2500, 4999] {
+      let key = format!("key-{:06}", i).into_bytes();
+      let val = tx.get(&key).unwrap();
+      assert!(val.is_some(), "key {:?} missing", String::from_utf8_lossy(&key));
+    }
+    // engine dropped here
+  }
+
+  // Phase 2: restart engine and verify persistence
+  {
+    let engine = build_engine(&dir);
+    let tx = engine.new_transaction().unwrap();
+
+    let mut iter = tx.scan_all().unwrap();
+    let mut count = 0;
+    let mut prev_key: Option<Vec<u8>> = None;
+    while let Some((k, v)) = iter.try_next().unwrap() {
+      if let Some(ref pk) = prev_key {
+        assert!(k > *pk, "keys not sorted after recovery");
+      }
+      prev_key = Some(k.clone());
+      let expected_val = String::from_utf8_lossy(&k).replacen("key", "val", 1).into_bytes();
+      assert_eq!(v, expected_val, "post-recovery value mismatch for {:?}", String::from_utf8_lossy(&k));
+      count += 1;
+    }
+    assert_eq!(count, key_count, "all {} keys should survive recovery", key_count);
+  }
+}

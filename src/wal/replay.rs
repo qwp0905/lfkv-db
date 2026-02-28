@@ -91,7 +91,7 @@ pub fn replay(
       tx_id = tx_id.max(record.tx_id);
       match record.operation {
         Operation::Checkpoint(free, log_id) => {
-          redo.split_off(&log_id);
+          redo = redo.split_off(&log_id);
           last_free = free;
         }
         _ => drop(redo.insert(record.log_id, record)),

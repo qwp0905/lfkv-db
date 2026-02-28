@@ -119,6 +119,7 @@ impl TxOrchestrator {
     self.wal.append_commit(tx_id)?;
     self.wal.flush()?;
     self.version_visibility.deactive(&tx_id);
+    self.gc.notify();
     Ok(())
   }
 
