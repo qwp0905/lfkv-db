@@ -154,31 +154,35 @@ mod tests {
     thread.close();
   }
 
-  // #[test]
-  // fn test_panic_handling() {
-  //   let work = SafeWork::no_timeout(|x: i32| {
-  //     if x < 0 {
-  //       panic!("Cannot process negative numbers");
-  //     }
-  //     x * 2
-  //   });
+  #[test]
+  fn test_panic_handling() {
+    let work = SafeWork::with_timeout(Duration::from_secs(100), |x: Option<i32>| {
+      if let Some(x) = x {
+        if x < 0 {
+          panic!("Cannot process negative numbers");
+        }
+        return x * 2;
+      }
+      0
+    });
 
-  //   let thread = SingleWorkThread::new("test-panic", DEFAULT_STACK_SIZE, work);
+    let thread = SingleWorkThread::new("test-panic", DEFAULT_STACK_SIZE, work);
 
-  //   // Normal case
-  //   let result = thread.send_await(10);
-  //   assert!(result.is_ok());
-  //   assert_eq!(result.unwrap(), 20);
+    // Normal case
+    let result = thread.send_await(10);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 20);
 
-  //   // Panic-inducing case
-  //   let result = thread.send_await(-5);
-  //   assert!(result.is_err());
-  //   if let Err(Error::Panic(_)) = result {
-  //     // Panic was converted to Error::Panic as expected
-  //   } else {
-  //     panic!("Panic was not converted to Error::Panic");
-  //   }
+    // Panic-inducing case
+    let result = thread.send_await(-5);
+    println!("shibal paic");
+    assert!(result.is_err());
+    if let Err(Error::Panic(_)) = result {
+      // Panic was converted to Error::Panic as expected
+    } else {
+      panic!("Panic was not converted to Error::Panic");
+    }
 
-  //   thread.close();
-  // }
+    thread.close();
+  }
 }
