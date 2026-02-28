@@ -14,7 +14,7 @@ use crate::{
 
 use super::{oneshot, Context, Oneshot, SafeFn};
 
-fn steal<A>(
+fn pop_or_steal<A>(
   local: &Worker<A>,
   global: &Injector<A>,
   stealers: &Vec<Stealer<A>>,
@@ -56,7 +56,7 @@ where
   move || {
     let mut count = 0;
     loop {
-      if let Some(task) = steal(&local, &global, &stealers) {
+      if let Some(task) = pop_or_steal(&local, &global, &stealers) {
         count = 0;
         match task {
           Context::Work((data, out)) => out.fulfill(work.call(data)),
@@ -105,7 +105,7 @@ where
     let mut threads = Vec::with_capacity(count);
     for (i, local) in workers.into_iter().enumerate() {
       let thread = Builder::new()
-        .name(format!("{} {}", name.to_string(), i))
+        .name(format!("{}-{}", name.to_string(), i))
         .stack_size(size)
         .spawn(worker_loop(
           local,
