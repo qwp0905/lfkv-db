@@ -39,19 +39,17 @@ impl Operation {
       Operation::Insert(index, page) => {
         v.extend_from_slice(&index.to_be_bytes());
         v.extend_from_slice(page.as_ref());
-        v
       }
       Operation::Checkpoint(index, log_id) => {
         v.extend_from_slice(&log_id.to_be_bytes());
         v.extend_from_slice(&index.to_be_bytes());
-        v
       }
       Operation::Free(index) => {
         v.extend_from_slice(&index.to_be_bytes());
-        v
       }
-      _ => v,
-    }
+      _ => {}
+    };
+    v
   }
 }
 
