@@ -356,7 +356,10 @@ fn test_entry_split() {
   // verify latest value is readable
   let tx = engine.new_transaction().unwrap();
   let val = tx.get(&key).unwrap();
-  assert!(val.is_some(), "hot key should be readable after many overwrites");
+  assert!(
+    val.is_some(),
+    "hot key should be readable after many overwrites"
+  );
   let v = val.unwrap();
   assert_eq!(v.len(), 100);
   assert_eq!(v[0], (iterations - 1) as u8);
@@ -374,7 +377,8 @@ fn test_btree_node_split_and_recovery() {
   {
     let engine = Arc::new(build_engine(&dir));
     let thread_count = 100;
-    let (task_tx, task_rx) = crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
+    let (task_tx, task_rx) =
+      crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
 
     let mut workers = Vec::new();
     for _ in 0..thread_count {
@@ -417,17 +421,32 @@ fn test_btree_node_split_and_recovery() {
       prev_key = Some(k.clone());
 
       // value matches key
-      let expected_val = String::from_utf8_lossy(&k).replacen("key", "val", 1).into_bytes();
-      assert_eq!(v, expected_val, "value mismatch for key {:?}", String::from_utf8_lossy(&k));
+      let expected_val = String::from_utf8_lossy(&k)
+        .replacen("key", "val", 1)
+        .into_bytes();
+      assert_eq!(
+        v,
+        expected_val,
+        "value mismatch for key {:?}",
+        String::from_utf8_lossy(&k)
+      );
       count += 1;
     }
-    assert_eq!(count, key_count, "scan should return all {} keys", key_count);
+    assert_eq!(
+      count, key_count,
+      "scan should return all {} keys",
+      key_count
+    );
 
     // point-read spot checks
     for i in [0, 1, 500, 2500, 4999] {
       let key = format!("key-{:06}", i).into_bytes();
       let val = tx.get(&key).unwrap();
-      assert!(val.is_some(), "key {:?} missing", String::from_utf8_lossy(&key));
+      assert!(
+        val.is_some(),
+        "key {:?} missing",
+        String::from_utf8_lossy(&key)
+      );
     }
     // engine dropped here
   }
@@ -445,10 +464,21 @@ fn test_btree_node_split_and_recovery() {
         assert!(k > *pk, "keys not sorted after recovery");
       }
       prev_key = Some(k.clone());
-      let expected_val = String::from_utf8_lossy(&k).replacen("key", "val", 1).into_bytes();
-      assert_eq!(v, expected_val, "post-recovery value mismatch for {:?}", String::from_utf8_lossy(&k));
+      let expected_val = String::from_utf8_lossy(&k)
+        .replacen("key", "val", 1)
+        .into_bytes();
+      assert_eq!(
+        v,
+        expected_val,
+        "post-recovery value mismatch for {:?}",
+        String::from_utf8_lossy(&k)
+      );
       count += 1;
     }
-    assert_eq!(count, key_count, "all {} keys should survive recovery", key_count);
+    assert_eq!(
+      count, key_count,
+      "all {} keys should survive recovery",
+      key_count
+    );
   }
 }
