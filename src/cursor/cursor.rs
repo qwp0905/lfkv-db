@@ -263,7 +263,6 @@ impl Cursor {
     let (mut latch, mut entry) = self.alloc_entry(key, create)?;
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
-        drop(latch);
         return Err(Error::WriteConflict);
       }
     }
