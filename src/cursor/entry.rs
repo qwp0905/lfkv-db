@@ -18,6 +18,12 @@ impl RecordData {
       RecordData::Tombstone => 1,
     }
   }
+  pub fn get_data(&self) -> Option<&Vec<u8>> {
+    match self {
+      RecordData::Data(data) => Some(data),
+      RecordData::Tombstone => None,
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -49,12 +55,8 @@ impl DataEntry {
     }
   }
 
-  pub fn find(&self, version: usize) -> impl Iterator<Item = &VersionRecord> {
-    let s = self
-      .versions
-      .binary_search_by(|v| version.cmp(&v.version))
-      .unwrap_or_else(|i| i);
-    (s..self.versions.len()).map(|i| &self.versions[i])
+  pub fn get_versions(&self) -> impl Iterator<Item = &VersionRecord> {
+    self.versions.iter()
   }
 
   pub fn filter_aborted<F: Fn(&usize) -> bool>(&mut self, is_aborted: F) -> bool {
@@ -193,7 +195,7 @@ mod tests {
     assert!(!decoded.is_empty());
     assert_eq!(decoded.get_last_owner(), Some(1));
 
-    let records: Vec<_> = decoded.find(100).collect();
+    let records: Vec<_> = decoded.get_versions().collect();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].owner, 1);
     assert_eq!(records[0].version, 100);
@@ -214,7 +216,7 @@ mod tests {
     assert!(!decoded.is_empty());
     assert_eq!(decoded.get_last_owner(), Some(2));
 
-    let records: Vec<_> = decoded.find(200).collect();
+    let records: Vec<_> = decoded.get_versions().collect();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].owner, 2);
     match &records[0].data {

@@ -101,13 +101,19 @@ impl Cursor {
         .as_ref()
         .deserialize()?;
 
-      for record in entry.find(self.tx_id) {
-        if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
-          match &record.data {
-            RecordData::Data(data) => return Ok(Some(data.clone())),
-            RecordData::Tombstone => return Ok(None),
-          }
+      for record in entry.get_versions() {
+        if record.owner == self.tx_id {
+          return Ok(record.data.get_data().cloned());
         }
+
+        if record.version > self.tx_id {
+          continue;
+        }
+        if !self.orchestrator.is_visible(&record.owner) {
+          continue;
+        }
+
+        return Ok(record.data.get_data().cloned());
       }
 
       match entry.get_next() {
@@ -312,7 +318,10 @@ impl Cursor {
   }
 
   pub fn remove(&mut self, key: &Vec<u8>) -> Result {
-    self.write_at(key, RecordData::Tombstone, false)
+    match self.write_at(key, RecordData::Tombstone, false) {
+      Ok(_) | Err(Error::NotFound) => Ok(()),
+      Err(e) => Err(e),
+    }
   }
 
   pub fn scan(&self, start: &Vec<u8>, end: &Vec<u8>) -> Result<CursorIterator<'_>> {

@@ -163,6 +163,7 @@ impl TxOrchestrator {
       &self.free_list,
       &self.gc,
     )?;
+    self.gc.close();
     logger::info("last checkpoint completed.");
     self.buffer_pool.close();
     logger::info("buffer pool closed.");

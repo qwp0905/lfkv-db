@@ -48,7 +48,7 @@ impl<'a> CursorIterator<'a> {
             .as_ref()
             .deserialize::<DataEntry>()?;
 
-          for record in entry.find(self.tx_id) {
+          for record in entry.get_versions() {
             if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
               match &record.data {
                 RecordData::Data(data) => {
