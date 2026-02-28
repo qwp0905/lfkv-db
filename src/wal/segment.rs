@@ -29,7 +29,7 @@ impl FsyncResult {
 }
 
 pub struct WALSegment {
-  disk: Arc<File>,
+  file: Arc<File>,
   path: PathBuf,
   flush: SingleWorkThread<(), bool>,
 }
@@ -58,7 +58,7 @@ impl WALSegment {
         handle_flush(file.clone()),
       );
     Ok(Self {
-      disk: file,
+      file,
       flush,
       path: path.as_ref().into(),
     })
@@ -66,20 +66,20 @@ impl WALSegment {
 
   pub fn read(&self, index: usize, page: &mut PageRef<WAL_BLOCK_SIZE>) -> Result {
     self
-      .disk
+      .file
       .pread(page.as_mut().as_mut(), (index * WAL_BLOCK_SIZE) as u64)
       .map(|_| ())
       .map_err(Error::IO)
   }
   pub fn write(&self, index: usize, page: &PageRef<WAL_BLOCK_SIZE>) -> Result {
     self
-      .disk
+      .file
       .pwrite(page.as_ref().as_ref(), (index * WAL_BLOCK_SIZE) as u64)
       .map(|_| ())
       .map_err(Error::IO)
   }
   pub fn len(&self) -> Result<usize> {
-    let metadata = self.disk.metadata().map_err(Error::IO)?;
+    let metadata = self.file.metadata().map_err(Error::IO)?;
     Ok(metadata.len() as usize / WAL_BLOCK_SIZE)
   }
 
