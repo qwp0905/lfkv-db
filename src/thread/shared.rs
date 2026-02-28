@@ -237,7 +237,7 @@ mod tests {
     let thread =
       SharedWorkThread::new("test-multi", DEFAULT_STACK_SIZE, thread_count, work);
 
-    let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
+    let receivers: Vec<_> = (0..(thread_count << 1)).map(|i| thread.send(i)).collect();
 
     // Collect all results
     for receiver in receivers.into_iter() {

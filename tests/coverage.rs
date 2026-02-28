@@ -17,7 +17,7 @@ fn remove_profraw() {
 #[ignore]
 fn create_coverage() {
   std::env::set_var("RUSTFLAGS", "-Cinstrument-coverage");
-  std::env::set_var("LLVM_PROFILE_FILE", "lfkv-%p-%m.profraw");
+  std::env::set_var("LLVM_PROFILE_FILE", "%p-%m.profraw");
 
   let status = Command::new("cargo")
     .arg("build")

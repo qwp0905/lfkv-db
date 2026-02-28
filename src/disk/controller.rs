@@ -148,13 +148,13 @@ mod tests {
   use super::*;
   use std::sync::Arc;
   use std::thread;
-  use tempfile::tempdir;
+  use tempfile::tempdir_in;
 
   const TEST_PAGE_SIZE: usize = 4 << 10;
 
   #[test]
   fn test_basic_operations() -> Result<()> {
-    let dir = tempdir().map_err(Error::IO)?;
+    let dir = tempdir_in(".").map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       thread_count: 3,
@@ -187,7 +187,7 @@ mod tests {
 
   #[test]
   fn test_nonexistent_page() -> Result<()> {
-    let dir = tempdir().map_err(Error::IO)?;
+    let dir = tempdir_in(".").map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       thread_count: 3,
@@ -205,7 +205,7 @@ mod tests {
 
   #[test]
   fn test_multiple_pages() -> Result<()> {
-    let dir = tempdir().map_err(Error::IO)?;
+    let dir = tempdir_in(".").map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       thread_count: 3,
@@ -236,7 +236,7 @@ mod tests {
 
   #[test]
   fn test_concurrent_large_operations() -> Result<()> {
-    let dir = tempdir().map_err(Error::IO)?;
+    let dir = tempdir_in(".").map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       thread_count: 20,
@@ -313,7 +313,7 @@ mod tests {
   fn test_concurrent_random_operations() -> Result<()> {
     use rand::Rng;
 
-    let dir = tempdir().map_err(Error::IO)?;
+    let dir = tempdir_in(".").map_err(Error::IO)?;
     let config = DiskControllerConfig {
       path: dir.path().join("test.db"),
       thread_count: 20,

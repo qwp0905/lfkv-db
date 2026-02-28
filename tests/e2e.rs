@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use lfkv_db::{Engine, EngineBuilder, Error};
-use tempfile::TempDir;
+use tempfile::{tempdir_in, TempDir};
 
 fn build_engine(dir: &TempDir) -> Engine {
   EngineBuilder::new(dir.path())
@@ -21,7 +21,7 @@ fn build_engine(dir: &TempDir) -> Engine {
 // ============================================================
 #[test]
 fn test_basic_crud() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx = engine.new_transaction().unwrap();
@@ -44,7 +44,7 @@ fn test_basic_crud() {
 // ============================================================
 #[test]
 fn test_commit_visibility() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx1 = engine.new_transaction().unwrap();
@@ -61,7 +61,7 @@ fn test_commit_visibility() {
 // ============================================================
 #[test]
 fn test_abort_invisibility() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx1 = engine.new_transaction().unwrap();
@@ -78,7 +78,7 @@ fn test_abort_invisibility() {
 // ============================================================
 #[test]
 fn test_drop_abort() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   {
@@ -97,7 +97,7 @@ fn test_drop_abort() {
 // ============================================================
 #[test]
 fn test_write_conflict() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx1 = engine.new_transaction().unwrap();
@@ -121,7 +121,7 @@ fn test_write_conflict() {
 // ============================================================
 #[test]
 fn test_transaction_closed_after_commit() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx = engine.new_transaction().unwrap();
@@ -147,7 +147,7 @@ fn test_transaction_closed_after_commit() {
 
 #[test]
 fn test_transaction_closed_after_abort() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx = engine.new_transaction().unwrap();
@@ -169,7 +169,7 @@ fn test_transaction_closed_after_abort() {
 // ============================================================
 #[test]
 fn test_scan_range() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx = engine.new_transaction().unwrap();
@@ -193,7 +193,7 @@ fn test_scan_range() {
 
 #[test]
 fn test_scan_all() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx = engine.new_transaction().unwrap();
@@ -219,7 +219,7 @@ fn test_scan_all() {
 // ============================================================
 #[test]
 fn test_overwrite() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let mut tx1 = engine.new_transaction().unwrap();
@@ -240,7 +240,7 @@ fn test_overwrite() {
 // ============================================================
 #[test]
 fn test_crash_recovery() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let committed_keys: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(vec![]));
   let stop = Arc::new(AtomicBool::new(false));
 
@@ -310,7 +310,7 @@ fn test_crash_recovery() {
 // ============================================================
 #[test]
 fn test_snapshot_isolation() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   // tx1 and tx2 both start
@@ -339,7 +339,7 @@ fn test_snapshot_isolation() {
 // ============================================================
 #[test]
 fn test_entry_split() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
   let key = b"hot-key".to_vec();
@@ -370,7 +370,7 @@ fn test_entry_split() {
 // ============================================================
 #[test]
 fn test_btree_node_split_and_recovery() {
-  let dir = TempDir::new().unwrap();
+  let dir = tempdir_in(".").unwrap();
   let key_count: usize = 5000;
 
   // Phase 1: worker pool (100 threads) concurrently insert → forces leaf + internal node splits
