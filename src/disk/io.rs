@@ -40,11 +40,11 @@ mod tests {
   use super::*;
   use std::fs::File;
   use std::io::{Read, Write};
-  use tempfile::tempdir;
+  use tempfile::tempdir_in;
 
   #[test]
   fn test_pread() -> Result<()> {
-    let dir = tempdir()?;
+    let dir = tempdir_in(".")?;
     let file_path = dir.path().join("test_file.txt");
     let content = b"Hello, World!";
 
@@ -83,7 +83,7 @@ mod tests {
 
   #[test]
   fn test_pwrite() -> Result<()> {
-    let dir = tempdir()?;
+    let dir = tempdir_in(".")?;
     let file_path = dir.path().join("test_pwrite.txt");
 
     // Create an empty file
