@@ -8,7 +8,7 @@ use crate::{
   buffer_pool::BufferPool,
   error::Result,
   serialize::SerializeFrom,
-  thread::{SendAll, SharedWorkThread, SingleWorkThread, WorkBuilder},
+  thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
   transaction::{FreeList, VersionVisibility},
   utils::{ShortenedMutex, ToArc},
 };
@@ -144,8 +144,12 @@ fn run_main(
 
       index = leaf.get_next();
       let mut found = false;
-      for r in leaf.get_entries().map(|(_, p)| *p).send_all_to(&check_c)? {
-        found = r? || found;
+      let mut waiting = Vec::with_capacity(leaf.len());
+      for (_, ptr) in leaf.get_entries() {
+        waiting.push(check_c.send(*ptr));
+      }
+      for r in waiting {
+        found = r.wait()?? || found;
       }
       if !found {
         continue;

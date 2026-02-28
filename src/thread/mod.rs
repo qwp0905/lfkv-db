@@ -4,9 +4,6 @@ pub use work::*;
 mod builder;
 pub use builder::*;
 
-mod send;
-pub use send::*;
-
 mod oneshot;
 pub use oneshot::*;
 
