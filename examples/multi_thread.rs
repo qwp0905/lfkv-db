@@ -9,9 +9,11 @@ fn main() {
       .group_commit_count(100)
       .group_commit_delay(Duration::from_millis(10))
       .buffer_pool_memory_capacity(100 << 20)
-      .buffer_pool_shard_count(1 << 6)
+      .buffer_pool_shard_count(1 << 3)
+      .wal_file_size(10 << 20)
       .gc_trigger_count(300)
-      .io_thread_count(5)
+      .gc_thread_count(3)
+      .io_thread_count(3)
       .build()
       .expect("bootstrap error"),
   );
@@ -54,15 +56,13 @@ fn main() {
     let _ = th.join();
   }
 
+  let mut c = 0;
   let mut t = engine.new_transaction().expect("scan start error");
   let mut iter = t.scan_all().expect("scan all error");
-  while let Ok(Some((k, v))) = iter.try_next() {
-    println!(
-      "{:?} {:?}",
-      String::from_utf8_lossy(&k),
-      String::from_utf8_lossy(&v)
-    )
+  while let Ok(Some(_)) = iter.try_next() {
+    c += 1;
   }
+  println!("total count: {c}");
 
   t.commit().expect("scan commit error");
 
