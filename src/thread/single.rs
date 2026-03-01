@@ -21,10 +21,10 @@ pub struct SingleWorkInput<T, R = ()> {
 }
 impl<T, R> SingleWorkInput<T, R> {
   pub fn new() -> Self {
-    let (tx, rx) = unbounded();
+    let (sender, receiver) = unbounded();
     Self {
-      sender: tx,
-      receiver: Some(rx),
+      sender,
+      receiver: Some(receiver),
     }
   }
   pub fn send(&self, v: T) -> Oneshot<Result<R>> {
