@@ -482,3 +482,125 @@ fn test_btree_node_split_and_recovery() {
     );
   }
 }
+
+// ============================================================
+// 13. Crash Recovery via process::exit
+// ============================================================
+
+// Child process: concurrent writes then process::exit (no drop, no flush)
+#[test]
+#[ignore]
+fn crash_writer() {
+  let dir = std::env::var("CRASH_DIR").expect("CRASH_DIR not set");
+  let engine = EngineBuilder::new(std::path::Path::new(&dir))
+    .group_commit_delay(Duration::from_millis(1))
+    .group_commit_count(10)
+    .build()
+    .expect("engine bootstrap failed");
+
+  let key_count: usize = 5000;
+  let thread_count = 100;
+  let (task_tx, task_rx) =
+    crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
+  let engine = Arc::new(engine);
+
+  for _ in 0..thread_count {
+    let rx = task_rx.clone();
+    let e = engine.clone();
+    thread::spawn(move || {
+      while let Ok((i, done)) = rx.recv() {
+        let mut cursor = e.new_transaction().unwrap();
+        let key = format!("key-{:06}", i).into_bytes();
+        let value = format!("val-{:06}", i).into_bytes();
+        cursor.insert(key, value).unwrap();
+        cursor.commit().unwrap();
+        let _ = std::io::Write::write_all(
+          &mut std::io::stdout().lock(),
+          format!("{}\n", i).as_bytes(),
+        );
+        let _ = done.send(());
+      }
+    });
+  }
+
+  let mut completions = Vec::new();
+  for i in 0..key_count {
+    let (done_tx, done_rx) = crossbeam::channel::unbounded();
+    task_tx.send((i, done_tx)).unwrap();
+    completions.push(done_rx);
+  }
+
+  let mut c = 0;
+  for done in completions {
+    let _ = done.recv();
+    c += 1;
+    if c == key_count / 2 {
+      std::process::exit(0);
+    }
+  }
+}
+
+// Parent process: spawn crash_writer, collect committed keys, verify recovery
+#[test]
+fn test_process_crash_recovery() {
+  use std::io::BufRead;
+  use std::process::{Command, Stdio};
+
+  let dir = tempdir_in(".").unwrap();
+
+  // Phase 1: spawn child that writes concurrently then crashes
+  let mut child = Command::new(std::env::current_exe().unwrap())
+    .arg("--ignored")
+    .arg("--exact")
+    .arg("crash_writer")
+    .arg("--nocapture")
+    .env("CRASH_DIR", dir.path())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .expect("failed to spawn crash_writer");
+
+  let stdout = child.stdout.take().unwrap();
+  let reader = std::io::BufReader::new(stdout);
+
+  let mut committed = std::collections::HashSet::new();
+  for line in reader.lines() {
+    match line {
+      Ok(s) => {
+        if let Ok(i) = s.trim().parse::<usize>() {
+          committed.insert(i);
+        }
+      }
+      Err(_) => break,
+    }
+  }
+
+  let _ = child.wait();
+
+  assert!(
+    !committed.is_empty(),
+    "child should have committed at least some keys"
+  );
+
+  // Phase 2: reopen engine and verify all committed keys survived
+  {
+    let engine = build_engine(&dir);
+    let tx = engine.new_transaction().unwrap();
+    for i in &committed {
+      let key = format!("key-{:06}", i).into_bytes();
+      let expected = format!("val-{:06}", i).into_bytes();
+      let val = tx.get(&key).unwrap();
+      assert_eq!(
+        val,
+        Some(expected),
+        "committed key {} missing after crash recovery",
+        i
+      );
+    }
+  }
+
+  eprintln!(
+    "crash recovery: {} keys committed, all verified",
+    committed.len()
+  );
+}

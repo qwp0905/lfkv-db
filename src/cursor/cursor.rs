@@ -217,6 +217,7 @@ impl Cursor {
           slot
             .as_mut()
             .serialize_from(&CursorNode::Internal(internal))?;
+          self.orchestrator.log(self.tx_id, &slot)?;
           return Ok((latch, entry));
         }
       };
@@ -227,12 +228,14 @@ impl Cursor {
         split_slot
           .as_mut()
           .serialize_from(&CursorNode::Internal(split_node))?;
+        self.orchestrator.log(self.tx_id, &split_slot)?;
         split_slot.get_index()
       };
 
       slot
         .as_mut()
         .serialize_from(&CursorNode::Internal(internal))?;
+      self.orchestrator.log(self.tx_id, &slot)?;
 
       split_key = key;
       split_pointer = split_index;
@@ -245,6 +248,7 @@ impl Cursor {
       new_root_page
         .as_mut()
         .serialize_from(&CursorNode::Internal(new_root))?;
+      self.orchestrator.log(self.tx_id, &new_root_page)?;
       Ok(new_root_page.get_index())
     }?;
 
