@@ -1,12 +1,12 @@
 use std::{
-  collections::{BTreeMap, BTreeSet, HashMap},
+  collections::{BTreeMap, BTreeSet},
   fs::read_dir,
   mem::replace,
   sync::Arc,
   time::Duration,
 };
 
-use super::{LogRecord, Operation, WALSegment, WAL_BLOCK_SIZE};
+use super::{Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{Page, PagePool},
   error::{Error, Result},
@@ -63,10 +63,9 @@ pub fn replay(
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut index = 0;
-  let mut redo = BTreeMap::<usize, LogRecord>::new();
+  let mut redo = BTreeMap::<usize, (usize, Page)>::new();
+  let mut aborted = BTreeSet::new();
 
-  let mut apply = HashMap::<usize, Vec<(usize, usize, Page)>>::new();
-  let mut commited = Vec::<(usize, usize, Page)>::new();
   let mut last_free = 0;
   let mut last_file = None;
   let mut segments = Vec::new();
@@ -97,11 +96,19 @@ pub fn replay(
     for (_, record) in records {
       tx_id = tx_id.max(record.tx_id);
       match record.operation {
-        Operation::Checkpoint(free, log_id) => {
-          redo = redo.split_off(&log_id);
+        Operation::Insert(i, page) => {
+          redo.insert(record.log_id, (i, page));
+        }
+        Operation::Start => {}
+        Operation::Commit => {}
+        Operation::Abort => {
+          aborted.insert(record.tx_id);
+        }
+        Operation::Checkpoint(free, last_log_id) => {
+          redo = redo.split_off(&last_log_id);
           last_free = free;
         }
-        _ => drop(redo.insert(record.log_id, record)),
+        Operation::Free(index) => last_free = index,
       };
     }
 
@@ -110,30 +117,6 @@ pub fn replay(
     }
   }
 
-  for record in redo.into_values() {
-    tx_id = tx_id.max(record.tx_id);
-    match record.operation {
-      Operation::Insert(i, page) => {
-        apply
-          .entry(record.tx_id)
-          .or_default()
-          .push((record.log_id, i, page));
-      }
-      Operation::Start => {
-        apply.insert(record.tx_id, vec![]);
-      }
-      Operation::Commit => {
-        apply
-          .remove(&record.tx_id)
-          .map(|pages| commited.extend(pages));
-      }
-      Operation::Abort => {
-        apply.remove(&record.tx_id);
-      }
-      Operation::Checkpoint(_, _) => {}
-      Operation::Free(index) => last_free = index,
-    };
-  }
   let mut last_index = index + 1;
   if last_index == max_len {
     last_index = 0;
@@ -142,14 +125,16 @@ pub fn replay(
     }
   }
 
-  let aborted = BTreeSet::from_iter(apply.into_keys());
   Ok(ReplayResult {
     last_index,
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
     last_free,
     aborted,
-    redo: commited,
+    redo: redo
+      .into_iter()
+      .map(|(id, (index, data))| (id, index, data))
+      .collect(),
     last_file,
     segments,
   })

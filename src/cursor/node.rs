@@ -16,14 +16,14 @@ impl CursorNode {
   }
   pub fn as_leaf(self) -> Result<LeafNode> {
     match self {
-      CursorNode::Internal(_) => Err(Error::InvalidFormat),
+      CursorNode::Internal(_) => Err(Error::InvalidFormat("invalid leaf node type")),
       CursorNode::Leaf(node) => Ok(node),
     }
   }
   pub fn as_internal(self) -> Result<InternalNode> {
     match self {
       CursorNode::Internal(node) => Ok(node),
-      CursorNode::Leaf(_) => Err(Error::InvalidFormat),
+      CursorNode::Leaf(_) => Err(Error::InvalidFormat("invalid internal node type")),
     }
   }
 }
@@ -111,7 +111,7 @@ impl Serializable for CursorNode {
           (prev != 0).then(|| prev),
         )))
       }
-      _ => Err(Error::InvalidFormat),
+      _ => Err(Error::InvalidFormat("invalid cursor node type")),
     }
   }
 }

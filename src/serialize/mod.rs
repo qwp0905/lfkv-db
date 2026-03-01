@@ -35,7 +35,7 @@ pub trait Serializable: Sized {
   fn deserialize(value: &Page<PAGE_SIZE>) -> Result<Self> {
     let mut reader = value.scanner();
     if u8::from(Self::get_type()) != reader.read()? {
-      return Err(Error::InvalidFormat);
+      return Err(Error::InvalidFormat("block type not matched"));
     }
 
     Self::read_from(&mut reader)

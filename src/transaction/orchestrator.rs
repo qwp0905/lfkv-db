@@ -55,6 +55,7 @@ impl TxOrchestrator {
       buffer_pool.clone(),
       version_visibility.clone(),
       free_list.clone(),
+      wal.clone(),
       gc_config,
     )
     .to_arc();
@@ -64,8 +65,7 @@ impl TxOrchestrator {
       let log_id = wal.current_log_id();
       gc.run()?;
       buffer_pool.flush()?;
-      wal.append_checkpoint(free_list.get_last_free(), log_id)?;
-      wal.flush()?;
+      wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
 
       for seg in replay.segments {
         seg.unlink()?;
@@ -117,8 +117,7 @@ impl TxOrchestrator {
   }
 
   pub fn commit_tx(&self, tx_id: usize) -> Result {
-    self.wal.append_commit(tx_id)?;
-    self.wal.flush()?;
+    self.wal.commit_and_flush(tx_id)?;
     self.version_visibility.deactive(&tx_id);
     self.gc.notify();
     Ok(())
@@ -191,13 +190,10 @@ fn run_checkpoint(
   free_list: &FreeList,
   gc: &GarbageCollector,
 ) -> Result {
-  let r = segment.as_ref().map(|s| s.fsync());
   let log_id = wal.current_log_id();
   gc.run()?;
   buffer_pool.flush()?;
-  wal.append_checkpoint(free_list.get_last_free(), log_id)?;
-  r.map(|f| f.wait()).unwrap_or(Ok(()))?;
+  wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
   segment.map(|s| s.unlink()).unwrap_or(Ok(()))?;
-  wal.flush()?;
   Ok(())
 }

@@ -115,30 +115,43 @@ impl TryFrom<Vec<u8>> for LogRecord {
   fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
     let len = value.len();
     if len < 21 {
-      return Err(Error::InvalidFormat);
+      return Err(Error::InvalidFormat("log record too short."));
     }
 
-    let checksum =
-      u32::from_be_bytes(value[0..4].try_into().map_err(|_| Error::InvalidFormat)?);
+    let checksum = u32::from_be_bytes(
+      value[0..4]
+        .try_into()
+        .map_err(|_| Error::InvalidFormat("cannot read checksum from log record"))?,
+    );
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&value[4..]);
     if hasher.finalize() != checksum {
-      return Err(Error::InvalidFormat);
+      return Err(Error::InvalidFormat("checksum not matched."));
     }
 
-    let log_id =
-      usize::from_be_bytes(value[4..12].try_into().map_err(|_| Error::InvalidFormat)?);
-    let tx_id =
-      usize::from_be_bytes(value[12..20].try_into().map_err(|_| Error::InvalidFormat)?);
+    let log_id = usize::from_be_bytes(
+      value[4..12]
+        .try_into()
+        .map_err(|_| Error::InvalidFormat("invalid log id in log record"))?,
+    );
+    let tx_id = usize::from_be_bytes(
+      value[12..20]
+        .try_into()
+        .map_err(|_| Error::InvalidFormat("invalid tx id in log record"))?,
+    );
     let operation = match value[20] {
       1 => {
         if len != PAGE_SIZE + 29 {
-          return Err(Error::InvalidFormat);
+          return Err(Error::InvalidFormat("invalid len for insert log."));
         }
         let index = usize::from_be_bytes(
-          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29]
+            .try_into()
+            .map_err(|_| Error::InvalidFormat("invalid index for insert log."))?,
         );
-        let data = value[29..].try_into().map_err(|_| Error::InvalidFormat)?;
+        let data = value[29..]
+          .try_into()
+          .map_err(|_| Error::InvalidFormat("invalid data for insert log."))?;
         Operation::Insert(index, data)
       }
       2 => Operation::Start,
@@ -146,26 +159,31 @@ impl TryFrom<Vec<u8>> for LogRecord {
       4 => Operation::Abort,
       5 => {
         if len < 37 {
-          return Err(Error::InvalidFormat);
+          return Err(Error::InvalidFormat("checkpoint log too short."));
         }
         let log_id = usize::from_be_bytes(
-          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29]
+            .try_into()
+            .map_err(|_| Error::InvalidFormat("invalid log id for checkpoint log."))?,
         );
-        let index = usize::from_be_bytes(
-          value[29..37].try_into().map_err(|_| Error::InvalidFormat)?,
-        );
+        let index =
+          usize::from_be_bytes(value[29..37].try_into().map_err(|_| {
+            Error::InvalidFormat("invalid last free for checkpoint log.")
+          })?);
         Operation::Checkpoint(index, log_id)
       }
       6 => {
         if len < 29 {
-          return Err(Error::InvalidFormat);
+          return Err(Error::InvalidFormat("free log too short."));
         }
         let index = usize::from_be_bytes(
-          value[21..29].try_into().map_err(|_| Error::InvalidFormat)?,
+          value[21..29]
+            .try_into()
+            .map_err(|_| Error::InvalidFormat("invalid index for free log."))?,
         );
         Operation::Free(index)
       }
-      _ => return Err(Error::InvalidFormat),
+      _ => return Err(Error::InvalidFormat("invalid type log record.")),
     };
     Ok(LogRecord::new(log_id, tx_id, operation))
   }

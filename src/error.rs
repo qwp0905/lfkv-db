@@ -6,7 +6,7 @@ pub enum Error {
   NotFound,
 
   #[error("invalid format")]
-  InvalidFormat,
+  InvalidFormat(&'static str),
 
   #[error("unknown")]
   Unknown(Box<dyn std::error::Error + Send + Sync>),

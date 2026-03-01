@@ -11,6 +11,7 @@ use crate::{
   thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
   transaction::{FreeList, VersionVisibility},
   utils::{ShortenedMutex, ToArc},
+  wal::WAL,
 };
 
 pub struct GarbageCollectionConfig {
@@ -46,6 +47,7 @@ impl GarbageCollector {
     buffer_pool: Arc<BufferPool>,
     version_visibility: Arc<VersionVisibility>,
     free_list: Arc<FreeList>,
+    wal: Arc<WAL>,
     config: GarbageCollectionConfig,
   ) -> Self {
     let release = WorkBuilder::new()
@@ -83,9 +85,10 @@ impl GarbageCollector {
       .with_timeout(
         config.interval,
         run_main(
-          buffer_pool.clone(),
-          version_visibility.clone(),
-          free_list.clone(),
+          buffer_pool,
+          version_visibility,
+          free_list,
+          wal,
           check.clone(),
           count.clone(),
         ),
@@ -112,11 +115,13 @@ fn run_main(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
   free_list: Arc<FreeList>,
+  wal: Arc<WAL>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   counter: Arc<Mutex<usize>>,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
     *counter.l() = 0;
+    let current_version = version_visibility.current_version();
     let header: TreeHeader = buffer_pool
       .read(HEADER_INDEX)?
       .for_read()
@@ -178,6 +183,7 @@ fn run_main(
         if !release.is_empty() {
           leaf.set_entries(new_entries);
           latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+          wal.append_insert(current_version, latch.get_index(), latch.as_ref())?;
         }
         release
       };

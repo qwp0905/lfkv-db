@@ -12,8 +12,8 @@ fn main() {
       .buffer_pool_shard_count(1 << 3)
       .wal_file_size(10 << 20)
       .gc_trigger_count(300)
-      .gc_thread_count(3)
-      .io_thread_count(3)
+      .gc_thread_count(5)
+      .io_thread_count(5)
       .build()
       .expect("bootstrap error"),
   );

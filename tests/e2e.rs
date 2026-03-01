@@ -564,14 +564,9 @@ fn test_process_crash_recovery() {
   let reader = std::io::BufReader::new(stdout);
 
   let mut committed = std::collections::HashSet::new();
-  for line in reader.lines() {
-    match line {
-      Ok(s) => {
-        if let Ok(i) = s.trim().parse::<usize>() {
-          committed.insert(i);
-        }
-      }
-      Err(_) => break,
+  for s in reader.lines().map_while(|l| l.ok()) {
+    if let Ok(i) = s.trim().parse::<usize>() {
+      committed.insert(i);
     }
   }
 

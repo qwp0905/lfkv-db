@@ -174,27 +174,33 @@ impl Cursor {
           if !create {
             return Err(Error::NotFound);
           }
-          let latch = self.orchestrator.alloc()?.for_write();
+
+          let mut latch = self.orchestrator.alloc()?.for_write();
           let mut split = match leaf.insert_at(i, key.clone(), latch.get_index()) {
             Some(s) => s,
             None => {
+              let entry = DataEntry::new();
+              latch.as_mut().serialize_from(&entry)?;
+              self.orchestrator.log(latch.get_index(), &latch)?;
               slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
               self.orchestrator.log(self.tx_id, &slot)?;
-              return Ok((latch, DataEntry::new()));
+              return Ok((latch, entry));
             }
           };
 
           let mut split_slot = self.orchestrator.alloc()?.for_write();
-          split.set_prev(slot.get_index());
-          leaf.set_next(split_slot.get_index());
-          slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-          self.orchestrator.log(self.tx_id, &slot)?;
-
           let mid_key = split.top().clone();
+          split.set_prev(slot.get_index());
+
           split_slot
             .as_mut()
             .serialize_from(&CursorNode::Leaf(split))?;
           self.orchestrator.log(self.tx_id, &split_slot)?;
+
+          leaf.set_next(split_slot.get_index());
+          slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+          self.orchestrator.log(self.tx_id, &slot)?;
+
           break (latch, DataEntry::new(), mid_key, split_slot.get_index());
         }
       };
@@ -291,9 +297,12 @@ impl Cursor {
               Some((split_page, split_entry))
             }
             None => {
-              let split_page = self.orchestrator.alloc()?.for_write();
+              let mut split_page = self.orchestrator.alloc()?.for_write();
+              let split_entry = DataEntry::new();
+              split_page.as_mut().serialize_from(&split_entry)?;
+              self.orchestrator.log(split_page.get_index(), &split_page)?;
               entry.set_next(split_page.get_index());
-              Some((split_page, DataEntry::new()))
+              Some((split_page, split_entry))
             }
           }
         }

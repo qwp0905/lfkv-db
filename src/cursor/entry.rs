@@ -156,7 +156,7 @@ impl Serializable for DataEntry {
           RecordData::Data(reader.read_n(l)?.to_vec())
         }
         1 => RecordData::Tombstone,
-        _ => return Err(Error::InvalidFormat),
+        _ => return Err(Error::InvalidFormat("invalid type for data version record")),
       };
       versions.push_back(VersionRecord::new(owner, version, data))
     }
