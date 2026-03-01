@@ -34,6 +34,12 @@ impl<T> OneshotInner<T> {
       caller: AtomicCell::new(None),
     }
   }
+  fn get_value(&self) -> &MaybeUninit<T> {
+    unsafe { &*self.value.get() }
+  }
+  fn get_value_mut(&self) -> &mut MaybeUninit<T> {
+    unsafe { &mut *self.value.get() }
+  }
 }
 
 pub struct Oneshot<T>(Arc<OneshotInner<T>>);
@@ -47,9 +53,7 @@ impl<T> Oneshot<T> {
         .compare_exchange(State::Fulfilled, State::Disconnected)
         .unwrap_or_else(|s| s)
       {
-        State::Fulfilled => {
-          return Ok(unsafe { (&*self.0.value.get()).assume_init_read() })
-        }
+        State::Fulfilled => return Ok(unsafe { self.0.get_value().assume_init_read() }),
         State::Waiting => park(),
         State::Disconnected => return Err(Error::ChannelDisconnected),
       }
@@ -72,7 +76,7 @@ impl<T> Drop for Oneshot<T> {
 pub struct OneshotFulfill<T>(Arc<OneshotInner<T>>);
 impl<T> OneshotFulfill<T> {
   pub fn fulfill(self, result: T) {
-    let value = unsafe { &mut *self.0.value.get() };
+    let value = self.0.get_value_mut();
     value.write(result);
     match self
       .0
