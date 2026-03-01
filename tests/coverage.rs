@@ -20,14 +20,6 @@ fn create_coverage() {
   std::env::set_var("LLVM_PROFILE_FILE", "%p-%m.profraw");
 
   let status = Command::new("cargo")
-    .arg("build")
-    .status()
-    .expect("failed to build.");
-  if !status.success() {
-    panic!("failed to build.");
-  }
-
-  let status = Command::new("cargo")
     .args(["test", "--", "--test-threads=5"])
     .status()
     .expect("failed to run tests.");
