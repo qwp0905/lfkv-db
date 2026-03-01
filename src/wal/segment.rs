@@ -12,17 +12,17 @@ use crate::{
   constant::FILE_SUFFIX,
   disk::{PageRef, Pread, Pwrite},
   error::Result,
-  thread::{Oneshot, SingleWorkThread, WorkBuilder},
+  thread::{/* Oneshot, */ SingleWorkThread, WorkBuilder, WorkResult},
   utils::ToArc,
   Error,
 };
 
-pub struct FsyncResult(Oneshot<Result<bool>>);
+pub struct FsyncResult(WorkResult<bool>);
 impl FsyncResult {
   pub fn wait(self) -> Result {
     self
       .0
-      .wait_result()?
+      .wait()?
       .then(|| Ok(()))
       .unwrap_or_else(|| Err(Error::FlushFailed))
   }

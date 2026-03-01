@@ -7,7 +7,7 @@ use std::{
 use super::{Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
-  thread::{Oneshot, SharedWorkThread, WorkBuilder},
+  thread::{SharedWorkThread, WorkBuilder, WorkResult},
   utils::{logger, ToArc},
 };
 
@@ -43,12 +43,10 @@ pub struct DiskControllerConfig {
   pub thread_count: usize,
 }
 
-pub struct WriteAsync<const N: usize>(
-  Oneshot<Result<std::io::Result<OperationResult<N>>>>,
-);
+pub struct WriteAsync<const N: usize>(WorkResult<std::io::Result<OperationResult<N>>>);
 impl<const N: usize> WriteAsync<N> {
   pub fn wait(self) -> Result {
-    self.0.wait_result()?.map_err(Error::IO)?;
+    self.0.wait()?.map_err(Error::IO)?;
     Ok(())
   }
 }

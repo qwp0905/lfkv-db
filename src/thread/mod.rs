@@ -5,7 +5,7 @@ mod builder;
 pub use builder::*;
 
 mod oneshot;
-pub use oneshot::*;
+use oneshot::*;
 
 mod single;
 pub use single::*;

@@ -13,7 +13,7 @@ use crate::{
   utils::UnwrappedSender,
 };
 
-use super::{oneshot, Context, Oneshot, SafeWork};
+use super::{oneshot, Context, SafeWork, WorkResult};
 
 pub struct SingleWorkInput<T, R = ()> {
   sender: Sender<Context<T, R>>,
@@ -27,11 +27,17 @@ impl<T, R> SingleWorkInput<T, R> {
       receiver: Some(receiver),
     }
   }
-  pub fn send(&self, v: T) -> Oneshot<Result<R>> {
-    let (o, f) = oneshot();
-    let ctx = Context::Work((v, f));
-    self.sender.send(ctx).unwrap();
-    o
+  pub fn send(&self, v: T) -> WorkResult<R> {
+    let (done_r, done_t) = oneshot();
+    if let Err(TrySendError::Disconnected(_)) =
+      self.sender.try_send(Context::Work((v, done_t)))
+    {
+      drop(done_r);
+      let (done_r, done_t) = oneshot();
+      done_t.fulfill(Err(Error::WorkerClosed));
+      return WorkResult::from(done_r);
+    }
+    WorkResult::from(done_r)
   }
   pub fn copy(&self) -> Self {
     Self {
@@ -85,7 +91,7 @@ where
     })
   }
 
-  pub fn send(&self, v: T) -> Oneshot<Result<R>> {
+  pub fn send(&self, v: T) -> WorkResult<R> {
     let (done_r, done_t) = oneshot();
     if let Err(TrySendError::Disconnected(_)) =
       self.channel.try_send(Context::Work((v, done_t)))
@@ -93,13 +99,13 @@ where
       drop(done_r);
       let (done_r, done_t) = oneshot();
       done_t.fulfill(Err(Error::WorkerClosed));
-      return done_r;
+      return WorkResult::from(done_r);
     }
-    done_r
+    WorkResult::from(done_r)
   }
 
   pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait_result()
+    self.send(v).wait()
   }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);

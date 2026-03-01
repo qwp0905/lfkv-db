@@ -12,7 +12,7 @@ use crate::{
   utils::{ShortenedMutex, ToArc},
 };
 
-use super::{oneshot, Context, Oneshot, SafeFn};
+use super::{oneshot, Context, SafeFn, WorkResult};
 
 fn pop_or_steal<A>(
   local: &Worker<A>,
@@ -145,13 +145,13 @@ where
   }
 
   #[inline]
-  pub fn send(&self, v: T) -> Oneshot<Result<R>> {
+  pub fn send(&self, v: T) -> WorkResult<R> {
     let (oneshot, fulfill) = oneshot();
     self.global.push(Context::Work((v, fulfill)));
-    oneshot
+    WorkResult::from(oneshot)
   }
   pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait_result()
+    self.send(v).wait()
   }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);
@@ -208,7 +208,7 @@ mod tests {
     let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
     let results = receivers
       .into_iter()
-      .map(|receiver| receiver.wait_result().expect("closed"))
+      .map(|receiver| receiver.wait().expect("closed"))
       .collect::<Vec<usize>>();
 
     assert_eq!(results, vec![2, 4, 6, 8]);

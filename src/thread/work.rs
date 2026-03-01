@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::channel::{Receiver, RecvTimeoutError};
 
-use super::OneshotFulfill;
+use super::{Oneshot, OneshotFulfill};
 use crate::{
   error::{Error, Result},
   utils::{AsTimer, SafeCallable, ToArc},
@@ -104,5 +104,22 @@ where
         }
       }
     }
+  }
+}
+
+pub struct WorkResult<R>(Oneshot<Result<R>>);
+impl<R> WorkResult<R> {
+  pub fn wait(self) -> Result<R> {
+    self.0.wait()?
+  }
+}
+impl<R> From<Oneshot<Result<R>>> for WorkResult<R> {
+  fn from(v: Oneshot<Result<R>>) -> Self {
+    WorkResult(v)
+  }
+}
+impl<R> WorkResult<Result<R>> {
+  pub fn wait_flatten(self) -> Result<R> {
+    self.wait()?
   }
 }

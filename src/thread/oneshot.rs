@@ -60,11 +60,6 @@ impl<T> Oneshot<T> {
     }
   }
 }
-impl<T> Oneshot<Result<T>> {
-  pub fn wait_result(self) -> Result<T> {
-    self.wait()?
-  }
-}
 impl<T> Drop for Oneshot<T> {
   fn drop(&mut self) {
     if let State::Fulfilled = self.0.state.swap(State::Disconnected) {
