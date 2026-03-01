@@ -4,19 +4,17 @@ use crate::error::{Error, Result};
 
 pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Page<const T: usize = PAGE_SIZE> {
-  bytes: [u8; T],
-}
+#[derive(Debug)]
+pub struct Page<const T: usize = PAGE_SIZE>([u8; T]);
 
 impl<const T: usize> Page<T> {
   pub fn new() -> Self {
-    Self { bytes: [0; T] }
+    Self([0; T])
   }
 
   fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
-    let end = end.min(self.bytes.len());
-    self.bytes.index_mut(start..end)
+    let end = end.min(self.0.len());
+    self.0.index_mut(start..end)
   }
 
   pub fn copy(&self) -> Self {
@@ -26,27 +24,27 @@ impl<const T: usize> Page<T> {
   }
 
   pub fn scanner(&self) -> PageScanner<'_, T> {
-    PageScanner::new(&self.bytes)
+    PageScanner::new(&self.0)
   }
 
   pub fn writer(&mut self) -> PageWriter<'_, T> {
-    PageWriter::new(&mut self.bytes)
+    PageWriter::new(&mut self.0)
   }
 }
 
 impl<const T: usize> AsRef<[u8]> for Page<T> {
   fn as_ref(&self) -> &[u8] {
-    &self.bytes
+    &self.0
   }
 }
 impl<const T: usize> AsMut<[u8]> for Page<T> {
   fn as_mut(&mut self) -> &mut [u8] {
-    &mut self.bytes
+    &mut self.0
   }
 }
 impl<const T: usize> From<[u8; T]> for Page<T> {
   fn from(bytes: [u8; T]) -> Self {
-    Self { bytes }
+    Self(bytes)
   }
 }
 
@@ -60,12 +58,12 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
 }
 impl<const T: usize> From<Page<T>> for Vec<u8> {
   fn from(value: Page<T>) -> Self {
-    value.bytes.into()
+    value.0.into()
   }
 }
 impl<const T: usize> From<&Page<T>> for Vec<u8> {
   fn from(value: &Page<T>) -> Self {
-    value.bytes.into()
+    value.0.into()
   }
 }
 impl<const T: usize> From<&[u8]> for Page<T> {
@@ -160,13 +158,13 @@ mod tests {
     let mut wt = page.writer();
     wt.write(&[1, 2, 3, 5, 6]).unwrap();
 
-    assert_eq!(page.bytes[0], 1);
-    assert_eq!(page.bytes[1], 2);
-    assert_eq!(page.bytes[2], 3);
-    assert_eq!(page.bytes[3], 5);
-    assert_eq!(page.bytes[4], 6);
-    assert_eq!(page.bytes[5], 0);
-    assert_eq!(page.bytes[6], 0);
+    assert_eq!(page.0[0], 1);
+    assert_eq!(page.0[1], 2);
+    assert_eq!(page.0[2], 3);
+    assert_eq!(page.0[3], 5);
+    assert_eq!(page.0[4], 6);
+    assert_eq!(page.0[5], 0);
+    assert_eq!(page.0[6], 0);
   }
 
   #[test]

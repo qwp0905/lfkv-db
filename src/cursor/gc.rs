@@ -16,6 +16,7 @@ use crate::{
 pub struct GarbageCollectionConfig {
   pub interval: Duration,
   pub count: usize,
+  pub thread_count: usize,
 }
 
 pub struct GarbageCollector {
@@ -50,13 +51,13 @@ impl GarbageCollector {
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
-      .shared(3)
+      .shared(config.thread_count)
       .build_unchecked(run_release(buffer_pool.clone(), free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(2 << 20)
-      .shared(3)
+      .shared(config.thread_count)
       .build_unchecked(run_entry(
         buffer_pool.clone(),
         version_visibility.clone(),
@@ -66,7 +67,7 @@ impl GarbageCollector {
     let check = WorkBuilder::new()
       .name("gc check top entry")
       .stack_size(2 << 20)
-      .shared(3)
+      .shared(config.thread_count)
       .build_unchecked(run_check(
         buffer_pool.clone(),
         version_visibility.clone(),

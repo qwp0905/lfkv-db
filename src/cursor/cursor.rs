@@ -301,7 +301,7 @@ impl Cursor {
 
       match next {
         Some((next_latch, next_entry)) => {
-          let _ = replace(&mut latch, next_latch);
+          latch = next_latch;
           entry = next_entry;
         }
         None => break,

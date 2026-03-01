@@ -26,7 +26,7 @@ pub trait Serializable: Sized {
   fn get_type() -> SerializeType;
   fn serialize_at(&self, page: &mut Page<PAGE_SIZE>) -> Result {
     let mut writer = page.writer();
-    writer.write(&[Self::get_type().into()])?;
+    writer.write(&[u8::from(Self::get_type())])?;
     self.write_at(&mut writer)?;
     Ok(())
   }

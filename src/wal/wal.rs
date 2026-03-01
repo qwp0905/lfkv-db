@@ -1,12 +1,11 @@
 use std::{
-  collections::BTreeSet,
   mem::replace,
   path::PathBuf,
   sync::{Arc, Mutex},
   time::Duration,
 };
 
-use super::{replay, LogEntry, LogRecord, WALSegment, WAL_BLOCK_SIZE};
+use super::{replay, LogEntry, LogRecord, ReplayResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
@@ -42,26 +41,10 @@ impl WAL {
   pub fn replay(
     config: WALConfig,
     checkpoint: SingleWorkInput<WALSegment, Result>,
-  ) -> Result<(
-    Self,
-    usize,                     // last tx id
-    usize,                     // last free
-    BTreeSet<usize>,           // aborted
-    Vec<(usize, usize, Page)>, // redo records
-    Vec<WALSegment>,           // previous wal segments
-  )> {
+  ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
-    let (
-      last_index,
-      last_log_id,
-      last_tx_id,
-      last_free,
-      aborted,
-      redo,
-      current_seg,
-      segments,
-    ) = replay(
+    let mut replay_result = replay(
       config.base_dir.to_string_lossy().as_ref(),
       config.prefix.to_string_lossy().as_ref(),
       max_index,
@@ -71,17 +54,21 @@ impl WAL {
     )?;
 
     logger::info(format!(
-      "wal replay result: last_index {last_index} last_log_id {last_log_id} last_tx_id {last_tx_id} last_free {last_free} aborted {} redo {} segments {}",
-      aborted.len(),
-      redo.len(),
-      segments.len()
+      "wal replay result: last_index {} last_log_id {} last_tx_id {} last_free {} aborted {} redo {} segments {}",
+      replay_result.last_index,
+      replay_result.last_log_id,
+      replay_result.last_tx_id,
+      replay_result.last_free,
+      replay_result.aborted.len(),
+      replay_result.redo.len(),
+      replay_result.segments.len()
     ));
 
     let prefix = PathBuf::from(config.base_dir).join(config.prefix);
     let buffer = WALBuffer {
-      last_log_id,
-      entry: LogEntry::new(last_index),
-      segment: match current_seg {
+      last_log_id: replay_result.last_log_id,
+      entry: LogEntry::new(replay_result.last_index),
+      segment: match replay_result.last_file.take() {
         Some(seg) => seg,
         None => WALSegment::open_new(
           &prefix,
@@ -102,11 +89,7 @@ impl WAL {
         flush_count: config.group_commit_count,
         flush_interval: config.group_commit_delay,
       },
-      last_tx_id,
-      last_free,
-      aborted,
-      redo,
-      segments,
+      replay_result,
     ))
   }
 

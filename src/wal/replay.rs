@@ -13,6 +13,31 @@ use crate::{
   utils::logger,
 };
 
+pub struct ReplayResult {
+  pub last_index: usize,
+  pub last_log_id: usize,
+  pub last_tx_id: usize,
+  pub last_free: usize,
+  pub aborted: BTreeSet<usize>,
+  pub redo: Vec<(usize, usize, Page)>,
+  pub last_file: Option<WALSegment>,
+  pub segments: Vec<WALSegment>,
+}
+impl ReplayResult {
+  fn empty() -> Self {
+    Self {
+      last_index: 0,
+      last_log_id: 0,
+      last_tx_id: 0,
+      last_free: 0,
+      aborted: Default::default(),
+      redo: Default::default(),
+      last_file: None,
+      segments: Default::default(),
+    }
+  }
+}
+
 pub fn replay(
   base_dir: &str,
   prefix: &str,
@@ -20,16 +45,7 @@ pub fn replay(
   flush_count: usize,
   flush_interval: Duration,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
-) -> Result<(
-  usize,                     // last index
-  usize,                     // last_log_id
-  usize,                     // last_tx_id
-  usize,                     // last_free
-  BTreeSet<usize>,           // aborted
-  Vec<(usize, usize, Page)>, // redo records
-  Option<WALSegment>,        // wal file segment
-  Vec<WALSegment>,           // previous segments
-)> {
+) -> Result<ReplayResult> {
   let mut files = Vec::new();
   for file in read_dir(base_dir).map_err(Error::IO)? {
     let file = file.map_err(Error::IO)?;
@@ -41,16 +57,7 @@ pub fn replay(
 
   if files.len() == 0 {
     logger::info("previous wal segment not found.");
-    return Ok((
-      0,
-      0,
-      0,
-      0,
-      Default::default(),
-      Default::default(),
-      None,
-      Default::default(),
-    ));
+    return Ok(ReplayResult::empty());
   }
 
   let mut tx_id = 0;
@@ -136,14 +143,14 @@ pub fn replay(
   }
 
   let aborted = BTreeSet::from_iter(apply.into_keys());
-  Ok((
+  Ok(ReplayResult {
     last_index,
-    log_id + 1,
-    tx_id + 1,
+    last_log_id: log_id + 1,
+    last_tx_id: tx_id + 1,
     last_free,
     aborted,
-    commited,
+    redo: commited,
     last_file,
     segments,
-  ))
+  })
 }

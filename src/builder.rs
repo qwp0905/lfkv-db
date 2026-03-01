@@ -13,6 +13,7 @@ where
   group_commit_count: Option<usize>,
   gc_trigger_interval: Option<Duration>,
   gc_trigger_count: Option<usize>,
+  gc_thread_count: Option<usize>,
   buffer_pool_shard_count: Option<usize>,
   buffer_pool_memory_capacity: Option<usize>,
   io_thread_count: Option<usize>,
@@ -30,6 +31,7 @@ where
       group_commit_count: None,
       gc_trigger_interval: None,
       gc_trigger_count: None,
+      gc_thread_count: None,
       buffer_pool_shard_count: None,
       buffer_pool_memory_capacity: None,
       io_thread_count: None,
@@ -68,6 +70,10 @@ where
     self.gc_trigger_interval = Some(interval);
     self
   }
+  pub fn gc_thread_count(mut self, count: usize) -> Self {
+    self.gc_thread_count = Some(count);
+    self
+  }
   pub fn io_thread_count(mut self, count: usize) -> Self {
     self.io_thread_count = Some(count);
     self
@@ -90,6 +96,7 @@ where
         .gc_trigger_interval
         .unwrap_or(DEFAULT_GC_TRIGGER_INTERVAL),
       gc_trigger_count: self.gc_trigger_count.unwrap_or(DEFAULT_GC_TRIGGER_COUNT),
+      gc_thread_count: self.gc_thread_count.unwrap_or(DEFAULT_GC_THREAD_COUNT),
       buffer_pool_shard_count: self
         .buffer_pool_shard_count
         .unwrap_or(DEFAULT_BUFFER_POOL_SHARD_COUNT),
@@ -108,6 +115,7 @@ const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
 const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;
 const DEFAULT_GC_TRIGGER_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_GC_TRIGGER_COUNT: usize = 1000;
+const DEFAULT_GC_THREAD_COUNT: usize = 3;
 const DEFAULT_BUFFER_POOL_SHARD_COUNT: usize = 1 << 4; // 16
 const DEFAULT_BUFFER_POOL_MEMORY_CAPACITY: usize = 32 << 20; // 32 mb
 const DEFAULT_IO_THREAD_COUNT: usize = 3;

@@ -2,14 +2,15 @@ use std::{mem::ManuallyDrop, sync::Arc};
 
 use crossbeam::queue::ArrayQueue;
 
-use crate::disk::Page;
+use super::Page;
+use crate::utils::ToArc;
 
 pub struct PageRef<const N: usize> {
   page: ManuallyDrop<Page<N>>,
   store: Arc<PageStore<N>>,
 }
 impl<const N: usize> PageRef<N> {
-  fn with(store: Arc<PageStore<N>>, page: Page<N>) -> Self {
+  fn from_exists(store: Arc<PageStore<N>>, page: Page<N>) -> Self {
     Self {
       page: ManuallyDrop::new(page),
       store,
@@ -17,7 +18,7 @@ impl<const N: usize> PageRef<N> {
   }
 
   fn new(store: Arc<PageStore<N>>) -> Self {
-    Self::with(store, Page::new())
+    Self::from_exists(store, Page::new())
   }
 }
 impl<const N: usize> AsRef<Page<N>> for PageRef<N> {
@@ -49,7 +50,7 @@ pub struct PagePool<const N: usize> {
 impl<const N: usize> PagePool<N> {
   pub fn new(cap: usize) -> Self {
     Self {
-      store: Arc::new(PageStore::new(cap)),
+      store: PageStore::new(cap).to_arc(),
     }
   }
 
@@ -59,7 +60,7 @@ impl<const N: usize> PagePool<N> {
       .as_ref()
       .data
       .pop()
-      .map(|p| PageRef::with(self.store.clone(), p))
+      .map(|p| PageRef::from_exists(self.store.clone(), p))
       .unwrap_or_else(|| PageRef::new(self.store.clone()))
   }
 
