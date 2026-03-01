@@ -151,7 +151,7 @@ where
     oneshot
   }
   pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
+    self.send(v).wait_result()
   }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);
@@ -208,7 +208,7 @@ mod tests {
     let receivers: Vec<_> = (1..=thread_count).map(|i| thread.send(i)).collect();
     let results = receivers
       .into_iter()
-      .map(|receiver| receiver.wait().expect("closed"))
+      .map(|receiver| receiver.wait_result().expect("closed"))
       .collect::<Vec<usize>>();
 
     assert_eq!(results, vec![2, 4, 6, 8]);

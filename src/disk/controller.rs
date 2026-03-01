@@ -48,7 +48,7 @@ pub struct WriteAsync<const N: usize>(
 );
 impl<const N: usize> WriteAsync<N> {
   pub fn wait(self) -> Result {
-    self.0.wait()?.map_err(Error::IO)?;
+    self.0.wait_result()?.map_err(Error::IO)?;
     Ok(())
   }
 }

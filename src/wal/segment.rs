@@ -22,7 +22,7 @@ impl FsyncResult {
   pub fn wait(self) -> Result {
     self
       .0
-      .wait()?
+      .wait_result()?
       .then(|| Ok(()))
       .unwrap_or_else(|| Err(Error::FlushFailed))
   }

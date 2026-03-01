@@ -35,6 +35,9 @@ pub enum Error {
   #[error("thread conflict detected")]
   ThreadConflict,
 
+  #[error("channel disconnected")]
+  ChannelDisconnected,
+
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),
 }

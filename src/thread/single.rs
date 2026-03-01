@@ -99,7 +99,7 @@ where
   }
 
   pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
+    self.send(v).wait_result()
   }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);

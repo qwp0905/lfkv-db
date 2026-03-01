@@ -150,7 +150,7 @@ fn run_main(
         waiting.push(check_c.send(*ptr));
       }
       for r in waiting {
-        found = r.wait()?? || found;
+        found = r.wait_result()?? || found;
       }
       if !found {
         continue;
