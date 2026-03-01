@@ -498,7 +498,7 @@ fn crash_writer() {
     .build()
     .expect("engine bootstrap failed");
 
-  let key_count: usize = 5000;
+  let key_count: usize = 10000;
   let thread_count = 100;
   let (task_tx, task_rx) =
     crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();

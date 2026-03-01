@@ -10,7 +10,7 @@ fn main() {
       .group_commit_delay(Duration::from_millis(10))
       .buffer_pool_memory_capacity(100 << 20)
       .buffer_pool_shard_count(1 << 3)
-      .wal_file_size(10 << 20)
+      .wal_file_size(8 << 20)
       .gc_trigger_count(300)
       .gc_thread_count(5)
       .io_thread_count(5)

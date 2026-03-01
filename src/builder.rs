@@ -109,7 +109,7 @@ where
   }
 }
 
-const DEFAULT_WAL_FILE_SIZE: usize = 16 << 20; // 8 mb
+const DEFAULT_WAL_FILE_SIZE: usize = 8 << 20; // 8 mb
 const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
 const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;
