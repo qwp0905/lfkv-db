@@ -8,26 +8,29 @@ use crossbeam::atomic::AtomicCell;
 use crate::utils::ToArc;
 
 pub fn oneshot<T>() -> (Oneshot<T>, OneshotFulfill<T>) {
-  let value = AtomicCell::new(None).to_arc();
-  let caller = AtomicCell::new(None).to_arc();
-  (
-    Oneshot {
-      value: value.clone(),
-      caller: caller.clone(),
-    },
-    OneshotFulfill { value, caller },
-  )
+  let inner = OneshotInner::new().to_arc();
+  (Oneshot(inner.clone()), OneshotFulfill(inner))
 }
 
-pub struct Oneshot<T> {
-  value: Arc<AtomicCell<Option<T>>>,
-  caller: Arc<AtomicCell<Option<Thread>>>,
+struct OneshotInner<T> {
+  value: AtomicCell<Option<T>>,
+  caller: AtomicCell<Option<Thread>>,
 }
+impl<T> OneshotInner<T> {
+  fn new() -> Self {
+    Self {
+      value: AtomicCell::new(None),
+      caller: AtomicCell::new(None),
+    }
+  }
+}
+
+pub struct Oneshot<T>(Arc<OneshotInner<T>>);
 impl<T> Oneshot<T> {
   pub fn wait(self) -> T {
-    self.caller.store(Some(current()));
+    self.0.caller.store(Some(current()));
     loop {
-      match self.value.take() {
+      match self.0.value.take() {
         Some(v) => return v,
         None => park(),
       }
@@ -35,14 +38,11 @@ impl<T> Oneshot<T> {
   }
 }
 
-pub struct OneshotFulfill<T> {
-  value: Arc<AtomicCell<Option<T>>>,
-  caller: Arc<AtomicCell<Option<Thread>>>,
-}
+pub struct OneshotFulfill<T>(Arc<OneshotInner<T>>);
 impl<T> OneshotFulfill<T> {
   pub fn fulfill(self, result: T) {
-    self.value.store(Some(result));
-    if let Some(th) = self.caller.take() {
+    self.0.value.store(Some(result));
+    if let Some(th) = self.0.caller.take() {
       th.unpark();
     }
   }
