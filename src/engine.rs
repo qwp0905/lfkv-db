@@ -29,7 +29,6 @@ where
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
   pub gc_trigger_interval: Duration,
-  pub gc_trigger_count: usize,
   pub gc_thread_count: usize,
   pub buffer_pool_shard_count: usize,
   pub buffer_pool_memory_capacity: usize,
@@ -66,7 +65,6 @@ impl Engine {
     };
     let gc_config = GarbageCollectionConfig {
       interval: config.gc_trigger_interval,
-      count: config.gc_trigger_count,
       thread_count: config.gc_thread_count,
     };
     let orchestrator =

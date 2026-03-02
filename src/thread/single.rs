@@ -107,9 +107,6 @@ where
   pub fn send_await(&self, v: T) -> Result<R> {
     self.send(v).wait()
   }
-  pub fn send_no_wait(&self, v: T) {
-    let _ = self.send(v);
-  }
 
   pub fn close(&self) {
     self.channel.must_send(Context::Term);

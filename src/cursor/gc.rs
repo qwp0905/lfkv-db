@@ -16,7 +16,6 @@ use crate::{
 
 pub struct GarbageCollectionConfig {
   pub interval: Duration,
-  pub count: usize,
   pub thread_count: usize,
 }
 
@@ -25,21 +24,9 @@ pub struct GarbageCollector {
   check: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   entry: Arc<SharedWorkThread<Pointer, Result>>,
   release: Arc<SharedWorkThread<Pointer, Result>>,
-  count: Arc<Mutex<usize>>,
-  max_count: usize,
 }
 impl GarbageCollector {
-  pub fn notify(&self) {
-    let mut c = self.count.l();
-    if *c != self.max_count {
-      *c += 1;
-      return;
-    }
-    self.main.send_no_wait(());
-  }
-
   pub fn run(&self) -> Result {
-    *self.count.l() = 0;
     self.main.send_await(())?
   }
 
@@ -100,8 +87,6 @@ impl GarbageCollector {
       check,
       entry,
       release,
-      max_count: config.count,
-      count,
     }
   }
 

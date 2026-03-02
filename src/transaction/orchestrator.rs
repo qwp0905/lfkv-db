@@ -128,7 +128,6 @@ impl TxOrchestrator {
   pub fn commit_tx(&self, tx_id: usize) -> Result {
     self.wal.commit_and_flush(tx_id)?;
     self.version_visibility.deactive(&tx_id);
-    self.gc.notify();
     Ok(())
   }
 
