@@ -48,6 +48,14 @@ pub struct DataEntry {
   versions: VecDeque<VersionRecord>,
 }
 impl DataEntry {
+  pub fn init(version: VersionRecord) -> Self {
+    let mut versions = VecDeque::new();
+    versions.push_front(version);
+    Self {
+      next: None,
+      versions,
+    }
+  }
   pub fn new() -> Self {
     Self {
       next: None,

@@ -1,5 +1,8 @@
 use super::{CursorNode, DataEntry, Key, LeafNode};
-use crate::{error::Result, transaction::TxOrchestrator};
+use crate::{
+  error::{Error, Result},
+  transaction::TxOrchestrator,
+};
 
 pub struct CursorIterator<'a> {
   tx_id: usize,
@@ -8,6 +11,7 @@ pub struct CursorIterator<'a> {
   pos: usize,
   end: Option<Key>,
   closed: bool,
+  committed: &'a bool,
 }
 impl<'a> CursorIterator<'a> {
   pub fn new(
@@ -15,6 +19,7 @@ impl<'a> CursorIterator<'a> {
     orchestrator: &'a TxOrchestrator,
     leaf: LeafNode,
     pos: usize,
+    committed: &'a bool,
     end: Option<Key>,
   ) -> Self {
     Self {
@@ -23,11 +28,16 @@ impl<'a> CursorIterator<'a> {
       leaf,
       pos,
       end,
+      committed,
       closed: false,
     }
   }
 
   pub fn try_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    if *self.committed {
+      return Err(Error::TransactionClosed);
+    }
+
     if self.closed {
       return Ok(None);
     }

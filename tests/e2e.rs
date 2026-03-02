@@ -82,7 +82,7 @@ fn test_drop_abort() {
   let engine = build_engine(&dir);
 
   {
-    let mut tx1 = engine.new_transaction().unwrap();
+    let tx1 = engine.new_transaction().unwrap();
     tx1.insert(b"vanish".to_vec(), b"poof".to_vec()).unwrap();
     // no commit, no abort — just drop
   }
@@ -104,7 +104,7 @@ fn test_write_conflict() {
   tx1.insert(b"contested".to_vec(), b"v1".to_vec()).unwrap();
   // tx1 NOT committed — still active
 
-  let mut tx2 = engine.new_transaction().unwrap();
+  let tx2 = engine.new_transaction().unwrap();
   let result = tx2.insert(b"contested".to_vec(), b"v2".to_vec());
   assert!(result.is_err());
   if let Err(Error::WriteConflict) = result {

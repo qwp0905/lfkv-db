@@ -1,13 +1,10 @@
-use std::{collections::VecDeque, mem::replace, sync::Arc};
+use std::{mem::replace, sync::Arc};
 
 use super::{
   CursorIterator, CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData,
   TreeHeader, VersionRecord, HEADER_INDEX,
 };
-use crate::{
-  buffer_pool::PageSlotWrite, serialize::SerializeFrom, transaction::TxOrchestrator,
-  Error, Result,
-};
+use crate::{serialize::SerializeFrom, transaction::TxOrchestrator, Error, Result};
 
 pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
   if !orchestrator.is_disk_empty()? {
@@ -60,36 +57,45 @@ impl Cursor {
     Ok(())
   }
 
+  fn find_leaf(&self, key: &Vec<u8>) -> Result<usize> {
+    let mut index = self
+      .orchestrator
+      .fetch(HEADER_INDEX)?
+      .for_read()
+      .as_ref()
+      .deserialize::<TreeHeader>()?
+      .get_root();
+
+    while let CursorNode::Internal(node) = self
+      .orchestrator
+      .fetch(index)?
+      .for_read()
+      .as_ref()
+      .deserialize()?
+    {
+      index = node.find(key).unwrap_or_else(|i| i);
+    }
+    Ok(index)
+  }
+
   pub fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
 
-    let header: TreeHeader = self
-      .orchestrator
-      .fetch(HEADER_INDEX)?
-      .for_read()
-      .as_ref()
-      .deserialize()?;
-
-    let mut index = header.get_root();
+    let mut index = self.find_leaf(key)?;
     loop {
-      let node: CursorNode = self
+      let node = self
         .orchestrator
         .fetch(index)?
         .for_read()
         .as_ref()
-        .deserialize()?;
-      match node {
-        CursorNode::Internal(internal) => match internal.find(key) {
-          Ok(i) => index = i,
-          Err(i) => index = i,
-        },
-        CursorNode::Leaf(leaf) => match leaf.find(key) {
-          NodeFindResult::Found(_, i) => break index = i,
-          NodeFindResult::Move(i) => index = i,
-          NodeFindResult::NotFound(_) => return Ok(None),
-        },
+        .deserialize::<CursorNode>()?
+        .as_leaf()?;
+      match node.find(key) {
+        NodeFindResult::Found(_, i) => break index = i,
+        NodeFindResult::Move(i) => index = i,
+        NodeFindResult::NotFound(_) => return Ok(None),
       }
     }
 
@@ -123,87 +129,74 @@ impl Cursor {
     }
   }
 
-  fn alloc_entry(
-    &self,
-    key: &Vec<u8>,
-    create: bool,
-  ) -> Result<(PageSlotWrite<'_>, DataEntry)> {
+  pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result {
+    if self.committed {
+      return Err(Error::TransactionClosed);
+    }
+
     let header_slot = self.orchestrator.fetch(HEADER_INDEX)?;
     let mut header: TreeHeader = header_slot.for_read().as_ref().deserialize()?;
 
     let mut index = header.get_root();
     let mut stack = vec![];
 
-    loop {
-      let node: CursorNode = self
-        .orchestrator
-        .fetch(index)?
-        .for_read()
-        .as_ref()
-        .deserialize()?;
-
-      match node {
-        CursorNode::Internal(internal) => match internal.find(key) {
-          Ok(i) => stack.push(replace(&mut index, i)),
-          Err(i) => index = i,
-        },
-        CursorNode::Leaf(_) => break,
+    while let CursorNode::Internal(node) = self
+      .orchestrator
+      .fetch(index)?
+      .for_read()
+      .as_ref()
+      .deserialize()?
+    {
+      match node.find(&key) {
+        Ok(i) => stack.push(replace(&mut index, i)),
+        Err(i) => index = i,
       }
     }
 
-    let (latch, entry, mid_key, right_ptr): (
-      PageSlotWrite<'_>,
-      DataEntry,
-      Vec<u8>,
-      usize,
-    ) = loop {
-      let mut slot = self.orchestrator.fetch(index)?.for_write();
-      let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+    let (mid_key, right_ptr) = loop {
+      let mut leaf_slot = self.orchestrator.fetch(index)?.for_write();
+      let mut leaf = leaf_slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
 
       match leaf.find(&key) {
         NodeFindResult::Move(i) => {
           index = i;
           continue;
         }
-        NodeFindResult::Found(_, i) => {
-          let latch = self.orchestrator.fetch(i)?.for_write();
-          let entry = latch.as_ref().deserialize()?;
-          return Ok((latch, entry));
-        }
+        NodeFindResult::Found(_, i) => return self.insert_at(i, RecordData::Data(value)),
         NodeFindResult::NotFound(i) => {
-          if !create {
-            return Err(Error::NotFound);
-          }
+          let mut entry_slot = self.orchestrator.alloc()?.for_write();
+          let entry = DataEntry::init(VersionRecord::new(
+            self.tx_id,
+            self.orchestrator.current_version(),
+            RecordData::Data(value),
+          ));
+          entry_slot.as_mut().serialize_from(&entry)?;
+          self.orchestrator.log(self.tx_id, &entry_slot)?;
 
-          let mut latch = self.orchestrator.alloc()?.for_write();
-          let mut split = match leaf.insert_at(i, key.clone(), latch.get_index()) {
-            Some(s) => s,
+          let mut split = match leaf.insert_at(i, key.clone(), entry_slot.get_index()) {
+            Some(split) => split,
             None => {
-              let entry = DataEntry::new();
-              latch.as_mut().serialize_from(&entry)?;
-              self.orchestrator.log(latch.get_index(), &latch)?;
-              slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-              self.orchestrator.log(self.tx_id, &slot)?;
-              return Ok((latch, entry));
+              leaf_slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+              self.orchestrator.log(self.tx_id, &leaf_slot)?;
+              return Ok(());
             }
           };
 
           let mut split_slot = self.orchestrator.alloc()?.for_write();
           let mid_key = split.top().clone();
-          split.set_prev(slot.get_index());
-
+          split.set_prev(leaf_slot.get_index());
           split_slot
             .as_mut()
             .serialize_from(&CursorNode::Leaf(split))?;
           self.orchestrator.log(self.tx_id, &split_slot)?;
 
           leaf.set_next(split_slot.get_index());
-          slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-          self.orchestrator.log(self.tx_id, &slot)?;
+          leaf_slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+          self.orchestrator.log(self.tx_id, &leaf_slot)?;
 
-          break (latch, DataEntry::new(), mid_key, split_slot.get_index());
+          break (mid_key, split_slot.get_index());
         }
-      };
+      }
     };
 
     let mut split_key = mid_key;
@@ -224,7 +217,7 @@ impl Cursor {
             .as_mut()
             .serialize_from(&CursorNode::Internal(internal))?;
           self.orchestrator.log(self.tx_id, &slot)?;
-          return Ok((latch, entry));
+          return Ok(());
         }
       };
 
@@ -262,15 +255,12 @@ impl Cursor {
     let mut header_latch = header_slot.for_write();
     header_latch.as_mut().serialize_from(&header)?;
     self.orchestrator.log(self.tx_id, &header_latch)?;
-    Ok((latch, entry))
+    Ok(())
   }
 
-  fn write_at(&mut self, key: &Vec<u8>, data: RecordData, create: bool) -> Result {
-    if self.committed {
-      return Err(Error::TransactionClosed);
-    }
-
-    let (mut latch, mut entry) = self.alloc_entry(key, create)?;
+  fn insert_at(&self, entry_index: usize, data: RecordData) -> Result {
+    let mut latch = self.orchestrator.fetch(entry_index)?.for_write();
+    let mut entry: DataEntry = latch.as_ref().deserialize()?;
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
         return Err(Error::WriteConflict);
@@ -281,57 +271,62 @@ impl Cursor {
     let record = VersionRecord::new(self.tx_id, version, data);
     entry.append(record);
 
-    let mut splitted: Option<VecDeque<VersionRecord>> = None;
-    loop {
-      if let Some(versions) = splitted.take() {
-        entry.apply_split(versions);
-      }
+    let mut latches = Vec::new();
 
-      let next = match entry.split_if_full() {
-        Some(versions) => {
-          splitted = Some(versions);
-          match entry.get_next() {
-            Some(i) => {
-              let split_page = self.orchestrator.fetch(i)?.for_write();
-              let split_entry = split_page.as_ref().deserialize()?;
-              Some((split_page, split_entry))
-            }
-            None => {
-              let mut split_page = self.orchestrator.alloc()?.for_write();
-              let split_entry = DataEntry::new();
-              split_page.as_mut().serialize_from(&split_entry)?;
-              self.orchestrator.log(split_page.get_index(), &split_page)?;
-              entry.set_next(split_page.get_index());
-              Some((split_page, split_entry))
-            }
-          }
+    loop {
+      let versions = match entry.split_if_full() {
+        Some(versions) => versions,
+        None => {
+          latch.as_mut().serialize_from(&entry)?;
+          latches.push(latch);
+          break;
         }
-        None => None,
       };
 
-      latch.as_mut().serialize_from(&entry)?;
-      self.orchestrator.log(self.tx_id, &latch)?;
-
-      match next {
-        Some((next_latch, next_entry)) => {
-          latch = next_latch;
-          entry = next_entry;
+      let (next_latch, mut next_entry) = match entry.get_next() {
+        Some(i) => {
+          let next_latch = self.orchestrator.fetch(i)?.for_write();
+          let next_entry = next_latch.as_ref().deserialize::<DataEntry>()?;
+          (next_latch, next_entry)
         }
-        None => break,
-      }
+        None => {
+          let next_latch = self.orchestrator.alloc()?.for_write();
+          let next_entry = DataEntry::new();
+          entry.set_next(next_latch.get_index());
+          (next_latch, next_entry)
+        }
+      };
+      next_entry.apply_split(versions);
+      latch.as_mut().serialize_from(&entry)?;
+      latches.push(replace(&mut latch, next_latch));
+      entry = next_entry;
+    }
+
+    while let Some(latch) = latches.pop() {
+      self.orchestrator.log(self.tx_id, &latch)?;
     }
 
     Ok(())
   }
 
-  pub fn insert(&mut self, key: Vec<u8>, data: Vec<u8>) -> Result {
-    self.write_at(&key, RecordData::Data(data), true)
-  }
-
-  pub fn remove(&mut self, key: &Vec<u8>) -> Result {
-    match self.write_at(key, RecordData::Tombstone, false) {
-      Ok(_) | Err(Error::NotFound) => Ok(()),
-      Err(e) => Err(e),
+  pub fn remove(&self, key: &Vec<u8>) -> Result {
+    if self.committed {
+      return Err(Error::TransactionClosed);
+    }
+    let mut index = self.find_leaf(key)?;
+    loop {
+      let node = self
+        .orchestrator
+        .fetch(index)?
+        .for_read()
+        .as_ref()
+        .deserialize::<CursorNode>()?
+        .as_leaf()?;
+      match node.find(key) {
+        NodeFindResult::Found(_, i) => return self.insert_at(i, RecordData::Tombstone),
+        NodeFindResult::Move(i) => index = i,
+        NodeFindResult::NotFound(_) => return Ok(()),
+      }
     }
   }
 
@@ -373,6 +368,7 @@ impl Cursor {
       &self.orchestrator,
       leaf,
       pos,
+      &self.committed,
       Some(end.clone()),
     ))
   }
@@ -408,6 +404,7 @@ impl Cursor {
       &self.orchestrator,
       leaf,
       0,
+      &self.committed,
       None,
     ))
   }

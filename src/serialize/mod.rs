@@ -3,6 +3,7 @@ use crate::{
   error::{Error, Result},
 };
 
+#[derive(Debug)]
 pub enum SerializeType {
   Header,
   CursorNode,

@@ -102,7 +102,6 @@ impl WAL {
   where
     F: Fn(usize) -> LogRecord,
   {
-    let mut f_result = Vec::new();
     let mut buffer = self.buffer.l();
     let log_id = buffer.last_log_id;
     let record = create_record(log_id);
@@ -123,6 +122,7 @@ impl WAL {
       return f.wait();
     }
 
+    let mut f_result = Vec::new();
     let mut index = buffer.entry.get_index() + 1;
     if index == self.max_index {
       index = 0;
