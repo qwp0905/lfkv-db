@@ -111,6 +111,10 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     let b = self.read_n(2)?.try_into().map_err(|_| Error::EOF)?;
     Ok(u16::from_be_bytes(b))
   }
+  pub fn read_u32(&mut self) -> Result<u32> {
+    let b = self.read_n(4)?.try_into().map_err(|_| Error::EOF)?;
+    Ok(u32::from_be_bytes(b))
+  }
 
   pub fn is_eof(&self) -> bool {
     self.inner.len().le(&self.offset)
@@ -140,6 +144,9 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn write_usize(&mut self, value: usize) -> Result<()> {
+    self.write(&value.to_be_bytes())
+  }
+  pub fn write_u32(&mut self, value: u32) -> Result {
     self.write(&value.to_be_bytes())
   }
 

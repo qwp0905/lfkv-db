@@ -9,11 +9,12 @@ pub const HEADER_INDEX: usize = 0;
 #[derive(Debug)]
 pub struct TreeHeader {
   root: usize,
+  height: u32,
 }
 
 impl TreeHeader {
   pub fn new(root: usize) -> Self {
-    Self { root }
+    Self { root, height: 0 }
   }
 
   pub fn get_root(&self) -> usize {
@@ -23,6 +24,12 @@ impl TreeHeader {
   pub fn set_root(&mut self, index: usize) {
     self.root = index
   }
+  pub fn increase_height(&mut self) {
+    self.height += 1;
+  }
+  pub fn get_height(&self) -> u32 {
+    self.height
+  }
 }
 
 impl Serializable for TreeHeader {
@@ -31,12 +38,15 @@ impl Serializable for TreeHeader {
   }
 
   fn write_at(&self, writer: &mut PageWriter) -> Result {
-    writer.write_usize(self.root)
+    writer.write_usize(self.root)?;
+    writer.write_u32(self.height)?;
+    Ok(())
   }
 
   fn read_from(reader: &mut PageScanner) -> Result<Self> {
     let root = reader.read_usize()?;
-    Ok(Self { root })
+    let height = reader.read_u32()?;
+    Ok(Self { root, height })
   }
 }
 

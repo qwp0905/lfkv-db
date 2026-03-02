@@ -69,7 +69,7 @@ impl TxOrchestrator {
     )
     .to_arc();
 
-    if disk_len != 0 {
+    if !replay.segments.is_empty() {
       logger::info("create initial checkpoint");
       let log_id = wal.current_log_id();
       gc.run()?;
@@ -115,7 +115,7 @@ impl TxOrchestrator {
     Ok(())
   }
 
-  pub fn alloc(&self) -> Result<PageSlot<'_>> {
+  pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
     self.free_list.alloc()
   }
 

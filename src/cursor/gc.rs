@@ -256,16 +256,15 @@ fn run_check(
     let expired = entry.remove_until(version_visibility.min_version());
     let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
 
-    let result = modified || expired;
-
-    let c = (!result).then_some(&entry_c).unwrap_or(&release_c);
-    if result {
+    let c = (!expired).then_some(&entry_c).unwrap_or(&release_c);
+    if modified || expired {
       latch.as_mut().serialize_from(&entry)?;
       wal.append_insert(0, latch.get_index(), latch.as_ref())?;
     }
     if let Some(i) = next {
       c.send_no_wait(i);
     }
+
     Ok(entry.is_empty())
   }
 }

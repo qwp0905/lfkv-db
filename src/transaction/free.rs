@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-  buffer_pool::{BufferPool, PageSlot},
+  buffer_pool::{BufferPool, PageSlotWrite},
   disk::{PageScanner, PageWriter},
   error::Result,
   serialize::{Serializable, SerializeFrom, SerializeType},
@@ -103,29 +103,25 @@ impl FreeList {
     self.state.wl().next_index = index;
   }
 
-  pub fn alloc(&self) -> Result<PageSlot<'_>> {
+  pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
     let mut state = self.state.wl();
     if state.last_free == 0 {
       let index = state.next_index;
       state.next_index += 1;
-      return self.buffer_pool.read(index);
+      return Ok(self.buffer_pool.read(index)?.for_write());
     }
 
-    let slot = self.buffer_pool.read(state.last_free)?;
-    state.last_free = slot
-      .for_read()
-      .as_ref()
-      .deserialize::<FreePage>()?
-      .get_next();
+    let slot = self.buffer_pool.read(state.last_free)?.for_write();
+    state.last_free = slot.as_ref().deserialize::<FreePage>()?.get_next();
     return Ok(slot);
   }
 
   pub fn release(&self, index: usize) -> Result {
-    let page = self.buffer_pool.read(index)?;
     let mut state = self.state.wl();
+    let mut page = self.buffer_pool.read(index)?.for_write();
     self.wal.append_free(index)?;
     let free = FreePage::new(replace(&mut state.last_free, index));
-    page.for_write().as_mut().serialize_from(&free)?;
+    page.as_mut().serialize_from(&free)?;
     Ok(())
   }
 }
