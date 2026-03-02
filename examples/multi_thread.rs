@@ -8,11 +8,11 @@ fn main() {
     EngineBuilder::new("./.local")
       .group_commit_count(512)
       .group_commit_delay(Duration::from_millis(10))
-      .buffer_pool_memory_capacity(512 << 20)
-      .buffer_pool_shard_count(1 << 6)
+      .buffer_pool_memory_capacity(32 << 20)
+      .buffer_pool_shard_count(1 << 2)
       .wal_file_size(32 << 20)
-      .gc_thread_count(5)
-      .io_thread_count(5)
+      .gc_thread_count(3)
+      .io_thread_count(3)
       .build()
       .expect("bootstrap error"),
   );
@@ -23,7 +23,7 @@ fn main() {
     .collect::<Vec<Vec<u8>>>();
 
   let mut v = vec![];
-  let threads_count = 100;
+  let threads_count = 300;
   let mut threads = Vec::new();
   let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
   for i in 0..threads_count {

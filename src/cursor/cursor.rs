@@ -285,7 +285,7 @@ impl Cursor {
       }
     };
 
-    let (split_node, key) = match internal.split_if_needed() {
+    let (split_node, split_key) = match internal.split_if_needed() {
       Some(split) => split,
       None => {
         slot
@@ -298,7 +298,7 @@ impl Cursor {
 
     let split_index = {
       let mut split_slot = self.orchestrator.alloc()?;
-      internal.set_right(&key, split_slot.get_index());
+      internal.set_right(&split_key, split_slot.get_index());
       split_slot
         .as_mut()
         .serialize_from(&CursorNode::Internal(split_node))?;
@@ -311,7 +311,7 @@ impl Cursor {
       .serialize_from(&CursorNode::Internal(internal))?;
     self.orchestrator.log(self.tx_id, &slot)?;
 
-    Ok(Some((key, split_index)))
+    Ok(Some((split_key, split_index)))
   }
 
   fn insert_at(&self, entry_index: usize, data: RecordData) -> Result {
@@ -391,31 +391,19 @@ impl Cursor {
       return Err(Error::TransactionClosed);
     }
 
-    let header: TreeHeader = self
-      .orchestrator
-      .fetch(HEADER_INDEX)?
-      .for_read()
-      .as_ref()
-      .deserialize()?;
-
-    let mut index = header.get_root();
+    let mut index = self.find_leaf(start)?;
     let (leaf, pos) = loop {
-      let node: CursorNode = self
+      let node = self
         .orchestrator
         .fetch(index)?
         .for_read()
         .as_ref()
-        .deserialize()?;
-      match node {
-        CursorNode::Internal(internal) => match internal.find(start) {
-          Ok(i) => index = i,
-          Err(i) => index = i,
-        },
-        CursorNode::Leaf(leaf) => match leaf.find(start) {
-          NodeFindResult::Found(pos, _) => break (leaf, pos),
-          NodeFindResult::Move(i) => index = i,
-          NodeFindResult::NotFound(pos) => break (leaf, pos),
-        },
+        .deserialize::<CursorNode>()?
+        .as_leaf()?;
+      match node.find(start) {
+        NodeFindResult::Found(pos, _) => break (node, pos),
+        NodeFindResult::Move(i) => index = i,
+        NodeFindResult::NotFound(pos) => break (node, pos),
       }
     };
 
