@@ -131,7 +131,7 @@ where
     }
   }
 
-  pub fn evict<S>(&mut self, hasher: &S) -> Option<(K, V)>
+  pub fn evict<S>(&mut self, hasher: &S) -> Option<((K, V), u64)>
   where
     S: BuildHasher,
   {
@@ -142,7 +142,7 @@ where
       .remove_entry(h, equivalent(key))
       .map(|ptr| unsafe { Box::from_raw(ptr.as_ptr()) })?;
     self.rebalance(hasher);
-    Some(bucket.take())
+    Some((bucket.take(), h))
   }
 
   pub fn insert<S>(&mut self, key: K, value: V, hash: u64, hasher: &S) -> Option<V>
@@ -274,7 +274,9 @@ mod tests {
     }
 
     // evict all: oldest first (FIFO within old)
-    let evicted: Vec<usize> = (0..cap).map(|_| shard.evict(&hasher).unwrap().0).collect();
+    let evicted: Vec<usize> = (0..cap)
+      .map(|_| shard.evict(&hasher).unwrap().0 .0)
+      .collect();
     assert_eq!(evicted, vec![0, 1, 2, 3, 4]);
     assert_eq!(shard.len(), 0);
   }
@@ -300,7 +302,7 @@ mod tests {
     }
 
     // non-accessed entries (2, 3, 4) should be evicted before accessed ones (0, 1)
-    let pos = |k: usize| evicted.iter().position(|e| *e == k).unwrap();
+    let pos = |k: usize| evicted.iter().position(|(e, _)| *e == k).unwrap();
     assert!(pos(2) < pos(0));
     assert!(pos(3) < pos(0));
     assert!(pos(4) < pos(0));

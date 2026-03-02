@@ -178,7 +178,6 @@ mod tests {
 
     // Panic-inducing case
     let result = thread.send_await(-5);
-    println!("shibal paic");
     assert!(result.is_err());
     if let Err(Error::Panic(_)) = result {
       // Panic was converted to Error::Panic as expected

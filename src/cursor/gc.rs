@@ -1,7 +1,4 @@
-use std::{
-  sync::{Arc, Mutex},
-  time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use super::{CursorNode, DataEntry, Pointer, TreeHeader, HEADER_INDEX};
 use crate::{
@@ -10,7 +7,7 @@ use crate::{
   serialize::SerializeFrom,
   thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
   transaction::{FreeList, VersionVisibility},
-  utils::{ShortenedMutex, ToArc},
+  utils::ToArc,
   wal::WAL,
 };
 
@@ -66,7 +63,6 @@ impl GarbageCollector {
         release.clone(),
       ))
       .to_arc();
-    let count: Arc<Mutex<usize>> = Default::default();
     let main = WorkBuilder::new()
       .name("gc main")
       .stack_size(2 << 20)
@@ -79,7 +75,6 @@ impl GarbageCollector {
           wal,
           check.clone(),
           release.clone(),
-          count.clone(),
         ),
       );
     Self {
@@ -104,11 +99,8 @@ fn run_main(
   wal: Arc<WAL>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
-  counter: Arc<Mutex<usize>>,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
-    *counter.l() = 0;
-
     let header: TreeHeader = buffer_pool
       .read(HEADER_INDEX)?
       .for_read()
