@@ -18,7 +18,7 @@ fn main() {
       .expect("bootstrap error"),
   );
   let mut v = vec![];
-  let count = 10000i64;
+  let count = 100_000_i64;
 
   let threads_count = 100;
   let mut threads = Vec::new();

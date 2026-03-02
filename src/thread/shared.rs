@@ -12,7 +12,7 @@ use crate::{
   utils::{ShortenedMutex, ToArc},
 };
 
-use super::{oneshot, Context, SafeFn, WorkResult};
+use super::{oneshot, BatchWorkResult, Context, SafeFn, WorkResult};
 
 fn pop_or_steal<A>(
   local: &Worker<A>,
@@ -155,6 +155,14 @@ where
   }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);
+  }
+
+  pub fn send_batch(&self, v: impl Iterator<Item = T>) -> BatchWorkResult<R> {
+    BatchWorkResult::from(v.map(|i| {
+      let (oneshot, fulfill) = oneshot();
+      self.global.push(Context::Work((i, fulfill)));
+      oneshot
+    }))
   }
 
   pub fn close(&self) {

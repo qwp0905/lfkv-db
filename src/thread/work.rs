@@ -123,3 +123,17 @@ impl<R> WorkResult<Result<R>> {
     self.wait()?
   }
 }
+
+pub struct BatchWorkResult<R>(Vec<Oneshot<Result<R>>>);
+impl<R> BatchWorkResult<R> {
+  pub fn from(v: impl Iterator<Item = Oneshot<Result<R>>>) -> Self {
+    Self(v.collect())
+  }
+  pub fn wait(self) -> Result<Vec<R>> {
+    let mut results = Vec::with_capacity(self.0.len());
+    for o in self.0 {
+      results.push(o.wait()??);
+    }
+    Ok(results)
+  }
+}

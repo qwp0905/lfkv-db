@@ -152,12 +152,12 @@ fn run_main(
 
       index = leaf.get_next();
       let mut found = false;
-      let mut waiting = Vec::with_capacity(leaf.len());
-      for (_, ptr) in leaf.get_entries() {
-        waiting.push(check_c.send(*ptr));
-      }
-      for r in waiting {
-        found = r.wait_flatten()? || found;
+
+      for r in check_c
+        .send_batch(leaf.get_entries().map(|(_, p)| *p))
+        .wait()?
+      {
+        found = r? || found;
       }
       if !found {
         continue;
