@@ -63,6 +63,7 @@ impl GarbageCollector {
       .build_unchecked(run_entry(
         buffer_pool.clone(),
         version_visibility.clone(),
+        wal.clone(),
         release.clone(),
       ))
       .to_arc();
@@ -73,6 +74,7 @@ impl GarbageCollector {
       .build_unchecked(run_check(
         buffer_pool.clone(),
         version_visibility.clone(),
+        wal.clone(),
         entry.clone(),
         release.clone(),
       ))
@@ -87,9 +89,9 @@ impl GarbageCollector {
         run_main(
           buffer_pool,
           version_visibility,
-          free_list,
           wal,
           check.clone(),
+          release.clone(),
           count.clone(),
         ),
       );
@@ -114,14 +116,14 @@ impl GarbageCollector {
 fn run_main(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
-  free_list: Arc<FreeList>,
   wal: Arc<WAL>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
+  release_c: Arc<SharedWorkThread<Pointer, Result>>,
   counter: Arc<Mutex<usize>>,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
     *counter.l() = 0;
-    let current_version = version_visibility.current_version();
+
     let header: TreeHeader = buffer_pool
       .read(HEADER_INDEX)?
       .for_read()
@@ -161,36 +163,31 @@ fn run_main(
         continue;
       }
 
-      let released = {
-        let mut latch = buffer_pool.read(i)?.for_write();
-        let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
-        let mut new_entries = vec![];
-        let mut release = vec![];
-        for (key, ptr) in leaf.drain() {
-          if !buffer_pool
-            .read(ptr)?
-            .for_read()
-            .as_ref()
-            .deserialize::<DataEntry>()?
-            .is_empty()
-          {
-            new_entries.push((key, ptr));
-            continue;
-          };
-          release.push(ptr);
-        }
-
-        if !release.is_empty() {
-          leaf.set_entries(new_entries);
-          latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-          wal.append_insert(current_version, latch.get_index(), latch.as_ref())?;
-        }
-        release
-      };
-
-      for i in released {
-        free_list.release(i)?;
+      let mut latch = buffer_pool.read(i)?.for_write();
+      let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+      let prev_len = leaf.len();
+      let mut new_entries = vec![];
+      for (key, ptr) in leaf.drain() {
+        if !buffer_pool
+          .read(ptr)?
+          .for_read()
+          .as_ref()
+          .deserialize::<DataEntry>()?
+          .is_empty()
+        {
+          new_entries.push((key, ptr));
+          continue;
+        };
+        release_c.send_no_wait(ptr);
       }
+
+      if new_entries.len() == prev_len {
+        continue;
+      }
+
+      leaf.set_entries(new_entries);
+      latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
     }
 
     version_visibility.remove_aborted(&min_version);
@@ -223,6 +220,7 @@ fn run_release(
 fn run_entry(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
+  wal: Arc<WAL>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
 ) -> impl Fn(Pointer) -> Result {
   let buffer_pool = buffer_pool.clone();
@@ -239,6 +237,7 @@ fn run_entry(
       let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
       if expired || modified {
         latch.as_mut().serialize_from(&entry)?;
+        wal.append_insert(0, latch.get_index(), latch.as_ref())?;
       }
       if !expired {
         index = next;
@@ -256,6 +255,7 @@ fn run_entry(
 fn run_check(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
+  wal: Arc<WAL>,
   entry_c: Arc<SharedWorkThread<Pointer, Result>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
 ) -> impl Fn(Pointer) -> Result<bool> {
@@ -276,6 +276,7 @@ fn run_check(
     let c = (!result).then_some(&entry_c).unwrap_or(&release_c);
     if result {
       latch.as_mut().serialize_from(&entry)?;
+      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
     }
     if let Some(i) = next {
       c.send_no_wait(i);
