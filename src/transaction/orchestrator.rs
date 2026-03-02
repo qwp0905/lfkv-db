@@ -32,8 +32,11 @@ impl TxOrchestrator {
     let checkpoint_ch = SingleWorkInput::new();
 
     let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy())?;
+    let mut disk_free_chain = FreeList::whole_chain(&buffer_pool, replay.last_free)?;
     let wal = wal.to_arc();
     for (_, i, page) in replay.redo {
+      disk_free_chain.remove(&i);
+
       buffer_pool
         .read(i)?
         .for_write()
@@ -41,15 +44,21 @@ impl TxOrchestrator {
         .writer()
         .write(page.as_ref())?;
     }
+
+    disk_free_chain.extend(replay.free_chain);
+    let free_list = FreeList::replay(
+      buffer_pool.clone(),
+      wal.clone(),
+      disk_free_chain.into_iter().collect(),
+    )?
+    .to_arc();
+
     buffer_pool.flush()?;
+    let disk_len = buffer_pool.disk_len()?;
+    free_list.set_next_index(disk_len);
 
     let version_visibility =
       VersionVisibility::new(replay.aborted, replay.last_tx_id).to_arc();
-    let disk_len = buffer_pool.disk_len()?;
-
-    let free_list =
-      FreeList::new(replay.last_free, disk_len, buffer_pool.clone(), wal.clone())
-        .to_arc();
 
     let gc = GarbageCollector::start(
       buffer_pool.clone(),

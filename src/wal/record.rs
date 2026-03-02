@@ -20,7 +20,7 @@ pub enum Operation {
     usize, // last free page index
     usize, // last log id
   ),
-  Free(usize),
+  Free(usize), // current free chain head
 }
 impl Operation {
   fn type_u8(&self) -> u8 {

@@ -18,6 +18,7 @@ pub struct ReplayResult {
   pub last_log_id: usize,
   pub last_tx_id: usize,
   pub last_free: usize,
+  pub free_chain: BTreeSet<usize>,
   pub aborted: BTreeSet<usize>,
   pub redo: Vec<(usize, usize, Page)>,
   pub last_file: Option<WALSegment>,
@@ -30,6 +31,7 @@ impl ReplayResult {
       last_log_id: 0,
       last_tx_id: 0,
       last_free: 0,
+      free_chain: Default::default(),
       aborted: Default::default(),
       redo: Default::default(),
       last_file: None,
@@ -69,6 +71,8 @@ pub fn replay(
   let mut last_free = 0;
   let mut last_file = None;
   let mut segments = Vec::new();
+  let mut free_logs = BTreeMap::<usize, usize>::new();
+  let mut free_set = BTreeSet::new();
 
   files.sort();
   for path in files.into_iter() {
@@ -98,6 +102,7 @@ pub fn replay(
       match record.operation {
         Operation::Insert(i, page) => {
           redo.insert(record.log_id, (i, page));
+          free_set.remove(&i);
         }
         Operation::Start => {}
         Operation::Commit => {}
@@ -106,9 +111,16 @@ pub fn replay(
         }
         Operation::Checkpoint(free, last_log_id) => {
           redo = redo.split_off(&last_log_id);
+          let removed = free_logs.split_off(&last_log_id);
+          for (_, index) in replace(&mut free_logs, removed) {
+            free_set.remove(&index);
+          }
           last_free = free;
         }
-        Operation::Free(index) => last_free = index,
+        Operation::Free(free) => {
+          free_logs.insert(record.log_id, free);
+          free_set.insert(free);
+        }
       };
     }
 
@@ -130,6 +142,7 @@ pub fn replay(
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
     last_free,
+    free_chain: free_set,
     aborted,
     redo: redo
       .into_iter()
