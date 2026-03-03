@@ -10,7 +10,6 @@ use super::{Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::{Page, PagePool},
   error::{Error, Result},
-  utils::logger,
 };
 
 pub struct ReplayResult {
@@ -54,7 +53,6 @@ pub fn replay(
   }
 
   if files.len() == 0 {
-    logger::info("previous wal segment not found.");
     return Ok(ReplayResult::empty());
   }
 

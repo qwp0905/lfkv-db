@@ -15,7 +15,7 @@ use crate::{
   disk::PAGE_SIZE,
   error::{Error, Result},
   transaction::TxOrchestrator,
-  utils::{logger, ToArc},
+  utils::{LogFilter, LogLevel, Logger, ToArc},
   wal::WALConfig,
 };
 
@@ -35,17 +35,21 @@ where
   pub buffer_pool_shard_count: usize,
   pub buffer_pool_memory_capacity: usize,
   pub io_thread_count: usize,
+  pub logger: Arc<dyn Logger>,
+  pub log_level: LogLevel,
 }
 
 pub struct Engine {
   orchestrator: Arc<TxOrchestrator>,
   available: AtomicBool,
+  logger: LogFilter,
 }
 impl Engine {
   pub fn bootstrap<T>(config: EngineConfig<T>) -> Result<Self>
   where
     T: AsRef<Path>,
   {
+    let logger = LogFilter::new(config.log_level, config.logger);
     fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
 
     let wal_config = WALConfig {
@@ -72,17 +76,17 @@ impl Engine {
       thread_count: config.gc_thread_count,
     };
     let orchestrator =
-      TxOrchestrator::new(buffer_pool_config, wal_config, gc_config)?.to_arc();
+      TxOrchestrator::new(buffer_pool_config, wal_config, gc_config, logger.clone())?
+        .to_arc();
 
     initialize(orchestrator.clone())?;
 
-    let engine = Self {
+    logger.info("engine initialized.");
+    Ok(Self {
       orchestrator,
       available: AtomicBool::new(true),
-    };
-
-    logger::info("engine initialized");
-    Ok(engine)
+      logger,
+    })
   }
 
   pub fn new_transaction(&self) -> Result<Cursor> {
@@ -101,9 +105,9 @@ impl Drop for Engine {
         .available
         .compare_exchange(true, false, Ordering::Release, Ordering::Acquire)
     {
-      logger::info("engine shutdown");
+      self.logger.info("engine shutdown");
       if let Err(err) = self.orchestrator.close() {
-        logger::error(err);
+        self.logger.error(err.to_string());
       };
     }
   }

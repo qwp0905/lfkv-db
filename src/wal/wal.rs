@@ -10,7 +10,7 @@ use crate::{
   disk::{Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{logger, ShortenedMutex, ToArc, ToArcMutex},
+  utils::{LogFilter, ShortenedMutex, ToArc, ToArcMutex},
 };
 
 struct WALBuffer {
@@ -38,11 +38,13 @@ pub struct WAL {
   segment_rotate: SingleWorkThread<WALSegment, Result>,
   flush_count: usize,
   flush_interval: Duration,
+  // logger: LogFilter,
 }
 impl WAL {
   pub fn replay(
     config: WALConfig,
     checkpoint: SingleWorkInput<(), Result>,
+    logger: LogFilter,
   ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
@@ -55,7 +57,7 @@ impl WAL {
       page_pool.clone(),
     )?;
 
-    logger::info(format!(
+    logger.info(format!(
       "wal replay result: last_index {} last_log_id {} last_tx_id {} aborted {} redo {} segments {}",
       replay_result.last_index,
       replay_result.last_log_id,
@@ -102,6 +104,7 @@ impl WAL {
         segment_rotate,
         flush_count: config.group_commit_count,
         flush_interval: config.group_commit_delay,
+        // logger,
       },
       replay_result,
     ))

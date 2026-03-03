@@ -1,7 +1,8 @@
 mod lock;
 pub use lock::*;
 
-pub mod logger;
+mod logger;
+pub use logger::*;
 
 mod channel;
 pub use channel::*;

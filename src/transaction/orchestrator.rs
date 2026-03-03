@@ -8,7 +8,7 @@ use crate::{
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   transaction::FreeList,
-  utils::{logger, ToArc},
+  utils::{LogFilter, ToArc},
   wal::{WALConfig, WAL},
 };
 
@@ -19,19 +19,21 @@ pub struct TxOrchestrator {
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
+  logger: LogFilter,
 }
 impl TxOrchestrator {
   pub fn new(
     buffer_pool_config: BufferPoolConfig,
     wal_config: WALConfig,
     gc_config: GarbageCollectionConfig,
+    logger: LogFilter,
   ) -> Result<Self> {
-    logger::info("trying to open buffer pool");
+    // logger::info("trying to open buffer pool");
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
     let checkpoint_ch = SingleWorkInput::new();
 
-    let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy())?;
+    let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy(), logger.clone())?;
     let wal = wal.to_arc();
     for (_, i, page) in replay.redo {
       buffer_pool
@@ -60,7 +62,7 @@ impl TxOrchestrator {
     .to_arc();
 
     if disk_len != 0 {
-      logger::info("create initial checkpoint");
+      logger.info("create initial checkpoint");
       let log_id = wal.current_log_id();
       gc.release_orphand(disk_len)?;
       gc.run()?;
@@ -89,6 +91,7 @@ impl TxOrchestrator {
       buffer_pool,
       version_visibility,
       gc,
+      logger,
     })
   }
   pub fn fetch(&self, index: usize) -> Result<PageSlot<'_>> {
@@ -149,13 +152,13 @@ impl TxOrchestrator {
   pub fn close(&self) -> Result {
     let wal_close = self.wal.twostep_close();
     self.checkpoint.close();
-    logger::info("last checkpoint completed.");
+    self.logger.info("last checkpoint completed.");
 
     self.gc.close();
     self.buffer_pool.close();
-    logger::info("buffer pool closed.");
+    self.logger.info("buffer pool closed.");
     wal_close();
-    logger::info("wal closed.");
+    self.logger.info("wal closed.");
     Ok(())
   }
 }
