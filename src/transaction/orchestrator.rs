@@ -164,15 +164,14 @@ impl TxOrchestrator {
   }
 
   pub fn close(&self) -> Result {
-    self.wal.last_checkpoint();
+    let wal_close = self.wal.twostep_close();
     self.checkpoint.close();
     logger::info("last checkpoint completed.");
 
-    // run_checkpoint(&self.wal, &self.buffer_pool, &self.free_list, &self.gc)?;
     self.gc.close();
     self.buffer_pool.close();
     logger::info("buffer pool closed.");
-    self.wal.close_segment();
+    wal_close();
     logger::info("wal closed.");
     Ok(())
   }

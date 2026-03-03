@@ -108,12 +108,9 @@ impl WAL {
     ))
   }
 
-  pub fn last_checkpoint(&self) {
+  pub fn twostep_close<'a>(&'a self) -> impl Fn() + 'a {
     self.segment_rotate.close();
-  }
-
-  pub fn close_segment(&self) {
-    self.buffer.l().segment.close();
+    move || self.buffer.l().segment.close()
   }
 
   #[inline]
