@@ -2,7 +2,7 @@ use lfkv_db::EngineBuilder;
 
 fn main() {
   let engine = EngineBuilder::new("./.local")
-    .buffer_pool_memory_capacity(100 << 10)
+    .buffer_pool_memory_capacity(100 << 20)
     .build()
     .expect("bootstrap error");
 

@@ -32,11 +32,8 @@ impl TxOrchestrator {
     let checkpoint_ch = SingleWorkInput::new();
 
     let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy())?;
-    let mut disk_free_chain = FreeList::whole_chain(&buffer_pool, replay.last_free)?;
     let wal = wal.to_arc();
     for (_, i, page) in replay.redo {
-      disk_free_chain.remove(&i);
-
       buffer_pool
         .read(i)?
         .for_write()
@@ -45,17 +42,8 @@ impl TxOrchestrator {
         .write(page.as_ref())?;
     }
 
-    disk_free_chain.extend(replay.free_chain);
-    let free_list = FreeList::replay(
-      buffer_pool.clone(),
-      wal.clone(),
-      disk_free_chain.into_iter().collect(),
-    )?
-    .to_arc();
-
     buffer_pool.flush()?;
-    let disk_len = buffer_pool.disk_len()?;
-    free_list.set_next_index(disk_len);
+    let free_list = FreeList::replay(buffer_pool.clone(), wal.clone())?.to_arc();
 
     let version_visibility =
       VersionVisibility::new(replay.aborted, replay.last_tx_id).to_arc();
@@ -74,7 +62,7 @@ impl TxOrchestrator {
       let log_id = wal.current_log_id();
       gc.run()?;
       buffer_pool.flush()?;
-      wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
+      wal.checkpoint_and_flush(0, log_id)?;
 
       for seg in replay.segments {
         seg.truncate()?;
@@ -88,12 +76,7 @@ impl TxOrchestrator {
       .with_channel::<(), Result>(checkpoint_ch)
       .with_timeout(
         checkpoint_interval,
-        handle_checkpoint(
-          wal.clone(),
-          buffer_pool.clone(),
-          free_list.clone(),
-          gc.clone(),
-        ),
+        handle_checkpoint(wal.clone(), buffer_pool.clone(), gc.clone()),
       )?;
 
     Ok(Self {
@@ -159,9 +142,6 @@ impl TxOrchestrator {
   pub fn is_disk_empty(&self) -> Result<bool> {
     self.buffer_pool.is_empty()
   }
-  pub fn initial_state(&self, index: usize) {
-    self.free_list.set_next_index(index);
-  }
 
   pub fn close(&self) -> Result {
     let wal_close = self.wal.twostep_close();
@@ -180,21 +160,15 @@ impl TxOrchestrator {
 fn handle_checkpoint(
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
-  free_list: Arc<FreeList>,
   gc: Arc<GarbageCollector>,
 ) -> impl Fn(Option<()>) -> Result {
-  move |_| run_checkpoint(&wal, &buffer_pool, &free_list, &gc)
+  move |_| run_checkpoint(&wal, &buffer_pool, &gc)
 }
 
-fn run_checkpoint(
-  wal: &WAL,
-  buffer_pool: &BufferPool,
-  free_list: &FreeList,
-  gc: &GarbageCollector,
-) -> Result {
+fn run_checkpoint(wal: &WAL, buffer_pool: &BufferPool, gc: &GarbageCollector) -> Result {
   let log_id = wal.current_log_id();
   gc.run()?;
   buffer_pool.flush()?;
-  wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
+  wal.checkpoint_and_flush(0, log_id)?;
   Ok(())
 }

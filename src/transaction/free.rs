@@ -1,127 +1,169 @@
-use std::{
-  collections::BTreeSet,
-  mem::replace,
-  sync::{Arc, RwLock},
-};
+use std::sync::{Arc, Mutex};
 
 use crate::{
   buffer_pool::{BufferPool, PageSlotWrite},
-  disk::{PageScanner, PageWriter},
+  disk::{PageScanner, PageWriter, PAGE_SIZE},
   error::Result,
   serialize::{Serializable, SerializeFrom, SerializeType},
-  utils::ShortenedRwLock,
+  utils::ShortenedMutex,
   wal::WAL,
 };
 
-struct FreeState {
-  last_free: usize,
-  next_index: usize,
+pub struct FreeBlock {
+  next: Option<usize>,
+  prev: Option<usize>,
+  list: Vec<usize>,
 }
-impl FreeState {
-  fn new(last_free: usize, next_index: usize) -> Self {
+impl FreeBlock {
+  fn new(prev: Option<usize>) -> Self {
     Self {
-      last_free,
-      next_index,
+      next: None,
+      prev,
+      list: Default::default(),
     }
   }
-}
-
-pub struct FreePage {
-  next: usize,
-}
-impl FreePage {
-  pub fn new(next: usize) -> Self {
-    Self { next }
-  }
-  pub fn get_next(&self) -> usize {
-    self.next
+  fn is_available(&self) -> bool {
+    24 + (self.list.len() + 1) * 8 >= PAGE_SIZE
   }
 }
-impl Serializable for FreePage {
+impl Serializable for FreeBlock {
   fn get_type() -> SerializeType {
     SerializeType::Free
   }
 
   fn write_at(&self, writer: &mut PageWriter) -> Result {
-    writer.write_usize(self.next)
+    writer.write_usize(self.next.unwrap_or(0))?;
+    writer.write_usize(self.prev.unwrap_or(0))?;
+    writer.write_usize(self.list.len())?;
+    for i in self.list.iter() {
+      writer.write_usize(*i)?;
+    }
+    Ok(())
   }
 
   fn read_from(reader: &mut PageScanner) -> Result<Self> {
+    let next = reader.read_usize()?;
+    let prev = reader.read_usize()?;
+    let len = reader.read_usize()?;
+    let mut list = Vec::new();
+    for _ in 0..len {
+      list.push(reader.read_usize()?);
+    }
     Ok(Self {
-      next: reader.read_usize()?,
+      list,
+      next: (next != 0).then(|| next),
+      prev: (prev != 0).then(|| prev),
     })
   }
 }
 
+pub const FREE_LIST_HEAD: usize = 1;
+
+struct FreeState {
+  block: FreeBlock,
+  index: usize,
+  file_end: usize,
+}
 pub struct FreeList {
-  state: RwLock<FreeState>,
+  state: Mutex<FreeState>,
   buffer_pool: Arc<BufferPool>,
   wal: Arc<WAL>,
 }
 impl FreeList {
-  pub fn whole_chain(
-    buffer_pool: &BufferPool,
-    last_free: usize,
-  ) -> Result<BTreeSet<usize>> {
-    let mut chain = BTreeSet::new();
-    let mut i = last_free;
-    while i != 0 {
-      let page: FreePage = buffer_pool.read(i)?.for_read().as_ref().deserialize()?;
-      chain.insert(i);
-      i = page.get_next();
+  pub fn replay(buffer_pool: Arc<BufferPool>, wal: Arc<WAL>) -> Result<Self> {
+    let file_end = buffer_pool.disk_len()?;
+    if file_end == 0 {
+      let block = FreeBlock::new(None);
+      let mut slot = buffer_pool.read(FREE_LIST_HEAD)?.for_write();
+      slot.as_mut().serialize_from(&block)?;
+      wal.append_insert(0, FREE_LIST_HEAD, slot.as_ref())?;
+      let state = FreeState {
+        block,
+        index: FREE_LIST_HEAD,
+        file_end: FREE_LIST_HEAD + 1,
+      };
+      drop(slot);
+      return Ok(Self {
+        state: Mutex::new(state),
+        buffer_pool,
+        wal,
+      });
     }
-    Ok(chain)
-  }
 
-  pub fn replay(
-    buffer_pool: Arc<BufferPool>,
-    wal: Arc<WAL>,
-    chain: Vec<usize>,
-  ) -> Result<Self> {
-    let last_free = chain.get(0).map(|i| *i);
-    for i in 0..chain.len() {
-      let index = chain[i];
-      let next = chain.get(i + 1).map(|i| *i).unwrap_or(0);
-      buffer_pool
-        .read(index)?
-        .for_write()
-        .as_mut()
-        .serialize_from(&FreePage::new(next))?;
-    }
+    let mut index = FREE_LIST_HEAD;
+
+    let (block, index) = loop {
+      let block: FreeBlock =
+        buffer_pool.read(index)?.for_read().as_ref().deserialize()?;
+      match block.next {
+        Some(i) => index = i,
+        None => break (block, index),
+      }
+    };
+
+    let state = FreeState {
+      block,
+      index,
+      file_end,
+    };
+
     Ok(Self {
-      state: RwLock::new(FreeState::new(last_free.unwrap_or(0), 0)),
+      state: Mutex::new(state),
       buffer_pool,
       wal,
     })
   }
-
-  pub fn get_last_free(&self) -> usize {
-    self.state.rl().last_free
-  }
-
-  pub fn set_next_index(&self, index: usize) {
-    self.state.wl().next_index = index;
-  }
-
   pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
-    let mut state = self.state.wl();
-    if state.last_free == 0 {
-      let index = state.next_index;
-      state.next_index += 1;
+    let mut state = self.state.l();
+    if let Some(index) = state.block.list.pop() {
+      let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
+      free_slot.as_mut().serialize_from(&state.block)?;
+      self.wal.append_insert(0, state.index, free_slot.as_ref())?;
       return Ok(self.buffer_pool.read(index)?.for_write());
     }
 
-    let slot = self.buffer_pool.read(state.last_free)?.for_write();
-    state.last_free = slot.as_ref().deserialize::<FreePage>()?.get_next();
-    return Ok(slot);
+    if let Some(prev) = state.block.prev {
+      let mut prev_slot = self.buffer_pool.read(prev)?.for_write();
+      let mut prev_block: FreeBlock = prev_slot.as_ref().deserialize()?;
+      prev_block.next = None;
+
+      let empty_index = state.index;
+      state.block = prev_block;
+      state.index = prev;
+
+      prev_slot.as_mut().serialize_from(&state.block)?;
+      self.wal.append_insert(0, state.index, prev_slot.as_ref())?;
+
+      return Ok(self.buffer_pool.read(empty_index)?.for_write());
+    }
+
+    let index = state.file_end;
+    state.file_end += 1;
+    Ok(self.buffer_pool.read(index)?.for_write())
   }
 
   pub fn release(&self, index: usize) -> Result {
-    let mut state = self.state.wl();
-    let mut page = self.buffer_pool.read(index)?.for_write();
-    self.wal.append_free(index)?;
-    let free = FreePage::new(replace(&mut state.last_free, index));
-    page.as_mut().serialize_from(&free)?;
+    let mut state = self.state.l();
+    if !state.block.is_available() {
+      state.block.list.push(index);
+      let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
+      free_slot.as_mut().serialize_from(&state.block)?;
+      self.wal.append_insert(0, state.index, free_slot.as_ref())?;
+      return Ok(());
+    }
+
+    let mut new_slot = self.buffer_pool.read(index)?.for_write();
+    let new_free = FreeBlock::new(Some(state.index));
+    new_slot.as_mut().serialize_from(&new_free)?;
+    self.wal.append_insert(0, index, new_slot.as_ref())?;
+
+    state.block.next = Some(index);
+    let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
+    free_slot.as_mut().serialize_from(&state.block)?;
+    self.wal.append_insert(0, state.index, free_slot.as_ref())?;
+
+    state.block = new_free;
+    state.index = index;
     Ok(())
   }
 }
@@ -135,20 +177,33 @@ mod tests {
   #[test]
   fn test_free_page_roundtrip() {
     let mut page = Page::new();
-    let free = FreePage::new(99);
+    let i = 99;
+    let free = FreeBlock::new(Some(i));
     page.serialize_from(&free).expect("serialize error");
-
-    let decoded: FreePage = page.deserialize().expect("deserialize error");
-    assert_eq!(decoded.get_next(), 99);
+    let decoded: FreeBlock = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.prev, Some(i));
+    assert_eq!(decoded.next, None);
   }
 
   #[test]
-  fn test_free_page_zero_next() {
+  fn test_free_page_full() {
     let mut page = Page::new();
-    let free = FreePage::new(0);
-    page.serialize_from(&free).expect("serialize error");
+    let mut free = FreeBlock::new(None);
+    let mut i = 0;
+    while !free.is_available() {
+      free.list.push(i);
+      i += 1;
+    }
 
-    let decoded: FreePage = page.deserialize().expect("deserialize error");
-    assert_eq!(decoded.get_next(), 0);
+    page.serialize_from(&free).expect("serialize error");
+    let decoded: FreeBlock = page.deserialize().expect("deserialize error");
+    assert_eq!(decoded.is_available(), true);
+
+    for c in 0..i {
+      assert_eq!(decoded.list[c], c);
+    }
+    assert_eq!(decoded.list.len(), i);
+    assert_eq!(decoded.prev, None);
+    assert_eq!(decoded.next, None);
   }
 }

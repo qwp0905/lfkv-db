@@ -11,7 +11,6 @@ pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
     return Ok(());
   }
 
-  orchestrator.initial_state(HEADER_INDEX + 1);
   let node = CursorNode::initial_state();
   let mut node_slot = orchestrator.alloc()?;
   node_slot.as_mut().serialize_from(&node)?;

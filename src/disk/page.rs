@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Index, IndexMut};
+// use std::ops::{Add, AddAssign, Index, IndexMut};
 
 use crate::error::{Error, Result};
 
@@ -14,7 +14,7 @@ impl<const T: usize> Page<T> {
 
   fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.0.len());
-    self.0.index_mut(start..end)
+    &mut self.0[start..end]
   }
 
   pub fn copy(&self) -> Self {
@@ -52,7 +52,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
   fn from(value: Vec<u8>) -> Self {
     let mut page = Self::new();
     let len = value.len().min(T);
-    page.range_mut(0, len).copy_from_slice(&value.index(0..len));
+    page.range_mut(0, len).copy_from_slice(&value[0..len]);
     page
   }
 }
@@ -85,19 +85,19 @@ impl<'a, const T: usize> PageScanner<'a, T> {
 
   pub fn read(&mut self) -> Result<u8> {
     if let Some(&i) = self.inner.get(self.offset) {
-      self.offset.add_assign(1);
+      self.offset += 1;
       return Ok(i);
     }
     Err(Error::EOF)
   }
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
-    let end = self.offset.add(n);
+    let end = self.offset + n;
     if end.gt(&self.inner.len()) {
       return Err(Error::EOF);
     }
 
-    let b = self.inner.index(self.offset..end);
+    let b = &self.inner[self.offset..end];
     self.offset = end;
     Ok(b)
   }
@@ -131,14 +131,11 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-    let end = self.offset.add(bytes.len());
-    if end.gt(&T) {
+    let end = self.offset + bytes.len();
+    if end > T {
       return Err(Error::EOF);
     };
-    self
-      .inner
-      .index_mut(self.offset..end)
-      .copy_from_slice(&bytes);
+    self.inner[self.offset..end].copy_from_slice(&bytes);
     self.offset = end;
     Ok(())
   }
