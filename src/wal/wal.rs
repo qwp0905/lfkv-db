@@ -35,14 +35,14 @@ pub struct WAL {
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
-  checkpoint: SingleWorkThread<WALSegment, Result>,
+  segment_rotate: SingleWorkThread<WALSegment, Result>,
   flush_count: usize,
   flush_interval: Duration,
 }
 impl WAL {
   pub fn replay(
     config: WALConfig,
-    checkpoint_input: SingleWorkInput<(), Result>,
+    checkpoint: SingleWorkInput<(), Result>,
   ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
@@ -81,7 +81,7 @@ impl WAL {
     }
     .to_arc_mutex();
 
-    let checkpoint = WorkBuilder::new()
+    let segment_rotate = WorkBuilder::new()
       .name("wal checkpoint buffering")
       .stack_size(2 << 20)
       .single()
@@ -91,7 +91,7 @@ impl WAL {
         |(segment, result): (WALSegment, bool)| {
           result.then(|| segment.truncate()).unwrap_or(Ok(()))
         },
-        move |_| checkpoint_input.send(()).wait().is_ok(),
+        move |_| checkpoint.send(()).wait().is_ok(),
       );
 
     Ok((
@@ -100,7 +100,7 @@ impl WAL {
         buffer,
         page_pool,
         max_index,
-        checkpoint,
+        segment_rotate,
         flush_count: config.group_commit_count,
         flush_interval: config.group_commit_delay,
       },
@@ -109,7 +109,7 @@ impl WAL {
   }
 
   pub fn last_checkpoint(&self) {
-    self.checkpoint.close();
+    self.segment_rotate.close();
   }
 
   pub fn close_segment(&self) {
@@ -148,7 +148,9 @@ impl WAL {
       let new_seg =
         WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?;
       f_result.push(buffer.segment.fsync());
-      let _ = self.checkpoint.send(replace(&mut buffer.segment, new_seg));
+      let _ = self
+        .segment_rotate
+        .send(replace(&mut buffer.segment, new_seg));
     }
 
     buffer.entry = LogEntry::new(index);

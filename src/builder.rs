@@ -121,7 +121,7 @@ where
 }
 
 const DEFAULT_WAL_FILE_SIZE: usize = 8 << 20; // 8 mb
-const DEFAULT_WAL_SEGMENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
+const DEFAULT_WAL_SEGMENT_FLUSH_DELAY: Duration = Duration::from_secs(10);
 const DEFAULT_WAL_SEGMENT_FLUSH_COUNT: usize = 32;
 const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
