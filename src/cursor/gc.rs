@@ -258,7 +258,7 @@ fn run_release(
         .as_ref()
         .deserialize::<DataEntry>()?
         .get_next();
-      free_list.release(i)?;
+      free_list.dealloc(i)?;
     }
     Ok(())
   }

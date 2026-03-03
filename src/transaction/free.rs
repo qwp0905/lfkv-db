@@ -169,7 +169,7 @@ impl FreeList {
     Ok(self.buffer_pool.read(index)?.for_write())
   }
 
-  pub fn release(&self, index: usize) -> Result {
+  pub fn dealloc(&self, index: usize) -> Result {
     let mut state = self.state.l();
     if !state.block.is_available() {
       state.block.list.push(index);
