@@ -73,16 +73,16 @@ impl FreeList {
   pub fn replay(buffer_pool: Arc<BufferPool>, wal: Arc<WAL>) -> Result<Self> {
     let file_end = buffer_pool.disk_len()?;
     if file_end == 0 {
-      let block = FreeBlock::new(None);
-      let mut slot = buffer_pool.read(FREE_LIST_HEAD)?.for_write();
-      slot.as_mut().serialize_from(&block)?;
-      wal.append_insert(0, FREE_LIST_HEAD, slot.as_ref())?;
       let state = FreeState {
-        block,
+        block: FreeBlock::new(None),
         index: FREE_LIST_HEAD,
         file_end: FREE_LIST_HEAD + 1,
       };
-      drop(slot);
+      {
+        let mut slot = buffer_pool.read(FREE_LIST_HEAD)?.for_write();
+        slot.as_mut().serialize_from(&state.block)?;
+        wal.append_insert(0, FREE_LIST_HEAD, slot.as_ref())?;
+      }
       return Ok(Self {
         state: Mutex::new(state),
         buffer_pool,
