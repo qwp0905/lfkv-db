@@ -9,13 +9,13 @@ use crate::{
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   transaction::FreeList,
   utils::{logger, ToArc},
-  wal::{WALConfig, WALSegment, WAL},
+  wal::{WALConfig, WAL},
 };
 
 pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
-  checkpoint: SingleWorkThread<WALSegment, Result>,
+  checkpoint: SingleWorkThread<(), Result>,
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
@@ -77,7 +77,7 @@ impl TxOrchestrator {
       wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
 
       for seg in replay.segments {
-        seg.unlink()?;
+        seg.truncate()?;
       }
     }
 
@@ -85,7 +85,7 @@ impl TxOrchestrator {
       .name("checkpoint")
       .stack_size(2 << 20)
       .single()
-      .with_channel::<WALSegment, Result>(checkpoint_ch)
+      .with_channel::<(), Result>(checkpoint_ch)
       .with_timeout(
         checkpoint_interval,
         handle_checkpoint(
@@ -164,19 +164,15 @@ impl TxOrchestrator {
   }
 
   pub fn close(&self) -> Result {
+    self.wal.last_checkpoint();
     self.checkpoint.close();
-    run_checkpoint(
-      None,
-      &self.wal,
-      &self.buffer_pool,
-      &self.free_list,
-      &self.gc,
-    )?;
-    self.gc.close();
     logger::info("last checkpoint completed.");
+
+    // run_checkpoint(&self.wal, &self.buffer_pool, &self.free_list, &self.gc)?;
+    self.gc.close();
     self.buffer_pool.close();
     logger::info("buffer pool closed.");
-    self.wal.close();
+    self.wal.close_segment();
     logger::info("wal closed.");
     Ok(())
   }
@@ -187,12 +183,11 @@ fn handle_checkpoint(
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
   gc: Arc<GarbageCollector>,
-) -> impl Fn(Option<WALSegment>) -> Result {
-  move |segment| run_checkpoint(segment, &wal, &buffer_pool, &free_list, &gc)
+) -> impl Fn(Option<()>) -> Result {
+  move |_| run_checkpoint(&wal, &buffer_pool, &free_list, &gc)
 }
 
 fn run_checkpoint(
-  segment: Option<WALSegment>,
   wal: &WAL,
   buffer_pool: &BufferPool,
   free_list: &FreeList,
@@ -202,6 +197,5 @@ fn run_checkpoint(
   gc.run()?;
   buffer_pool.flush()?;
   wal.checkpoint_and_flush(free_list.get_last_free(), log_id)?;
-  segment.map(|s| s.unlink()).unwrap_or(Ok(()))?;
   Ok(())
 }

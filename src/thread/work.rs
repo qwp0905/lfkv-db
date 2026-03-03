@@ -70,8 +70,14 @@ where
         };
       },
       SafeWork::Buffering(timeout, count, each, before_each) => {
-        let mut buffer = Vec::with_capacity(*count);
+        let mut buffer = Vec::<(T, OneshotFulfill<Result<R>>)>::with_capacity(*count);
         let mut timer = timeout.as_timer();
+        let flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
+          let r = before_each.call(()).unwrap_or(false);
+          for (v, done) in buffer.drain(..) {
+            done.fulfill(each.call((v, r)));
+          }
+        };
         loop {
           match rx.recv_timeout(timer.get_remain()) {
             Ok(Context::Work((v, done))) => {
@@ -83,11 +89,7 @@ where
             }
             Err(RecvTimeoutError::Timeout) => {}
             Ok(Context::Term) | Err(RecvTimeoutError::Disconnected) => {
-              let r = before_each.call(()).unwrap_or(false);
-              for (v, done) in buffer.drain(..) {
-                done.fulfill(each.call((v, r)));
-              }
-              return;
+              return flush(&mut buffer);
             }
           }
 
@@ -96,10 +98,7 @@ where
             continue;
           }
 
-          let r = before_each.call(()).unwrap_or(false);
-          for (v, done) in buffer.drain(..) {
-            done.fulfill(each.call((v, r)));
-          }
+          flush(&mut buffer);
           timer.reset();
         }
       }

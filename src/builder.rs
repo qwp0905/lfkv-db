@@ -8,6 +8,8 @@ where
 {
   base_path: T,
   wal_file_size: Option<usize>,
+  wal_segment_flush_delay: Option<Duration>,
+  wal_segment_flush_count: Option<usize>,
   checkpoint_interval: Option<Duration>,
   group_commit_delay: Option<Duration>,
   group_commit_count: Option<usize>,
@@ -25,6 +27,8 @@ where
     Self {
       base_path,
       wal_file_size: None,
+      wal_segment_flush_count: None,
+      wal_segment_flush_delay: None,
       checkpoint_interval: None,
       group_commit_delay: None,
       group_commit_count: None,
@@ -38,6 +42,14 @@ where
 
   pub fn wal_file_size(mut self, size: usize) -> Self {
     self.wal_file_size = Some(size);
+    self
+  }
+  pub fn wal_segment_flush_delay(mut self, delay: Duration) -> Self {
+    self.wal_segment_flush_delay = Some(delay);
+    self
+  }
+  pub fn wal_segment_flush_count(mut self, count: usize) -> Self {
+    self.wal_segment_flush_count = Some(count);
     self
   }
   pub fn checkpoint_interval(mut self, interval: Duration) -> Self {
@@ -77,6 +89,12 @@ where
     let config = EngineConfig {
       base_path: self.base_path,
       wal_file_size: self.wal_file_size.unwrap_or(DEFAULT_WAL_FILE_SIZE),
+      wal_segment_flush_count: self
+        .wal_segment_flush_count
+        .unwrap_or(DEFAULT_WAL_SEGMENT_FLUSH_COUNT),
+      wal_segment_flush_delay: self
+        .wal_segment_flush_delay
+        .unwrap_or(DEFAULT_WAL_SEGMENT_FLUSH_DELAY),
       checkpoint_interval: self
         .checkpoint_interval
         .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL),
@@ -103,6 +121,8 @@ where
 }
 
 const DEFAULT_WAL_FILE_SIZE: usize = 8 << 20; // 8 mb
+const DEFAULT_WAL_SEGMENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
+const DEFAULT_WAL_SEGMENT_FLUSH_COUNT: usize = 32;
 const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
 const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;

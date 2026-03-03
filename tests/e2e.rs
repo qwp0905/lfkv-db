@@ -5,6 +5,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use crossbeam::channel::{unbounded, Sender};
 use lfkv_db::{Engine, EngineBuilder, Error};
 use tempfile::{tempdir_in, TempDir};
 
@@ -600,4 +601,58 @@ fn test_process_crash_recovery() {
     "crash recovery: {} keys committed, all verified",
     committed.len()
   );
+}
+
+#[test]
+fn test_hard_workload() {
+  let dir = tempdir_in(".").unwrap();
+  let engine = Arc::new(build_engine(&dir));
+
+  let key_count = 100_000_usize;
+  let thread_count = 300_usize;
+  let mut keys: Vec<Vec<u8>> = (0..key_count)
+    .map(|i| format!("123{:06}", i))
+    .map(|s| s.as_bytes().to_vec())
+    .collect();
+  keys.sort();
+
+  let mut waiting = Vec::with_capacity(key_count);
+  let mut threads = Vec::with_capacity(thread_count);
+  let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
+  for _ in 0..thread_count {
+    let e = engine.clone();
+    let rx = rx.clone();
+    let th = std::thread::spawn(move || {
+      while let Ok((vec, t)) = rx.recv() {
+        let mut r = e.new_transaction().expect("start error");
+        r.insert(vec.clone(), vec).expect("insert error");
+        r.commit().expect("commit error");
+        t.send(()).unwrap();
+      }
+    });
+    threads.push(th);
+  }
+
+  for i in 0..key_count {
+    let (t, r) = unbounded();
+    tx.send((keys[i].clone(), t)).unwrap();
+    waiting.push(r);
+  }
+
+  waiting.into_iter().for_each(|r| r.recv().unwrap());
+  drop(tx);
+
+  threads.into_iter().for_each(|h| h.join().unwrap());
+
+  let mut count = 0;
+  let mut t = engine.new_transaction().expect("tx start error");
+
+  let mut iter = t.scan_all().expect("scan start error");
+  while let Ok(Some((k, _))) = iter.try_next() {
+    assert_eq!(keys[count], k);
+    count += 1;
+  }
+
+  assert_eq!(key_count, count);
+  t.commit().expect("commit error");
 }

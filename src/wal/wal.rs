@@ -9,7 +9,7 @@ use super::{replay, LogEntry, LogRecord, ReplayResult, WALSegment, WAL_BLOCK_SIZ
 use crate::{
   disk::{Page, PagePool, PageRef, PAGE_SIZE},
   error::{Error, Result},
-  thread::SingleWorkInput,
+  thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   utils::{logger, ShortenedMutex, ToArc, ToArcMutex},
 };
 
@@ -23,6 +23,8 @@ pub struct WALConfig {
   pub base_dir: PathBuf,
   pub prefix: PathBuf,
   pub checkpoint_interval: Duration,
+  pub segment_flush_delay: Duration,
+  pub segment_flush_count: usize,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
   pub max_file_size: usize,
@@ -33,14 +35,14 @@ pub struct WAL {
   buffer: Arc<Mutex<WALBuffer>>,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
   max_index: usize,
-  checkpoint: SingleWorkInput<WALSegment, Result>,
+  checkpoint: SingleWorkThread<WALSegment, Result>,
   flush_count: usize,
   flush_interval: Duration,
 }
 impl WAL {
   pub fn replay(
     config: WALConfig,
-    checkpoint: SingleWorkInput<WALSegment, Result>,
+    checkpoint_input: SingleWorkInput<(), Result>,
   ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
@@ -79,6 +81,19 @@ impl WAL {
     }
     .to_arc_mutex();
 
+    let checkpoint = WorkBuilder::new()
+      .name("wal checkpoint buffering")
+      .stack_size(2 << 20)
+      .single()
+      .buffering(
+        config.segment_flush_delay,
+        config.segment_flush_count,
+        |(segment, result): (WALSegment, bool)| {
+          result.then(|| segment.truncate()).unwrap_or(Ok(()))
+        },
+        move |_| checkpoint_input.send(()).wait().is_ok(),
+      );
+
     Ok((
       Self {
         prefix,
@@ -93,8 +108,12 @@ impl WAL {
     ))
   }
 
-  pub fn close(&self) {
-    self.buffer.l().segment.close()
+  pub fn last_checkpoint(&self) {
+    self.checkpoint.close();
+  }
+
+  pub fn close_segment(&self) {
+    self.buffer.l().segment.close();
   }
 
   #[inline]

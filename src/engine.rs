@@ -25,6 +25,8 @@ where
 {
   pub base_path: T,
   pub wal_file_size: usize,
+  pub wal_segment_flush_delay: Duration,
+  pub wal_segment_flush_count: usize,
   pub checkpoint_interval: Duration,
   pub group_commit_delay: Duration,
   pub group_commit_count: usize,
@@ -53,6 +55,8 @@ impl Engine {
       group_commit_count: config.group_commit_count,
       max_file_size: config.wal_file_size,
       base_dir: config.base_path.as_ref().into(),
+      segment_flush_count: config.wal_segment_flush_count,
+      segment_flush_delay: config.wal_segment_flush_delay,
     };
     let buffer_pool_config = BufferPoolConfig {
       shard_count: config.buffer_pool_shard_count,
