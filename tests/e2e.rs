@@ -609,7 +609,7 @@ fn test_hard_workload() {
   let engine = Arc::new(build_engine(&dir));
 
   let key_count = 100_000_usize;
-  let thread_count = 100usize;
+  let thread_count = 1_000_usize;
   let mut keys: Vec<Vec<u8>> = (0..key_count)
     .map(|i| format!("123{:06}", i))
     .map(|s| s.as_bytes().to_vec())
