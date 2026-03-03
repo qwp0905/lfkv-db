@@ -4,7 +4,7 @@ use std::{
   sync::Arc,
 };
 
-use super::{Page, PagePool, PageRef, Pread, Pwrite};
+use super::{DirectIO, Page, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
   thread::{SharedWorkThread, WorkBuilder, WorkResult},
@@ -66,6 +66,7 @@ impl<const N: usize> DiskController<N> {
       .read(true)
       .write(true)
       .create(true)
+      .direct_io()
       .open(&config.path)
       .map_err(Error::IO)?;
 

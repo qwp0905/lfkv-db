@@ -10,9 +10,9 @@ use chrono::Local;
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
-  disk::{PageRef, Pread, Pwrite},
+  disk::{DirectIO, PageRef, Pread, Pwrite},
   error::Result,
-  thread::{/* Oneshot, */ SingleWorkThread, WorkBuilder, WorkResult},
+  thread::{SingleWorkThread, WorkBuilder, WorkResult},
   utils::ToArc,
   Error,
 };
@@ -43,6 +43,7 @@ impl WALSegment {
       .read(true)
       .write(true)
       .create(true)
+      .direct_io()
       .open(path.as_ref())
       .map_err(Error::IO)?
       .to_arc();

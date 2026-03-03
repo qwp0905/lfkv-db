@@ -236,6 +236,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "hashbrown",
+ "libc",
  "rand",
  "serde_json",
  "tempfile",
@@ -244,9 +245,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.172"
+version = "0.2.182"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
+checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
 
 [[package]]
 name = "linux-raw-sys"

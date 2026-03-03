@@ -1,7 +1,13 @@
-use std::{fs::File, io::Result};
+use std::{
+  fs::{File, OpenOptions},
+  io::Result,
+};
 
 #[cfg(unix)]
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
+
+#[cfg(unix)]
+use libc;
 
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
@@ -32,6 +38,16 @@ impl Pwrite for File {
   #[cfg(windows)]
   fn pwrite(&self, buf: &[u8], offset: u64) -> Result<usize> {
     self.seek_write(buf, offset)
+  }
+}
+
+pub trait DirectIO {
+  fn direct_io(&mut self) -> &mut Self;
+}
+impl DirectIO for OpenOptions {
+  #[cfg(unix)]
+  fn direct_io(&mut self) -> &mut Self {
+    self.custom_flags(libc::F_NOCACHE)
   }
 }
 
