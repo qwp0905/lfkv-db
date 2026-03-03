@@ -23,7 +23,7 @@ fn main() {
     .collect::<Vec<Vec<u8>>>();
 
   let mut v = vec![];
-  let threads_count = 300;
+  let threads_count = 100;
   let mut threads = Vec::new();
   let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
   for i in 0..threads_count {
