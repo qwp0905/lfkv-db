@@ -23,7 +23,7 @@ impl Pread for File {
     self.read_at(buf, offset)
   }
 
-  #[cfg(target_os = "windows")]
+  #[cfg(windows)]
   fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
     self.seek_read(buf, offset)
   }
@@ -51,7 +51,7 @@ impl DirectIO for OpenOptions {
   fn direct_io(&mut self) -> &mut Self {
     self.custom_flags(libc::F_NOCACHE)
   }
-  #[cfg(target_os = "windows")]
+  #[cfg(windows)]
   fn direct_io(&mut self) -> &mut Self {
     self.custom_flags(winapi::FILE_FLAG_NO_BUFFERING)
   }
