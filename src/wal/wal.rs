@@ -110,7 +110,7 @@ impl WAL {
 
   pub fn twostep_close<'a>(&'a self) -> impl Fn() + 'a {
     self.segment_rotate.close();
-    move || self.buffer.l().segment.close()
+    || self.buffer.l().segment.close()
   }
 
   #[inline]
