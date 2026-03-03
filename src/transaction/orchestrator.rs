@@ -44,7 +44,8 @@ impl TxOrchestrator {
 
     buffer_pool.flush()?;
     let disk_len = buffer_pool.disk_len()?;
-    let free_list = FreeList::replay(buffer_pool.clone(), wal.clone())?.to_arc();
+    let free_list =
+      FreeList::replay(buffer_pool.clone(), wal.clone(), disk_len)?.to_arc();
 
     let version_visibility =
       VersionVisibility::new(replay.aborted, replay.last_tx_id).to_arc();

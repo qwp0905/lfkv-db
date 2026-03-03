@@ -75,8 +75,11 @@ pub struct FreeList {
   wal: Arc<WAL>,
 }
 impl FreeList {
-  pub fn replay(buffer_pool: Arc<BufferPool>, wal: Arc<WAL>) -> Result<Self> {
-    let file_end = buffer_pool.disk_len()?;
+  pub fn replay(
+    buffer_pool: Arc<BufferPool>,
+    wal: Arc<WAL>,
+    file_end: usize,
+  ) -> Result<Self> {
     if file_end == 0 {
       let state = FreeState {
         block: FreeBlock::new(None),
