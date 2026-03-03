@@ -192,6 +192,9 @@ impl InternalNode {
   pub fn set_right(&mut self, key: &Key, ptr: Pointer) -> Option<(Pointer, Key)> {
     self.right.replace((ptr, key.clone()))
   }
+  pub fn get_all_child<'a>(&'a self) -> impl Iterator<Item = Pointer> + 'a {
+    self.children.iter().map(|i| *i)
+  }
 }
 
 pub enum NodeFindResult {

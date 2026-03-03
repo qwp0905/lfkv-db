@@ -43,6 +43,7 @@ impl TxOrchestrator {
     }
 
     buffer_pool.flush()?;
+    let disk_len = buffer_pool.disk_len()?;
     let free_list = FreeList::replay(buffer_pool.clone(), wal.clone())?.to_arc();
 
     let version_visibility =
@@ -57,9 +58,10 @@ impl TxOrchestrator {
     )
     .to_arc();
 
-    if !replay.segments.is_empty() {
+    if disk_len != 0 {
       logger::info("create initial checkpoint");
       let log_id = wal.current_log_id();
+      gc.release_orphand(disk_len)?;
       gc.run()?;
       buffer_pool.flush()?;
       wal.checkpoint_and_flush(log_id)?;

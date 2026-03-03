@@ -259,7 +259,7 @@ fn test_crash_recovery() {
 
       handles.push(thread::spawn(move || {
         for i in 0..100u8 {
-          if stop.load(Ordering::Relaxed) {
+          if stop.load(Ordering::Acquire) {
             break;
           }
           let key = vec![t, i];
@@ -280,7 +280,7 @@ fn test_crash_recovery() {
 
     // let workers run briefly then kill engine
     thread::sleep(Duration::from_millis(50));
-    stop.store(true, Ordering::Relaxed);
+    stop.store(true, Ordering::Release);
     for h in handles {
       let _ = h.join();
     }

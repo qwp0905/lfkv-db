@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+  collections::HashSet,
+  sync::{Arc, Mutex},
+};
 
 use crate::{
   buffer_pool::{BufferPool, PageSlotWrite},
@@ -113,6 +116,27 @@ impl FreeList {
       wal,
     })
   }
+
+  pub fn get_all(&self) -> Result<(HashSet<usize>, HashSet<usize>)> {
+    let mut index = Some(FREE_LIST_HEAD);
+    let mut visited = HashSet::new();
+    let mut set = HashSet::new();
+    while let Some(i) = index {
+      visited.insert(i);
+      let block = self
+        .buffer_pool
+        .read(i)?
+        .for_read()
+        .as_ref()
+        .deserialize::<FreeBlock>()?;
+      for i in block.list {
+        set.insert(i);
+      }
+      index = block.next
+    }
+    Ok((set, visited))
+  }
+
   pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
     let mut state = self.state.l();
     if let Some(index) = state.block.list.pop() {

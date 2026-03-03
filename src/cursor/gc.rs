@@ -1,4 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+  collections::HashSet,
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+  },
+  time::Duration,
+};
 
 use super::{CursorNode, DataEntry, Pointer, TreeHeader, HEADER_INDEX};
 use crate::{
@@ -21,6 +28,9 @@ pub struct GarbageCollector {
   check: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   entry: Arc<SharedWorkThread<Pointer, Result>>,
   release: Arc<SharedWorkThread<Pointer, Result>>,
+  buffer_pool: Arc<BufferPool>,
+  free_list: Arc<FreeList>,
+  initialized: Arc<AtomicBool>,
 }
 impl GarbageCollector {
   pub fn run(&self) -> Result {
@@ -34,6 +44,7 @@ impl GarbageCollector {
     wal: Arc<WAL>,
     config: GarbageCollectionConfig,
   ) -> Self {
+    let initialized = AtomicBool::new(false).to_arc();
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
@@ -70,11 +81,12 @@ impl GarbageCollector {
       .with_timeout(
         config.interval,
         run_main(
-          buffer_pool,
-          version_visibility,
-          wal,
+          buffer_pool.clone(),
+          version_visibility.clone(),
+          wal.clone(),
           check.clone(),
           release.clone(),
+          initialized.clone(),
         ),
       );
     Self {
@@ -82,7 +94,73 @@ impl GarbageCollector {
       check,
       entry,
       release,
+      buffer_pool,
+      free_list,
+      initialized,
     }
+  }
+
+  pub fn release_orphand(&self, end: usize) -> Result {
+    let (mut free_indexes, free_visited) = self.free_list.get_all()?;
+    let mut visited: HashSet<usize> = free_visited;
+    visited.insert(HEADER_INDEX);
+
+    let root = self
+      .buffer_pool
+      .read(HEADER_INDEX)?
+      .for_read()
+      .as_ref()
+      .deserialize::<TreeHeader>()?
+      .get_root();
+    let mut node_stack = vec![root];
+    let mut entry_stack = vec![];
+
+    while let Some(index) = node_stack.pop() {
+      visited.insert(index);
+      match self
+        .buffer_pool
+        .read(index)?
+        .for_read()
+        .as_ref()
+        .deserialize::<CursorNode>()?
+      {
+        CursorNode::Internal(internal) => {
+          internal.get_all_child().for_each(|i| node_stack.push(i));
+        }
+        CursorNode::Leaf(leaf) => {
+          leaf
+            .get_entries()
+            .map(|(_, p)| *p)
+            .for_each(|i| entry_stack.push(i));
+        }
+      };
+    }
+
+    while let Some(index) = entry_stack.pop() {
+      visited.insert(index);
+      let entry: DataEntry = self
+        .buffer_pool
+        .read(index)?
+        .for_read()
+        .as_ref()
+        .deserialize()?;
+      if let Some(i) = entry.get_next() {
+        entry_stack.push(i);
+      }
+    }
+
+    for index in 0..end {
+      if visited.remove(&index) {
+        continue;
+      }
+      if free_indexes.remove(&index) {
+        continue;
+      }
+      self.release.send_no_wait(index);
+    }
+
+    self.initialized.store(true, Ordering::Release);
+    Ok(())
   }
 
   pub fn close(&self) {
@@ -99,8 +177,12 @@ fn run_main(
   wal: Arc<WAL>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
+  initialized: Arc<AtomicBool>,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
+    if !initialized.load(Ordering::Acquire) {
+      return Ok(());
+    }
     let header: TreeHeader = buffer_pool
       .read(HEADER_INDEX)?
       .for_read()
