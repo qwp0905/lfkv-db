@@ -13,6 +13,18 @@ pub enum LogLevel {
   Error = 4,
   Fatal = 5,
 }
+impl From<LogLevel> for &str {
+  fn from(value: LogLevel) -> Self {
+    match value {
+      LogLevel::Trace => "trace",
+      LogLevel::Debug => "debug",
+      LogLevel::Info => "info",
+      LogLevel::Warn => "warn",
+      LogLevel::Error => "error",
+      LogLevel::Fatal => "fatal",
+    }
+  }
+}
 
 #[allow(unused)]
 pub fn info<T: ToString>(message: T) {

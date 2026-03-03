@@ -6,8 +6,19 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Sender};
-use lfkv_db::{Engine, EngineBuilder, Error};
+use lfkv_db::{Engine, EngineBuilder, Error, LogLevel, Logger};
 use tempfile::{tempdir_in, TempDir};
+
+struct TestLogger;
+impl Logger for TestLogger {
+  fn log(&self, level: LogLevel, msg: &[u8]) {
+    println!(
+      "[{}] {}",
+      Into::<&str>::into(level),
+      String::from_utf8_lossy(msg)
+    )
+  }
+}
 
 fn build_engine(dir: &TempDir) -> Engine {
   EngineBuilder::new(dir.path())
@@ -15,6 +26,8 @@ fn build_engine(dir: &TempDir) -> Engine {
     .buffer_pool_shard_count(1 << 2)
     .group_commit_delay(Duration::from_millis(1))
     .group_commit_count(10)
+    .logger(TestLogger)
+    .log_level(LogLevel::Trace)
     .build()
     .expect("engine bootstrap failed")
 }
