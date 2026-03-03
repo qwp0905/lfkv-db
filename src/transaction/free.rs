@@ -117,21 +117,19 @@ impl FreeList {
     })
   }
 
-  pub fn get_all(&self) -> Result<(HashSet<usize>, HashSet<usize>)> {
+  pub fn get_all(&self) -> Result<(HashSet<usize>, Vec<usize>)> {
     let mut index = Some(FREE_LIST_HEAD);
-    let mut visited = HashSet::new();
+    let mut visited = vec![];
     let mut set = HashSet::new();
     while let Some(i) = index {
-      visited.insert(i);
+      visited.push(i);
       let block = self
         .buffer_pool
         .read(i)?
         .for_read()
         .as_ref()
         .deserialize::<FreeBlock>()?;
-      for i in block.list {
-        set.insert(i);
-      }
+      set.extend(block.list);
       index = block.next
     }
     Ok((set, visited))

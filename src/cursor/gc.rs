@@ -102,8 +102,8 @@ impl GarbageCollector {
 
   pub fn release_orphand(&self, end: usize) -> Result {
     let (mut free_indexes, free_visited) = self.free_list.get_all()?;
-    let mut visited: HashSet<usize> = free_visited;
-    visited.insert(HEADER_INDEX);
+    let mut visited: HashSet<usize> =
+      vec![HEADER_INDEX].into_iter().chain(free_visited).collect();
 
     let root = self
       .buffer_pool
@@ -124,15 +124,8 @@ impl GarbageCollector {
         .as_ref()
         .deserialize::<CursorNode>()?
       {
-        CursorNode::Internal(internal) => {
-          internal.get_all_child().for_each(|i| node_stack.push(i));
-        }
-        CursorNode::Leaf(leaf) => {
-          leaf
-            .get_entries()
-            .map(|(_, p)| *p)
-            .for_each(|i| entry_stack.push(i));
-        }
+        CursorNode::Internal(internal) => node_stack.extend(internal.get_all_child()),
+        CursorNode::Leaf(leaf) => entry_stack.extend(leaf.get_entries().map(|(_, p)| *p)),
       };
     }
 
@@ -144,16 +137,11 @@ impl GarbageCollector {
         .for_read()
         .as_ref()
         .deserialize()?;
-      if let Some(i) = entry.get_next() {
-        entry_stack.push(i);
-      }
+      entry.get_next().map(|i| entry_stack.push(i));
     }
 
     for index in 0..end {
-      if visited.remove(&index) {
-        continue;
-      }
-      if free_indexes.remove(&index) {
+      if visited.remove(&index) || free_indexes.remove(&index) {
         continue;
       }
       self.release.send_no_wait(index);
