@@ -75,7 +75,7 @@ impl LogFilter {
   }
 
   fn log(&self, level: LogLevel, msg: &[u8]) {
-    if self.level as isize >= level as isize {
+    if self.level as isize <= level as isize {
       self.logger.log(level, msg)
     }
   }
