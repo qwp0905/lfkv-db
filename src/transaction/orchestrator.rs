@@ -62,7 +62,7 @@ impl TxOrchestrator {
       let log_id = wal.current_log_id();
       gc.run()?;
       buffer_pool.flush()?;
-      wal.checkpoint_and_flush(0, log_id)?;
+      wal.checkpoint_and_flush(log_id)?;
 
       for seg in replay.segments {
         seg.truncate()?;
@@ -169,6 +169,6 @@ fn run_checkpoint(wal: &WAL, buffer_pool: &BufferPool, gc: &GarbageCollector) ->
   let log_id = wal.current_log_id();
   gc.run()?;
   buffer_pool.flush()?;
-  wal.checkpoint_and_flush(0, log_id)?;
+  wal.checkpoint_and_flush(log_id)?;
   Ok(())
 }

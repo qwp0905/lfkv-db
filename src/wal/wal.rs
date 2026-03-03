@@ -56,11 +56,10 @@ impl WAL {
     )?;
 
     logger::info(format!(
-      "wal replay result: last_index {} last_log_id {} last_tx_id {} last_free {} aborted {} redo {} segments {}",
+      "wal replay result: last_index {} last_log_id {} last_tx_id {} aborted {} redo {} segments {}",
       replay_result.last_index,
       replay_result.last_log_id,
       replay_result.last_tx_id,
-      replay_result.last_free,
       replay_result.aborted.len(),
       replay_result.redo.len(),
       replay_result.segments.len()
@@ -177,17 +176,14 @@ impl WAL {
       false,
     )
   }
-  pub fn checkpoint_and_flush(&self, last_free: usize, last_log_id: usize) -> Result {
+  pub fn checkpoint_and_flush(&self, last_log_id: usize) -> Result {
     self.append(
-      move |log_id| LogRecord::new_checkpoint(log_id, last_free, last_log_id),
+      move |log_id| LogRecord::new_checkpoint(log_id, last_log_id),
       true,
     )
   }
   pub fn append_start(&self, tx_id: usize) -> Result {
     self.append(move |log_id| LogRecord::new_start(log_id, tx_id), false)
-  }
-  pub fn append_free(&self, last_free: usize) -> Result {
-    self.append(move |log_id| LogRecord::new_free(log_id, last_free), false)
   }
   pub fn commit_and_flush(&self, tx_id: usize) -> Result {
     self.append(|log_id| LogRecord::new_commit(log_id, tx_id), true)

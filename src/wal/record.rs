@@ -17,10 +17,8 @@ pub enum Operation {
   Commit,
   Abort,
   Checkpoint(
-    usize, // last free page index
     usize, // last log id
   ),
-  Free(usize), // current free chain head
 }
 impl Operation {
   fn type_u8(&self) -> u8 {
@@ -29,8 +27,7 @@ impl Operation {
       Operation::Start => 2,
       Operation::Commit => 3,
       Operation::Abort => 4,
-      Operation::Checkpoint(_, _) => 5,
-      Operation::Free(_) => 6,
+      Operation::Checkpoint(_) => 5,
     }
   }
   fn to_bytes(&self) -> Vec<u8> {
@@ -40,12 +37,8 @@ impl Operation {
         v.extend_from_slice(&index.to_be_bytes());
         v.extend_from_slice(page.as_ref());
       }
-      Operation::Checkpoint(index, log_id) => {
+      Operation::Checkpoint(log_id) => {
         v.extend_from_slice(&log_id.to_be_bytes());
-        v.extend_from_slice(&index.to_be_bytes());
-      }
-      Operation::Free(index) => {
-        v.extend_from_slice(&index.to_be_bytes());
       }
       _ => {}
     };
@@ -84,11 +77,8 @@ impl LogRecord {
     LogRecord::new(log_id, tx_id, Operation::Abort)
   }
 
-  pub fn new_checkpoint(log_id: usize, last_free: usize, last_log_id: usize) -> Self {
-    LogRecord::new(log_id, 0, Operation::Checkpoint(last_free, last_log_id))
-  }
-  pub fn new_free(log_id: usize, page_index: usize) -> Self {
-    LogRecord::new(log_id, 0, Operation::Free(page_index))
+  pub fn new_checkpoint(log_id: usize, last_log_id: usize) -> Self {
+    LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id))
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
@@ -158,7 +148,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
       3 => Operation::Commit,
       4 => Operation::Abort,
       5 => {
-        if len < 37 {
+        if len < 29 {
           return Err(Error::InvalidFormat("checkpoint log too short."));
         }
         let log_id = usize::from_be_bytes(
@@ -166,22 +156,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
             .try_into()
             .map_err(|_| Error::InvalidFormat("invalid log id for checkpoint log."))?,
         );
-        let index =
-          usize::from_be_bytes(value[29..37].try_into().map_err(|_| {
-            Error::InvalidFormat("invalid last free for checkpoint log.")
-          })?);
-        Operation::Checkpoint(index, log_id)
-      }
-      6 => {
-        if len < 29 {
-          return Err(Error::InvalidFormat("free log too short."));
-        }
-        let index = usize::from_be_bytes(
-          value[21..29]
-            .try_into()
-            .map_err(|_| Error::InvalidFormat("invalid index for free log."))?,
-        );
-        Operation::Free(index)
+        Operation::Checkpoint(log_id)
       }
       _ => return Err(Error::InvalidFormat("invalid type log record.")),
     };
@@ -309,24 +284,13 @@ mod tests {
 
   #[test]
   fn test_checkpoint_roundtrip() {
-    let r = LogRecord::new_checkpoint(5, 100, 200);
+    let r = LogRecord::new_checkpoint(5, 200);
     let parsed = assert_roundtrip(&r);
     match parsed.operation {
-      Operation::Checkpoint(last_free, last_log_id) => {
-        assert_eq!(last_free, 100);
+      Operation::Checkpoint(last_log_id) => {
         assert_eq!(last_log_id, 200);
       }
       _ => panic!("expected Checkpoint"),
-    }
-  }
-
-  #[test]
-  fn test_free_roundtrip() {
-    let r = LogRecord::new_free(6, 55);
-    let parsed = assert_roundtrip(&r);
-    match parsed.operation {
-      Operation::Free(index) => assert_eq!(index, 55),
-      _ => panic!("expected Free"),
     }
   }
 
