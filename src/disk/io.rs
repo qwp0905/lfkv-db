@@ -10,7 +10,9 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use libc;
 
 #[cfg(windows)]
-use std::os::windows::fs::FileExt;
+use std::os::windows::fs::{FileExt, OpenOptionsExt};
+#[cfg(windows)]
+use winapi;
 
 pub trait Pread {
   fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize>;
@@ -48,6 +50,10 @@ impl DirectIO for OpenOptions {
   #[cfg(unix)]
   fn direct_io(&mut self) -> &mut Self {
     self.custom_flags(libc::F_NOCACHE)
+  }
+  #[cfg(target_os = "windows")]
+  fn direct_io(&mut self) -> &mut Self {
+    self.custom_flags(winapi::FILE_FLAG_NO_BUFFERING)
   }
 }
 
