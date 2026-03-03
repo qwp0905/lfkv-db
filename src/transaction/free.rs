@@ -12,6 +12,8 @@ use crate::{
   wal::WAL,
 };
 
+const MAX_COUNT: usize = PAGE_SIZE / 8 - 4;
+
 pub struct FreeBlock {
   next: Option<usize>,
   prev: Option<usize>,
@@ -26,7 +28,7 @@ impl FreeBlock {
     }
   }
   fn is_available(&self) -> bool {
-    24 + (self.list.len() + 1) * 8 >= PAGE_SIZE
+    self.list.len() >= MAX_COUNT
   }
 }
 impl Serializable for FreeBlock {
