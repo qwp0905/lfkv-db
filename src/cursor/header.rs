@@ -59,30 +59,42 @@ mod tests {
   #[test]
   fn test_tree_header_roundtrip() {
     let mut page = Page::new();
-    let header = TreeHeader::new(42);
+    let height = 0u32;
+    let root = 42usize;
+    let mut header = TreeHeader::new(root);
+    header.height = height;
     page.serialize_from(&header).expect("serialize error");
 
     let decoded: TreeHeader = page.deserialize().expect("deserialize error");
-    assert_eq!(decoded.get_root(), 42);
+    assert_eq!(decoded.get_root(), root);
+    assert_eq!(decoded.get_height(), height);
   }
 
   #[test]
   fn test_tree_header_zero_root() {
     let mut page = Page::new();
-    let header = TreeHeader::new(0);
+    let height = 123u32;
+    let root = 0usize;
+    let mut header = TreeHeader::new(root);
+    header.height = height;
     page.serialize_from(&header).expect("serialize error");
 
     let decoded: TreeHeader = page.deserialize().expect("deserialize error");
-    assert_eq!(decoded.get_root(), 0);
+    assert_eq!(decoded.get_root(), root);
+    assert_eq!(decoded.get_height(), height);
   }
 
   #[test]
   fn test_tree_header_large_root() {
     let mut page = Page::new();
-    let header = TreeHeader::new(usize::MAX);
+    let height = u32::MAX;
+    let root = usize::MAX;
+    let mut header = TreeHeader::new(root);
+    header.height = height;
     page.serialize_from(&header).expect("serialize error");
 
     let decoded: TreeHeader = page.deserialize().expect("deserialize error");
-    assert_eq!(decoded.get_root(), usize::MAX);
+    assert_eq!(decoded.get_root(), root);
+    assert_eq!(decoded.get_height(), height);
   }
 }
