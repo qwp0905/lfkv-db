@@ -1,8 +1,5 @@
 use std::{panic::RefUnwindSafe, sync::Arc};
 
-use chrono::{Local, SecondsFormat};
-use serde_json::json;
-
 #[allow(unused)]
 #[derive(Clone, Copy)]
 pub enum LogLevel {
@@ -24,42 +21,6 @@ impl From<LogLevel> for &str {
       LogLevel::Fatal => "fatal",
     }
   }
-}
-
-#[allow(unused)]
-pub fn info<T: ToString>(message: T) {
-  println!("{}", fmt(LogLevel::Info, message))
-}
-
-#[allow(unused)]
-pub fn warn<T: ToString>(message: T) {
-  println!("{}", fmt(LogLevel::Warn, message));
-}
-
-#[allow(unused)]
-pub fn error<T: ToString>(message: T) {
-  eprintln!("{}", fmt(LogLevel::Error, message));
-}
-
-#[allow(unused)]
-pub fn debug<T: ToString>(message: T) {
-  println!("{}", fmt(LogLevel::Debug, message))
-}
-
-fn fmt<T: ToString>(level: LogLevel, message: T) -> String {
-  json!({
-    "level": match level {
-        LogLevel::Info=>"info",
-        LogLevel::Error=>"error",
-        LogLevel::Warn=>"warn",
-        LogLevel::Debug=>"debug",
-        LogLevel::Trace => "trace",
-        LogLevel::Fatal => "fatal",
-    },
-    "message": message.to_string(),
-    "at": Local::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-  })
-  .to_string()
 }
 
 pub trait Logger: Send + Sync + RefUnwindSafe {

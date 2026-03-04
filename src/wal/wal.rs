@@ -38,7 +38,6 @@ pub struct WAL {
   segment_rotate: SingleWorkThread<WALSegment, Result>,
   flush_count: usize,
   flush_interval: Duration,
-  // logger: LogFilter,
 }
 impl WAL {
   pub fn replay(
@@ -48,18 +47,16 @@ impl WAL {
   ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
     let page_pool = PagePool::new(max_index).to_arc();
-    let mut replay_result = replay(
+    let replay_result = replay(
       config.base_dir.to_string_lossy().as_ref(),
       config.prefix.to_string_lossy().as_ref(),
-      max_index,
       config.group_commit_count,
       config.group_commit_delay,
       page_pool.clone(),
     )?;
 
     logger.info(format!(
-      "wal replay result: last_index {} last_log_id {} last_tx_id {} aborted {} redo {} segments {}",
-      replay_result.last_index,
+      "wal replay result: last_log_id {} last_tx_id {} aborted {} redo {} segments {}",
       replay_result.last_log_id,
       replay_result.last_tx_id,
       replay_result.aborted.len(),
@@ -70,15 +67,13 @@ impl WAL {
     let prefix = PathBuf::from(config.base_dir).join(config.prefix);
     let buffer = WALBuffer {
       last_log_id: replay_result.last_log_id,
-      entry: LogEntry::new(replay_result.last_index),
-      segment: match replay_result.last_file.take() {
-        Some(seg) => seg,
-        None => WALSegment::open_new(
-          &prefix,
-          config.group_commit_count,
-          config.group_commit_delay,
-        )?,
-      },
+      entry: LogEntry::new(0),
+      segment: WALSegment::open_new(
+        &prefix,
+        replay_result.last_log_id,
+        config.group_commit_count,
+        config.group_commit_delay,
+      )?,
     }
     .to_arc_mutex();
 
@@ -104,7 +99,6 @@ impl WAL {
         segment_rotate,
         flush_count: config.group_commit_count,
         flush_interval: config.group_commit_delay,
-        // logger,
       },
       replay_result,
     ))
@@ -144,8 +138,12 @@ impl WAL {
     let mut index = buffer.entry.get_index() + 1;
     if index == self.max_index {
       index = 0;
-      let new_seg =
-        WALSegment::open_new(&self.prefix, self.flush_count, self.flush_interval)?;
+      let new_seg = WALSegment::open_new(
+        &self.prefix,
+        log_id,
+        self.flush_count,
+        self.flush_interval,
+      )?;
       f_result.push(buffer.segment.fsync());
       let _ = self
         .segment_rotate

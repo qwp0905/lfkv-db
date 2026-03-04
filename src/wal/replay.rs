@@ -1,7 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   fs::read_dir,
-  mem::replace,
   sync::Arc,
   time::Duration,
 };
@@ -13,23 +12,19 @@ use crate::{
 };
 
 pub struct ReplayResult {
-  pub last_index: usize,
   pub last_log_id: usize,
   pub last_tx_id: usize,
   pub aborted: BTreeSet<usize>,
   pub redo: Vec<(usize, usize, Page)>,
-  pub last_file: Option<WALSegment>,
   pub segments: Vec<WALSegment>,
 }
 impl ReplayResult {
   fn empty() -> Self {
     Self {
-      last_index: 0,
       last_log_id: 0,
       last_tx_id: 0,
       aborted: Default::default(),
       redo: Default::default(),
-      last_file: None,
       segments: Default::default(),
     }
   }
@@ -38,7 +33,6 @@ impl ReplayResult {
 pub fn replay(
   base_dir: &str,
   prefix: &str,
-  max_len: usize,
   flush_count: usize,
   flush_interval: Duration,
   page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
@@ -58,16 +52,14 @@ pub fn replay(
 
   let mut tx_id = 0;
   let mut log_id = 0;
-  let mut index = 0;
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
   let mut aborted = BTreeSet::new();
 
-  let mut last_file = None;
   let mut segments = Vec::new();
 
   files.sort();
   for path in files.into_iter() {
-    let wal = WALSegment::open_exists(path, flush_count, flush_interval)?;
+    let wal = WALSegment::open_exists(path, flush_count, flush_interval)?; // only for replay. file number does not matter
     let len = wal.len()?;
     let mut records = vec![];
 
@@ -83,8 +75,7 @@ pub fn replay(
     }
     records.sort_by_key(|(_, r)| r.log_id);
 
-    if let Some((i, record)) = records.last() {
-      index = *i;
+    if let Some((_, record)) = records.last() {
       log_id = record.log_id;
     }
 
@@ -105,21 +96,10 @@ pub fn replay(
       };
     }
 
-    if let Some(last) = replace(&mut last_file, Some(wal)) {
-      segments.push(last);
-    }
-  }
-
-  let mut last_index = index + 1;
-  if last_index == max_len {
-    last_index = 0;
-    if let Some(last) = last_file.take() {
-      segments.push(last);
-    }
+    segments.push(wal);
   }
 
   Ok(ReplayResult {
-    last_index,
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
     aborted,
@@ -127,7 +107,6 @@ pub fn replay(
       .into_iter()
       .map(|(id, (index, data))| (id, index, data))
       .collect(),
-    last_file,
     segments,
   })
 }

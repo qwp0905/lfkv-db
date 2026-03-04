@@ -127,9 +127,7 @@ Background pipeline that:
 |-------|---------|
 | `crossbeam` | Lock-free queues, channels, scoped threads |
 | `hashbrown` | Raw hash table API for buffer pool page table |
-| `chrono` | Timestamp generation for WAL segment naming |
 | `thiserror` | Error type derivation |
-| `serde_json` | Log serialization |
 
 ## License
 

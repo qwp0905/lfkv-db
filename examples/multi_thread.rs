@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+  sync::Arc,
+  time::{Duration, Instant},
+};
 
 use crossbeam::channel::{unbounded, Sender};
 use lfkv_db::EngineBuilder;
@@ -44,7 +47,7 @@ fn main() {
     threads.push(th)
   }
 
-  let start = chrono::Local::now();
+  let start = Instant::now();
   for i in 0..count {
     let (t, r) = crossbeam::channel::unbounded();
     tx.send((keys[i].clone(), t)).unwrap();
@@ -53,7 +56,7 @@ fn main() {
 
   v.into_iter().for_each(|r| r.recv().unwrap());
   drop(tx);
-  println!("{} ms", (chrono::Local::now() - start).num_milliseconds());
+  println!("{} ms", (Instant::now() - start).as_millis());
   for th in threads {
     let _ = th.join();
   }

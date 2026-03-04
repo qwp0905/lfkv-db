@@ -5,8 +5,6 @@ use std::{
   time::Duration,
 };
 
-use chrono::Local;
-
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
@@ -86,6 +84,7 @@ impl WALSegment {
 
   pub fn open_new<P: AsRef<Path>>(
     prefix: P,
+    id: usize,
     flush_count: usize,
     flush_interval: Duration,
   ) -> Result<Self> {
@@ -93,7 +92,7 @@ impl WALSegment {
       format!(
         "{}{}{}",
         prefix.as_ref().to_string_lossy(),
-        Local::now().timestamp_millis(),
+        pad_start(id),
         FILE_SUFFIX
       ),
       flush_count,
@@ -118,4 +117,8 @@ impl WALSegment {
 
 fn handle_flush(file: Arc<File>) -> impl Fn(()) -> bool {
   move |_| file.sync_all().is_ok()
+}
+
+fn pad_start(n: usize) -> String {
+  format!("{:0>20}", n)
 }
