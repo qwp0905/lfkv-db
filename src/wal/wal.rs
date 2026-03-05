@@ -210,7 +210,7 @@ impl WAL {
             yield_now();
             continue;
           }
-          let (segment, _) = (*failed.new).take_segement();
+          let (segment, _) = failed.new.take_segement();
           segment.truncate()?;
         },
       }
