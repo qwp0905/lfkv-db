@@ -1,3 +1,5 @@
+use std::ptr::{copy, copy_nonoverlapping};
+
 use crate::error::{Error, Result};
 
 pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
@@ -14,14 +16,9 @@ impl<const T: usize> Page<T> {
     self.0.as_ptr()
   }
 
-  pub fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
-    let end = end.min(self.0.len());
-    &mut self.0[start..end]
-  }
-
   pub fn copy(&self) -> Self {
-    let mut p = Self::new();
-    p.as_mut().copy_from_slice(self.as_ref());
+    let p = Self::new();
+    unsafe { copy(self.as_ptr(), p.as_ptr() as *mut u8, T) };
     p
   }
 
@@ -29,8 +26,8 @@ impl<const T: usize> Page<T> {
     PageScanner::new(&self.0)
   }
 
-  pub fn writer(&mut self) -> PageWriter<'_, T> {
-    PageWriter::new(&mut self.0)
+  pub fn writer(&self) -> PageWriter<'_, T> {
+    PageWriter::new(&self)
   }
 }
 
@@ -52,9 +49,9 @@ impl<const T: usize> From<[u8; T]> for Page<T> {
 
 impl<const T: usize> From<Vec<u8>> for Page<T> {
   fn from(value: Vec<u8>) -> Self {
-    let mut page = Self::new();
+    let page = Self::new();
     let len = value.len().min(T);
-    page.range_mut(0, len).copy_from_slice(&value[0..len]);
+    unsafe { copy(value.as_ptr(), page.as_ptr() as *mut u8, len) };
     page
   }
 }
@@ -70,8 +67,9 @@ impl<const T: usize> From<&Page<T>> for Vec<u8> {
 }
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
-    let mut page = Page::new();
-    page.as_mut().copy_from_slice(value);
+    let page = Page::new();
+    let len = value.len().min(T);
+    unsafe { copy(value.as_ptr(), page.as_ptr() as *mut u8, len) };
     page
   }
 }
@@ -96,7 +94,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
     let end = self.offset + n;
-    if end.gt(&self.inner.len()) {
+    if end > self.inner.len() {
       return Err(Error::EOF);
     }
 
@@ -120,25 +118,31 @@ impl<'a, const T: usize> PageScanner<'a, T> {
   }
 
   pub fn is_eof(&self) -> bool {
-    self.inner.len().le(&self.offset)
+    self.inner.len() <= self.offset
   }
 }
 
 pub struct PageWriter<'a, const T: usize = PAGE_SIZE> {
-  inner: &'a mut [u8; T],
+  inner: *mut u8,
   offset: usize,
+  page: &'a Page<T>,
 }
 impl<'a, const T: usize> PageWriter<'a, T> {
-  fn new(inner: &'a mut [u8; T]) -> Self {
-    Self { inner, offset: 0 }
+  fn new(page: &'a Page<T>) -> Self {
+    Self {
+      inner: page.0.as_ptr() as *mut u8,
+      offset: 0,
+      page,
+    }
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-    let end = self.offset + bytes.len();
+    let len = bytes.len();
+    let end = self.offset + len;
     if end > T {
       return Err(Error::EOF);
     };
-    self.inner[self.offset..end].copy_from_slice(&bytes);
+    unsafe { copy_nonoverlapping(bytes.as_ptr(), self.inner.add(self.offset), len) };
     self.offset = end;
     Ok(())
   }
@@ -151,7 +155,7 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn is_eof(&self) -> bool {
-    self.inner.len().le(&self.offset)
+    self.page.0.len() <= self.offset
   }
 }
 
@@ -161,7 +165,7 @@ mod tests {
 
   #[test]
   fn test_writer() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
     let mut wt = page.writer();
     wt.write(&[1, 2, 3, 5, 6]).unwrap();
 
@@ -176,7 +180,7 @@ mod tests {
 
   #[test]
   fn test_read_write() {
-    let mut page = Page::<5>::new();
+    let page = Page::<5>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     // Write test
@@ -194,7 +198,7 @@ mod tests {
 
   #[test]
   fn test_read_n() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     // Write test
@@ -210,7 +214,7 @@ mod tests {
   #[test]
   fn test_write_overflow() {
     const SMALL_SIZE: usize = 5;
-    let mut page = Page::<SMALL_SIZE>::new();
+    let page = Page::<SMALL_SIZE>::new();
     let test_data = [1, 2, 3, 4, 5, 6]; // Data larger than SMALL_SIZE
 
     let mut writer = page.writer();
@@ -245,7 +249,7 @@ mod tests {
 
   #[test]
   fn test_sequential_operations() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
 
     // First write operation (starts from offset 0)
     {
@@ -270,7 +274,7 @@ mod tests {
 
   #[test]
   fn test_writer_fresh_start() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
 
     // First write operation
     {
@@ -292,7 +296,7 @@ mod tests {
 
   #[test]
   fn test_scanner_fresh_start() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
 
     // Write data
     {
@@ -316,7 +320,7 @@ mod tests {
 
   #[test]
   fn test_interleaved_operations() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
     let test_data = [1, 2, 3];
 
     // First write
@@ -348,7 +352,7 @@ mod tests {
 
   #[test]
   fn test_page_copy() {
-    let mut page = Page::<PAGE_SIZE>::new();
+    let page = Page::<PAGE_SIZE>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     // Write data to original page
@@ -420,7 +424,7 @@ mod tests {
   #[test]
   fn test_into_vec() {
     const SIZE: usize = 5;
-    let mut page = Page::<SIZE>::new();
+    let page = Page::<SIZE>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     let mut writer = page.writer();
@@ -433,7 +437,7 @@ mod tests {
 
   #[test]
   fn test_read_usize() {
-    let mut page = Page::<15>::new();
+    let page = Page::<15>::new();
     let test_value: usize = 42;
 
     // Write usize value
@@ -453,7 +457,7 @@ mod tests {
   #[test]
   fn test_as_ref() {
     const SIZE: usize = 5;
-    let mut page = Page::<SIZE>::new();
+    let page = Page::<SIZE>::new();
     let test_data = [1, 2, 3, 4, 5];
 
     let mut writer = page.writer();

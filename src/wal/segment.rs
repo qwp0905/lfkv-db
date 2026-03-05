@@ -108,10 +108,14 @@ impl WALSegment {
     FsyncResult(self.flush.send(()))
   }
 
-  pub fn truncate(&self) -> Result {
-    self.close();
+  pub fn truncate(self) -> Result {
+    self.flush.close_unchecked();
     remove_file(&self.path).map_err(Error::IO)?;
     Ok(())
+  }
+
+  pub fn deactive(&self) {
+    self.flush.deactive();
   }
 
   pub fn close(&self) {

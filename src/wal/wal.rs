@@ -201,6 +201,7 @@ impl WAL {
 
           let (segment, _) = buffer.take_segement();
           fsync.push(segment.fsync());
+          segment.deactive();
           self.segment_rotate.send(segment);
         },
         Err(failed) => unsafe {

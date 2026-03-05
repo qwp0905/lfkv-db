@@ -269,7 +269,7 @@ mod tests {
 
   #[test]
   fn test_entry_roundtrip() {
-    let mut page = Page::new();
+    let page = Page::new();
     let mut writer = page.writer();
 
     let _ = writer.write(&(3 as u16).to_be_bytes());

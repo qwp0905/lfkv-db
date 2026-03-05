@@ -108,6 +108,16 @@ where
     self.send(v).wait()
   }
 
+  pub fn deactive(&self) {
+    self.channel.must_send(Context::Term);
+  }
+  pub fn close_unchecked(self) {
+    if let Some(v) = self.threads.take() {
+      let _ = self.channel.send(Context::Term);
+      let _ = v.join();
+    }
+  }
+
   pub fn close(&self) {
     if let Some(v) = self.threads.take() {
       self.channel.must_send(Context::Term);
