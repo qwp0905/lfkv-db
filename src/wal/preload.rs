@@ -48,7 +48,7 @@ impl SegmentPreload {
 
   pub fn load(&self) -> Result<WALSegment> {
     let seg = self.queue.recv().unwrap();
-    let _ = self.thread.send(());
+    self.thread.send(()).wait_flatten()?;
     seg
   }
 

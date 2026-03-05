@@ -38,7 +38,7 @@ fn create_coverage() -> std::io::Result<()> {
     .arg("test")
     .arg("--tests")
     .arg("--")
-    .arg("--test-threads=5")
+    .arg("--test-threads=3")
     .stdout(stdout())
     .stderr(stderr())
     .status()?

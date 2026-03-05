@@ -669,3 +669,60 @@ fn test_hard_workload() {
   assert_eq!(key_count, count);
   t.commit().expect("commit error");
 }
+
+#[test]
+fn insert_and_remove_and_gc() {
+  let dir = tempdir_in(".").unwrap();
+  let engine = build_engine(&dir);
+
+  let count = 1_000_usize;
+  for i in 0..count {
+    let mut t = engine.new_transaction().expect("tx start error");
+    let bytes: Vec<u8> = i.to_le_bytes().into();
+    t.insert(bytes.clone(), bytes).expect("insert error");
+    t.commit().expect("commit error")
+  }
+
+  for i in 0..count {
+    let mut t = engine.new_transaction().expect("tx start error");
+    let bytes: Vec<u8> = i.to_le_bytes().into();
+    t.remove(&bytes).expect("insert error");
+    t.commit().expect("commit error")
+  }
+
+  let last_key = count.to_le_bytes();
+  let mut tx = engine.new_transaction().expect("tx start error");
+  tx.insert(last_key.clone().into(), last_key.clone().into())
+    .expect("insert error");
+  tx.commit().expect("commit error");
+
+  drop(engine);
+
+  let engine = build_engine(&dir);
+
+  let mut t = engine.new_transaction().expect("tx start error");
+  let mut iter = t.scan_all().expect("scan start error");
+
+  let mut c = 0;
+  while let Ok(Some(_)) = iter.try_next() {
+    c += 1;
+  }
+  assert_eq!(c, 1);
+
+  for i in 0..count {
+    let bytes: Vec<u8> = i.to_le_bytes().into();
+    t.insert(bytes.clone(), bytes).expect("insert error");
+  }
+
+  t.commit().expect("commit error");
+
+  let mut t = engine.new_transaction().expect("tx start error");
+  let mut iter = t.scan_all().expect("scan start error");
+
+  let mut c = 0;
+  while let Ok(Some(_)) = iter.try_next() {
+    c += 1;
+  }
+  assert_eq!(c, count + 1);
+  t.commit().expect("commit error");
+}
