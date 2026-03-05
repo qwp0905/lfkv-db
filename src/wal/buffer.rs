@@ -10,7 +10,7 @@ const U32_MASK: u64 = 0xFFFF_FFFF;
 const U16_MASK: u32 = 0xFFFF_FFFF;
 
 pub struct LogBuffer {
-  offset: AtomicU64,
+  offset: AtomicU64, // entry pin (32bit) + offest (32bit)
   entry: PageRef<WAL_BLOCK_SIZE>,
   commit_count: AtomicU32,
   index: usize,
