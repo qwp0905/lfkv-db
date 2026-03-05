@@ -69,7 +69,7 @@ impl TxOrchestrator {
       wal.checkpoint_and_flush(log_id)?;
 
       for seg in replay.segments {
-        seg.truncate()?;
+        wal.reuse(seg);
       }
     }
 

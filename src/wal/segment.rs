@@ -1,7 +1,7 @@
 use std::{
   fs::{remove_file, File, OpenOptions},
   path::{Path, PathBuf},
-  sync::Arc,
+  sync::{Arc, Mutex},
   time::Duration,
 };
 
@@ -11,7 +11,7 @@ use crate::{
   disk::{DirectIO, Page, Pread, Pwrite},
   error::Result,
   thread::{SingleWorkThread, WorkBuilder, WorkResult},
-  utils::ToArc,
+  utils::{ShortenedMutex, ToArc},
   Error,
 };
 
@@ -28,7 +28,7 @@ impl FsyncResult {
 
 pub struct WALSegment {
   file: Arc<File>,
-  path: PathBuf,
+  path: Mutex<PathBuf>,
   flush: SingleWorkThread<(), bool>,
 }
 impl WALSegment {
@@ -72,7 +72,7 @@ impl WALSegment {
     Ok(Self {
       file,
       flush,
-      path: path.as_ref().into(),
+      path: Mutex::new(path.as_ref().into()),
     })
   }
 
@@ -99,9 +99,22 @@ impl WALSegment {
     Ok((metadata.len() as usize).div_ceil(WAL_BLOCK_SIZE))
   }
 
+  pub fn reuse<P: AsRef<Path>>(&self, prefix: P, generation: usize) -> Result {
+    let new_path = format!(
+      "{}{}{}",
+      prefix.as_ref().to_string_lossy(),
+      pad_start(generation),
+      FILE_SUFFIX
+    );
+    let mut path = self.path.l();
+    std::fs::rename(path.as_path(), &new_path).map_err(Error::IO)?;
+    *path = PathBuf::from(new_path);
+    Ok(())
+  }
+
   pub fn open_new<P: AsRef<Path>>(
     prefix: P,
-    id: usize,
+    generation: usize,
     flush_count: usize,
     flush_interval: Duration,
     max_len: usize,
@@ -109,7 +122,7 @@ impl WALSegment {
     let path = format!(
       "{}{}{}",
       prefix.as_ref().to_string_lossy(),
-      pad_start(id),
+      pad_start(generation),
       FILE_SUFFIX
     );
 
@@ -139,7 +152,7 @@ impl WALSegment {
     Ok(Self {
       file,
       flush,
-      path: path.into(),
+      path: Mutex::new(path.into()),
     })
   }
 
@@ -148,13 +161,9 @@ impl WALSegment {
   }
 
   pub fn truncate(self) -> Result {
-    self.flush.close_unchecked();
-    remove_file(&self.path).map_err(Error::IO)?;
+    self.flush.close();
+    remove_file(self.path.l().as_path()).map_err(Error::IO)?;
     Ok(())
-  }
-
-  pub fn deactive(&self) {
-    self.flush.deactive();
   }
 
   pub fn close(&self) {

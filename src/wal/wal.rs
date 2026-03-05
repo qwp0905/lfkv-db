@@ -1,17 +1,23 @@
 use std::{
   path::PathBuf,
-  sync::atomic::{AtomicUsize, Ordering},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
   thread::yield_now,
   time::Duration,
 };
 
-use crossbeam::epoch::{self, Atomic, Owned};
+use crossbeam::{
+  epoch::{self, Atomic, Owned},
+  queue::SegQueue,
+};
 
 use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToRawPointer},
+  utils::{LogFilter, ToArc, ToRawPointer},
 };
 
 use super::{
@@ -31,12 +37,13 @@ pub struct WALConfig {
 }
 
 pub struct WAL {
-  preloader: SegmentPreload,
+  preloader: Arc<SegmentPreload>,
   last_log_id: AtomicUsize,
   buffer: Atomic<LogBuffer>,
   max_index: usize,
   page_pool: PagePool<WAL_BLOCK_SIZE>,
   segment_rotate: SingleWorkThread<WALSegment, Result>,
+  not_flushed: Arc<SegQueue<WALSegment>>,
 }
 impl WAL {
   pub fn replay(
@@ -73,8 +80,10 @@ impl WAL {
       config.group_commit_count,
       config.group_commit_delay,
       max_index,
-    );
+    )
+    .to_arc();
 
+    let not_flushed = SegQueue::new().to_arc();
     let segment_rotate = WorkBuilder::new()
       .name("wal checkpoint buffering")
       .stack_size(2 << 20)
@@ -82,9 +91,7 @@ impl WAL {
       .buffering(
         config.segment_flush_delay,
         config.segment_flush_count,
-        |(segment, result): (WALSegment, bool)| {
-          result.then(|| segment.truncate()).unwrap_or(Ok(()))
-        },
+        handle_rotate(preloader.clone(), not_flushed.clone()),
         move |_| checkpoint.send(()).wait().is_ok(),
       );
 
@@ -103,6 +110,7 @@ impl WAL {
         page_pool,
         max_index,
         segment_rotate,
+        not_flushed,
       },
       replay_result,
     ))
@@ -189,7 +197,6 @@ impl WAL {
 
           let (segment, _) = buffer.take_segement();
           fsync.push(segment.fsync());
-          segment.deactive();
           self.segment_rotate.send(segment);
         },
         Err(failed) => unsafe {
@@ -199,9 +206,9 @@ impl WAL {
             continue;
           }
           let (segment, _) = failed.new.take_segement();
-          segment.truncate()?;
+          self.preloader.reuse(segment);
         },
-      }
+      };
     }
   }
 
@@ -238,6 +245,9 @@ impl WAL {
 
   pub fn twostep_close<'a>(&'a self) -> impl Fn() + 'a {
     self.segment_rotate.close();
+    while let Some(seg) = self.not_flushed.pop() {
+      self.preloader.reuse(seg);
+    }
 
     || {
       let guard = &epoch::pin();
@@ -261,5 +271,27 @@ impl WAL {
         }
       }
     }
+  }
+
+  pub fn reuse(&self, segment: WALSegment) {
+    self.preloader.reuse(segment);
+  }
+}
+
+fn handle_rotate(
+  preloader: Arc<SegmentPreload>,
+  not_flushed: Arc<SegQueue<WALSegment>>,
+) -> impl Fn((WALSegment, bool)) -> Result {
+  move |(segment, result)| {
+    match result {
+      true => {
+        while let Some(buffered) = not_flushed.pop() {
+          preloader.reuse(buffered);
+        }
+        preloader.reuse(segment)
+      }
+      false => not_flushed.push(segment),
+    }
+    Ok(())
   }
 }

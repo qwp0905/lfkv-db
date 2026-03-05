@@ -1,18 +1,26 @@
 use std::{
   path::PathBuf,
-  sync::atomic::{AtomicUsize, Ordering},
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
   time::Duration,
 };
 
-use crossbeam::channel::{unbounded, Receiver};
+use crossbeam::{
+  channel::{unbounded, Receiver},
+  queue::SegQueue,
+};
 
 use crate::{
   thread::{SingleWorkThread, WorkBuilder},
+  utils::ToArc,
   wal::WALSegment,
   Result,
 };
 
 pub struct SegmentPreload {
+  reuse: Arc<SegQueue<WALSegment>>,
   queue: Receiver<Result<WALSegment>>,
   thread: SingleWorkThread<(), Result>,
 }
@@ -25,12 +33,19 @@ impl SegmentPreload {
     max_len: usize,
   ) -> Self {
     let (tx, rx) = unbounded();
+    let reuse = SegQueue::<WALSegment>::new().to_arc();
+    let reuse_c = reuse.clone();
     let generation = AtomicUsize::new(generation);
     let thread = WorkBuilder::new()
       .name("wal segment preloader")
       .stack_size(2 << 20)
       .single()
       .no_timeout(move |_| {
+        if let Some(seg) = reuse_c.pop() {
+          seg.reuse(&prefix, generation.fetch_add(1, Ordering::Release))?;
+          tx.send(Ok(seg)).unwrap();
+          return Ok(());
+        }
         let segment = WALSegment::open_new(
           &prefix,
           generation.fetch_add(1, Ordering::Release),
@@ -43,7 +58,11 @@ impl SegmentPreload {
       });
 
     let _ = thread.send(());
-    Self { queue: rx, thread }
+    Self {
+      queue: rx,
+      thread,
+      reuse,
+    }
   }
 
   pub fn load(&self) -> Result<WALSegment> {
@@ -52,11 +71,23 @@ impl SegmentPreload {
     seg
   }
 
+  /**
+   * must call after close segment rotate thread
+   */
   pub fn close(&self) -> Result {
     self.thread.close();
     while let Ok(result) = self.queue.recv() {
       result.and_then(|seg| seg.truncate())?;
     }
+    while let Some(seg) = self.reuse.pop() {
+      seg.truncate()?;
+    }
     Ok(())
   }
+
+  pub fn reuse(&self, segment: WALSegment) {
+    self.reuse.push(segment)
+  }
 }
+unsafe impl Send for SegmentPreload {}
+unsafe impl Sync for SegmentPreload {}

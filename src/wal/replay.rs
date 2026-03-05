@@ -63,7 +63,6 @@ pub fn replay(
   let mut segments = Vec::new();
 
   let mut last_checkpoint = None as Option<usize>;
-  files.sort();
   for path in files.into_iter() {
     let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?; // only for replay. file number does not matter
     let len = wal.len()?;
