@@ -515,7 +515,7 @@ fn crash_writer() {
     .expect("engine bootstrap failed");
 
   let key_count: usize = 10000;
-  let thread_count = 100;
+  let thread_count = 500;
   let (task_tx, task_rx) =
     crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
   let engine = Arc::new(engine);

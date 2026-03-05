@@ -6,11 +6,10 @@ use std::{
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{disk::PageRef, error::Result};
 
-const U32_MASK: u64 = 0xFFFF_FFFF;
 const U16_MASK: u32 = 0xFFFF_FFFF;
 
 pub struct LogBuffer {
-  offset: AtomicU64, // entry pin (32bit) + offest (32bit)
+  offset: AtomicU64, // entry pin (24bit) + offest (40bit)
   entry: PageRef<WAL_BLOCK_SIZE>,
   commit_count: AtomicU32,
   index: usize,
@@ -18,6 +17,10 @@ pub struct LogBuffer {
   segment: *mut WALSegment,
 }
 impl LogBuffer {
+  const BIT: u64 = 40;
+  const MASK: u64 = (1 << Self::BIT) - 1;
+  const OFFSET_BYTE: u64 = 2;
+
   pub fn new(
     entry: PageRef<WAL_BLOCK_SIZE>,
     index: usize,
@@ -25,7 +28,7 @@ impl LogBuffer {
     segment: *mut WALSegment,
   ) -> Self {
     Self {
-      offset: AtomicU64::new(2),
+      offset: AtomicU64::new(Self::OFFSET_BYTE),
       entry,
       commit_count: AtomicU32::new(0),
       index,
@@ -38,10 +41,11 @@ impl LogBuffer {
     unsafe { &*self.segment_pin }.fetch_add(1, Ordering::Release);
   }
   pub fn pin_entry(&self, len: usize) -> (usize, u32) {
-    let prev = self
-      .offset
-      .fetch_add(((len as u64) & U32_MASK) | (1 << 32), Ordering::Release);
-    ((prev & U32_MASK) as usize, (prev >> 32) as u32)
+    let prev = self.offset.fetch_add(
+      ((len as u64) & Self::MASK) | (1 << Self::BIT),
+      Ordering::Release,
+    );
+    ((prev & Self::MASK) as usize, (prev >> Self::BIT) as u32)
   }
   pub fn apply_entry_len(&self, len: u32) {
     self.write_at(&((len & U16_MASK) as u16).to_be_bytes(), 0)
@@ -83,7 +87,7 @@ impl LogBuffer {
     }
   }
   pub fn load_offset(&self) -> usize {
-    (self.offset.load(Ordering::Acquire) & U32_MASK) as usize
+    (self.offset.load(Ordering::Acquire) & Self::MASK) as usize
   }
   pub fn load_segment_pinned(&self) -> usize {
     unsafe { &*self.segment_pin }.load(Ordering::Acquire)
