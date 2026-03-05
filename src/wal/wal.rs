@@ -242,8 +242,8 @@ impl WAL {
 
           (&*buffer.segment).write(buffer.index, &buffer.entry)?;
           if !is_new {
-            yield_now();
             (&*buffer.segment_pin).fetch_sub(1, Ordering::Release);
+            yield_now();
             continue;
           }
 
@@ -258,8 +258,8 @@ impl WAL {
         },
         Err(failed) => unsafe {
           if !is_new {
-            yield_now();
             (&*(&*failed.current.as_raw()).segment_pin).fetch_sub(1, Ordering::Release);
+            yield_now();
             continue;
           }
           let _ = Box::from_raw(failed.new.segment_pin);
