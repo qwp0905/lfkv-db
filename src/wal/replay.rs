@@ -16,12 +16,14 @@ pub struct ReplayResult {
   pub aborted: BTreeSet<usize>,
   pub redo: Vec<(usize, usize, Page)>,
   pub segments: Vec<WALSegment>,
+  pub generation: usize,
 }
 impl ReplayResult {
   fn empty() -> Self {
     Self {
       last_log_id: 0,
       last_tx_id: 0,
+      generation: 0,
       aborted: Default::default(),
       redo: Default::default(),
       segments: Default::default(),
@@ -37,11 +39,15 @@ pub fn replay(
   page_pool: &PagePool<WAL_BLOCK_SIZE>,
 ) -> Result<ReplayResult> {
   let mut files = Vec::new();
+  let mut generation = 0;
   for file in read_dir(base_dir).map_err(Error::IO)? {
     let file = file.map_err(Error::IO)?;
     if !file.file_name().to_string_lossy().starts_with(prefix) {
       continue;
     }
+    generation = generation.max(
+      WALSegment::parse_generation(&file.file_name().to_string_lossy(), &prefix)? + 1,
+    );
     files.push(file.path())
   }
 
@@ -111,5 +117,6 @@ pub fn replay(
     aborted: aborted.into_values().collect(),
     redo,
     segments,
+    generation,
   })
 }

@@ -41,5 +41,13 @@ pub enum Error {
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),
 }
+impl Error {
+  pub fn unknown<E>(err: E) -> Self
+  where
+    E: std::error::Error + Send + Sync + 'static,
+  {
+    Self::Unknown(Box::new(err))
+  }
+}
 
 pub type Result<T = ()> = std::result::Result<T, Error>;

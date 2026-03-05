@@ -29,10 +29,17 @@ where
 }
 
 pub enum SafeWork<T, R> {
+  NoTimeout(SafeFn<T, R>),
   WithTimeout(Duration, SafeFn<Option<T>, R>),
   Buffering(Duration, usize, SafeFn<(T, bool), R>, SafeFn<(), bool>),
 }
 impl<T, R> SafeWork<T, R> {
+  pub fn no_timeout<F>(f: F) -> Self
+  where
+    F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
+  {
+    SafeWork::NoTimeout(SafeFn(f.to_arc()))
+  }
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
     F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
@@ -60,6 +67,11 @@ where
 {
   pub fn run(&self, rx: Receiver<Context<T, R>>) {
     match self {
+      SafeWork::NoTimeout(work) => {
+        while let Ok(Context::Work((v, done))) = rx.recv() {
+          done.fulfill(work.call(v));
+        }
+      }
       SafeWork::WithTimeout(timeout, work) => loop {
         match rx.recv_timeout(*timeout) {
           Ok(Context::Work((v, done))) => done.fulfill(work.call(Some(v))),

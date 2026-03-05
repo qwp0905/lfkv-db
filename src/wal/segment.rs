@@ -32,6 +32,19 @@ pub struct WALSegment {
   flush: SingleWorkThread<(), bool>,
 }
 impl WALSegment {
+  pub fn parse_generation<A, B>(filename: &A, prefix: &B) -> Result<usize>
+  where
+    A: AsRef<str>,
+    B: AsRef<str>,
+  {
+    let generation: usize = filename
+      .as_ref()
+      .replace(prefix.as_ref(), "")
+      .trim_end_matches(FILE_SUFFIX)
+      .parse()
+      .map_err(Error::unknown)?;
+    Ok(generation)
+  }
   pub fn open_exists<P: AsRef<Path>>(
     path: P,
     flush_count: usize,
@@ -91,17 +104,43 @@ impl WALSegment {
     id: usize,
     flush_count: usize,
     flush_interval: Duration,
+    max_len: usize,
   ) -> Result<Self> {
-    Self::open_exists(
-      format!(
-        "{}{}{}",
-        prefix.as_ref().to_string_lossy(),
-        pad_start(id),
-        FILE_SUFFIX
-      ),
-      flush_count,
-      flush_interval,
-    )
+    let path = format!(
+      "{}{}{}",
+      prefix.as_ref().to_string_lossy(),
+      pad_start(id),
+      FILE_SUFFIX
+    );
+
+    let file = OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .direct_io()
+      .open(&path)
+      .map_err(Error::IO)?
+      .to_arc();
+
+    file
+      .set_len((WAL_BLOCK_SIZE * max_len) as u64)
+      .map_err(Error::IO)?;
+
+    let flush = WorkBuilder::new()
+      .name(format!("{} flush", &path))
+      .stack_size(2 << 20)
+      .single()
+      .buffering(
+        flush_interval,
+        flush_count,
+        |(_, r)| r,
+        handle_flush(file.clone()),
+      );
+    Ok(Self {
+      file,
+      flush,
+      path: path.into(),
+    })
   }
 
   pub fn fsync(&self) -> FsyncResult {

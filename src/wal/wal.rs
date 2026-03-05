@@ -15,7 +15,8 @@ use crate::{
 };
 
 use super::{
-  replay, FsyncResult, LogBuffer, LogRecord, ReplayResult, WALSegment, WAL_BLOCK_SIZE,
+  replay, FsyncResult, LogBuffer, LogRecord, ReplayResult, SegmentPreload, WALSegment,
+  WAL_BLOCK_SIZE,
 };
 
 pub struct WALConfig {
@@ -30,14 +31,12 @@ pub struct WALConfig {
 }
 
 pub struct WAL {
-  prefix: PathBuf,
+  preloader: SegmentPreload,
   last_log_id: AtomicUsize,
   buffer: Atomic<LogBuffer>,
   max_index: usize,
   page_pool: PagePool<WAL_BLOCK_SIZE>,
   segment_rotate: SingleWorkThread<WALSegment, Result>,
-  flush_count: usize,
-  flush_interval: Duration,
 }
 impl WAL {
   pub fn replay(
@@ -68,6 +67,14 @@ impl WAL {
 
     let prefix = PathBuf::from(config.base_dir).join(config.prefix);
 
+    let preloader = SegmentPreload::new(
+      prefix,
+      replay_result.generation,
+      config.group_commit_count,
+      config.group_commit_delay,
+      max_index,
+    );
+
     let segment_rotate = WorkBuilder::new()
       .name("wal checkpoint buffering")
       .stack_size(2 << 20)
@@ -85,25 +92,17 @@ impl WAL {
       page_pool.acquire(),
       0,
       AtomicUsize::new(0).to_raw_ptr(),
-      WALSegment::open_new(
-        &prefix,
-        replay_result.last_log_id,
-        config.group_commit_count,
-        config.group_commit_delay,
-      )?
-      .to_raw_ptr(),
+      preloader.load()?.to_raw_ptr(),
     );
 
     Ok((
       Self {
         last_log_id: AtomicUsize::new(replay_result.last_log_id),
-        prefix,
+        preloader,
         buffer: Atomic::new(buffer),
         page_pool,
         max_index,
         segment_rotate,
-        flush_count: config.group_commit_count,
-        flush_interval: config.group_commit_delay,
       },
       replay_result,
     ))
@@ -153,13 +152,7 @@ impl WAL {
       let mut index = buffer.get_index() + 1;
       if index >= self.max_index {
         index = 0;
-        segment = WALSegment::open_new(
-          &self.prefix,
-          log_id,
-          self.flush_count,
-          self.flush_interval,
-        )?
-        .to_raw_ptr();
+        segment = self.preloader.load()?.to_raw_ptr();
         pin = AtomicUsize::new(0).to_raw_ptr();
       }
 
@@ -263,6 +256,7 @@ impl WAL {
 
           let taken = ptr.into_owned();
           let (segment, _) = taken.take_segement();
+          let _ = self.preloader.close();
           return segment.close();
         }
       }

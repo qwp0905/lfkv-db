@@ -12,3 +12,6 @@ use replay::*;
 
 mod buffer;
 use buffer::*;
+
+mod preload;
+use preload::*;
