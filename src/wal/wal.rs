@@ -131,7 +131,7 @@ impl WAL {
           while ready > buffer.load_commit() {
             yield_now();
           }
-          buffer.write_at(&(((ready + 1) & 0xFFFF) as u16).to_be_bytes(), 0);
+          buffer.apply_entry_len(ready + 1);
           fsync.push(buffer.flush()?);
         }
         buffer.commit_entry();
@@ -188,7 +188,7 @@ impl WAL {
             yield_now();
           }
 
-          buffer.write_at(&((ready & 0xFFFF) as u16).to_be_bytes(), 0);
+          buffer.apply_entry_len(ready);
           buffer.write_to_disk()?;
           if !is_new {
             buffer.unpin_segment();

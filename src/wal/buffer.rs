@@ -7,6 +7,7 @@ use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{disk::PageRef, error::Result};
 
 const U32_MASK: u64 = 0xFFFF_FFFF;
+const U16_MASK: u32 = 0xFFFF_FFFF;
 
 pub struct LogBuffer {
   offset: AtomicU64,
@@ -41,6 +42,9 @@ impl LogBuffer {
       .offset
       .fetch_add(((len as u64) & U32_MASK) | (1 << 32), Ordering::Release);
     ((prev & U32_MASK) as usize, (prev >> 32) as u32)
+  }
+  pub fn apply_entry_len(&self, len: u32) {
+    self.write_at(&((len & U16_MASK) as u16).to_be_bytes(), 0)
   }
   pub fn write_at(&self, record: &[u8], offset: usize) {
     let ptr = self.entry.as_ref().as_ptr() as *mut u8;
