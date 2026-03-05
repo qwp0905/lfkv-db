@@ -10,6 +10,10 @@ impl<const T: usize> Page<T> {
     Self([0; T])
   }
 
+  pub fn as_ptr(&self) -> *const u8 {
+    self.0.as_ptr()
+  }
+
   pub fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.0.len());
     &mut self.0[start..end]

@@ -1,6 +1,6 @@
 use std::{
   path::PathBuf,
-  sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
+  sync::atomic::{AtomicUsize, Ordering},
   thread::yield_now,
   time::Duration,
 };
@@ -8,13 +8,15 @@ use std::{
 use crossbeam::epoch::{pin, Atomic, Owned};
 
 use crate::{
-  disk::{Page, PagePool, PageRef, PAGE_SIZE},
+  disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   utils::{LogFilter, ToRawPointer},
 };
 
-use super::{replay, FsyncResult, LogRecord, ReplayResult, WALSegment, WAL_BLOCK_SIZE};
+use super::{
+  replay, FsyncResult, LogBuffer, LogRecord, ReplayResult, WALSegment, WAL_BLOCK_SIZE,
+};
 
 pub struct WALConfig {
   pub base_dir: PathBuf,
@@ -26,50 +28,6 @@ pub struct WALConfig {
   pub group_commit_count: usize,
   pub max_file_size: usize,
 }
-
-struct OffsetTicket(AtomicU64);
-impl OffsetTicket {
-  pub fn new() -> Self {
-    Self(AtomicU64::new(2))
-  }
-  pub fn fetch(&self, len: u32) -> (usize, u32) {
-    let prev = self
-      .0
-      .fetch_add((len as u64) | (1 << 32), Ordering::Release);
-    ((prev & 0xFFFF_FFFF) as usize, (prev >> 32) as u32)
-  }
-  pub fn current(&self) -> usize {
-    (self.0.load(Ordering::Acquire) & 0xFFFF_FFFF) as usize
-  }
-}
-
-struct LogBuffer {
-  offset: OffsetTicket,
-  entry: PageRef<WAL_BLOCK_SIZE>,
-  commit_count: AtomicU32,
-  index: usize,
-  segment_pin: *mut AtomicUsize,
-  segment: *mut WALSegment,
-}
-impl LogBuffer {
-  fn new(
-    entry: PageRef<WAL_BLOCK_SIZE>,
-    index: usize,
-    segment_pin: *mut AtomicUsize,
-    segment: *mut WALSegment,
-  ) -> Self {
-    Self {
-      offset: OffsetTicket::new(),
-      entry,
-      commit_count: AtomicU32::new(0),
-      index,
-      segment_pin,
-      segment,
-    }
-  }
-}
-unsafe impl Send for LogBuffer {}
-unsafe impl Sync for LogBuffer {}
 
 pub struct WAL {
   prefix: PathBuf,
@@ -165,25 +123,19 @@ impl WAL {
       let buffer_ptr = self.buffer.load(Ordering::Acquire, guard);
       let buffer = unsafe { &*(buffer_ptr.as_raw()) };
 
-      unsafe { &*buffer.segment_pin }.fetch_add(1, Ordering::Release);
-      let (offset, ready) = buffer.offset.fetch(len as u32);
+      buffer.pin_segment();
+      let (offset, ready) = buffer.pin_entry(len);
       if offset + len < WAL_BLOCK_SIZE {
-        buffer.entry.as_ref().copy_nonoverlapping(&record, offset);
+        buffer.write_at(&record, offset);
         if flush {
-          while ready > buffer.commit_count.load(Ordering::Acquire) {
+          while ready > buffer.load_commit() {
             yield_now();
           }
-          buffer
-            .entry
-            .as_ref()
-            .copy_nonoverlapping(&(((ready + 1) & 0xFFFF) as u16).to_be_bytes(), 0);
-
-          let segment = unsafe { &*buffer.segment };
-          segment.write(buffer.index, &buffer.entry)?;
-          fsync.push(segment.fsync());
+          buffer.write_at(&(((ready + 1) & 0xFFFF) as u16).to_be_bytes(), 0);
+          fsync.push(buffer.flush()?);
         }
-        buffer.commit_count.fetch_add(1, Ordering::Release);
-        unsafe { &*buffer.segment_pin }.fetch_sub(1, Ordering::Release);
+        buffer.commit_entry();
+        buffer.unpin_segment();
 
         for f in fsync {
           f.wait()?;
@@ -192,12 +144,12 @@ impl WAL {
       }
 
       if offset >= WAL_BLOCK_SIZE {
-        unsafe { &*buffer.segment_pin }.fetch_sub(1, Ordering::Release);
+        buffer.unpin_segment();
         yield_now();
         continue;
       }
 
-      let mut index = buffer.index + 1;
+      let mut index = buffer.get_index() + 1;
       let (segment, pin, is_new) = if index >= self.max_index {
         index = 0;
         (
@@ -212,7 +164,8 @@ impl WAL {
           true,
         )
       } else {
-        (buffer.segment, buffer.segment_pin, false)
+        let (s, p) = buffer.copy_segment();
+        (s, p, false)
       };
 
       match self.buffer.compare_exchange(
@@ -231,39 +184,33 @@ impl WAL {
           guard.defer_destroy(buffer_ptr);
 
           let buffer = &*buffer_ptr.as_raw();
-          while ready > buffer.commit_count.load(Ordering::Acquire) {
+          while ready > buffer.load_commit() {
             yield_now();
           }
 
-          buffer
-            .entry
-            .as_ref()
-            .copy_nonoverlapping(&((ready & 0xFFFF) as u16).to_be_bytes(), 0);
-
-          (&*buffer.segment).write(buffer.index, &buffer.entry)?;
+          buffer.write_at(&((ready & 0xFFFF) as u16).to_be_bytes(), 0);
+          buffer.write_to_disk()?;
           if !is_new {
-            (&*buffer.segment_pin).fetch_sub(1, Ordering::Release);
+            buffer.unpin_segment();
             yield_now();
             continue;
           }
-
-          while (&*buffer.segment_pin).load(Ordering::Acquire) > 1 {
+          while buffer.load_segment_pinned() > 1 {
             yield_now();
           }
 
-          let segment = *Box::from_raw(buffer.segment);
+          let (segment, _) = buffer.take_segement();
           fsync.push(segment.fsync());
           self.segment_rotate.send(segment);
-          let _ = Box::from_raw(buffer.segment_pin);
         },
         Err(failed) => unsafe {
           if !is_new {
-            (&*(&*failed.current.as_raw()).segment_pin).fetch_sub(1, Ordering::Release);
+            (&*failed.current.as_raw()).unpin_segment();
             yield_now();
             continue;
           }
-          let _ = Box::from_raw(failed.new.segment_pin);
-          Box::from_raw(failed.new.segment).truncate()?;
+          let (segment, _) = (*failed.new).take_segement();
+          segment.truncate()?;
         },
       }
     }
@@ -309,20 +256,18 @@ impl WAL {
         unsafe {
           let ptr = self.buffer.load(Ordering::Acquire, guard);
           let buffer = &*ptr.as_raw();
-          let offset = buffer.offset.current();
-          if offset >= WAL_BLOCK_SIZE {
+          if buffer.load_offset() >= WAL_BLOCK_SIZE {
             yield_now();
             continue;
           }
-          if (&*buffer.segment_pin).load(Ordering::Acquire) > 0 {
+          if buffer.load_segment_pinned() > 0 {
             yield_now();
             continue;
           }
 
           let taken = ptr.into_owned();
-          Box::from_raw(taken.segment).close();
-          let _ = Box::from_raw(taken.segment_pin);
-          return;
+          let (segment, _) = taken.take_segement();
+          return segment.close();
         }
       }
     }

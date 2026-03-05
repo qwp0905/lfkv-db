@@ -9,3 +9,6 @@ pub use segment::*;
 
 mod replay;
 use replay::*;
+
+mod buffer;
+use buffer::*;
