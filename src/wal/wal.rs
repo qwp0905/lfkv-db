@@ -151,8 +151,7 @@ impl WAL {
 
       let (mut segment, mut pin) = buffer.copy_segment();
       let mut index = buffer.get_index() + 1;
-      let replaced = index >= self.max_index;
-      if replaced {
+      if index >= self.max_index {
         index = 0;
         segment = WALSegment::open_new(
           &self.prefix,
@@ -186,7 +185,7 @@ impl WAL {
 
           buffer.apply_entry_len(ready);
           buffer.write_to_disk()?;
-          if !replaced {
+          if buffer.get_index() + 1 < self.max_index {
             buffer.unpin_segment();
             yield_now();
             continue;
@@ -201,7 +200,7 @@ impl WAL {
           self.segment_rotate.send(segment);
         },
         Err(failed) => unsafe {
-          if !replaced {
+          if !buffer.get_index() + 1 < self.max_index {
             (&*failed.current.as_raw()).unpin_segment();
             yield_now();
             continue;
