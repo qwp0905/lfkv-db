@@ -4,7 +4,18 @@ use std::{
 };
 
 use crossbeam::channel::{unbounded, Sender};
-use lfkv_db::EngineBuilder;
+use lfkv_db::{EngineBuilder, LogLevel, Logger};
+
+struct DebugLogger;
+impl Logger for DebugLogger {
+  fn log(&self, level: LogLevel, msg: &[u8]) {
+    println!(
+      "[{}] {}",
+      Into::<&str>::into(level),
+      String::from_utf8_lossy(msg)
+    )
+  }
+}
 
 fn main() {
   let engine = Arc::new(
@@ -16,17 +27,19 @@ fn main() {
       .wal_file_size(32 << 20)
       .gc_thread_count(5)
       .io_thread_count(5)
+      .logger(DebugLogger)
+      .log_level(LogLevel::Trace)
       .build()
       .expect("bootstrap error"),
   );
 
   let count = 100_000_usize;
   let keys = (0..count)
-    .map(|i| format!("123{}", i).as_bytes().to_vec())
+    .map(|i| format!("123{:0>6}", i).as_bytes().to_vec())
     .collect::<Vec<Vec<u8>>>();
 
   let mut v = vec![];
-  let threads_count = 100;
+  let threads_count = 1000;
   let mut threads = Vec::new();
   let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
   for i in 0..threads_count {

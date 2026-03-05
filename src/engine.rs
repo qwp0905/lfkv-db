@@ -50,8 +50,9 @@ impl Engine {
     T: AsRef<Path>,
   {
     let logger = LogFilter::new(config.log_level, config.logger);
-    fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
+    logger.info("start engine");
 
+    fs::create_dir_all(config.base_path.as_ref()).map_err(Error::IO)?;
     let wal_config = WALConfig {
       prefix: "wal".into(),
       checkpoint_interval: config.checkpoint_interval,

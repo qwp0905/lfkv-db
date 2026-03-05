@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex /* , RwLock */};
+use std::sync::Arc;
 
 pub trait ToArc {
   fn to_arc(self) -> Arc<Self>;
@@ -10,12 +10,12 @@ impl<T> ToArc for T {
   }
 }
 
-pub trait ToArcMutex {
-  fn to_arc_mutex(self) -> Arc<Mutex<Self>>;
+#[allow(unused)]
+pub trait ToRawPointer {
+  fn to_raw_ptr(self) -> *mut Self;
 }
-impl<T> ToArcMutex for T {
-  #[inline]
-  fn to_arc_mutex(self) -> Arc<Mutex<Self>> {
-    Mutex::new(self).to_arc()
+impl<T> ToRawPointer for T {
+  fn to_raw_ptr(self) -> *mut Self {
+    Box::into_raw(Box::new(self))
   }
 }

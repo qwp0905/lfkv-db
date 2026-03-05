@@ -1,8 +1,6 @@
-use std::ops::Add;
-
 use crate::{
   disk::{Page, PAGE_SIZE},
-  Error, Result,
+  Error,
 };
 
 pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
@@ -21,7 +19,7 @@ pub enum Operation {
   ),
 }
 impl Operation {
-  fn type_u8(&self) -> u8 {
+  pub fn type_u8(&self) -> u8 {
     match self {
       Operation::Insert(_, _) => 1,
       Operation::Start => 2,
@@ -79,6 +77,22 @@ impl LogRecord {
 
   pub fn new_checkpoint(log_id: usize, last_log_id: usize) -> Self {
     LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id))
+  }
+
+  pub fn to_bytes_with_len(&self) -> Vec<u8> {
+    let mut vec = vec![0, 0, 0, 0, 0, 0]; // len + checksum
+
+    vec.extend_from_slice(&self.log_id.to_be_bytes());
+    vec.extend_from_slice(&self.tx_id.to_be_bytes());
+    vec.extend_from_slice(&self.operation.to_bytes());
+    let len = ((vec.len() - 2) as u16).to_be_bytes();
+
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&vec[6..]);
+
+    vec[2..6].copy_from_slice(&hasher.finalize().to_be_bytes());
+    vec[..2].copy_from_slice(&len);
+    vec
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
@@ -164,42 +178,6 @@ impl TryFrom<Vec<u8>> for LogRecord {
   }
 }
 
-#[derive(Debug)]
-pub struct LogEntry {
-  data: Vec<u8>,
-  index: usize,
-}
-impl LogEntry {
-  pub fn new(index: usize) -> Self {
-    Self {
-      data: vec![0; 2],
-      index,
-    }
-  }
-
-  pub fn get_index(&self) -> usize {
-    self.index
-  }
-
-  pub fn append(&mut self, record: &LogRecord) -> Result<()> {
-    let buf = record.to_bytes();
-    if self.data.len().add(buf.len().add(2)).gt(&WAL_BLOCK_SIZE) {
-      return Err(Error::EOF);
-    }
-    let len = u16::from_be_bytes(self.data[0..2].try_into().unwrap());
-    self
-      .data
-      .extend_from_slice(&(buf.len() as u16).to_be_bytes());
-    self.data.extend_from_slice(&buf);
-    self.data[0..2].copy_from_slice(&len.add(1).to_be_bytes());
-    Ok(())
-  }
-}
-impl From<LogEntry> for Page<WAL_BLOCK_SIZE> {
-  fn from(value: LogEntry) -> Self {
-    value.data.into()
-  }
-}
 impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
   fn from(value: &Page<WAL_BLOCK_SIZE>) -> Self {
     let mut data = vec![];
@@ -208,6 +186,7 @@ impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
       Ok(l) => l,
       Err(_) => return (data, true), // ignore error cause of partial write
     };
+
     for _ in 0..len {
       let size = match scanner.read_u16() {
         Ok(s) => s,
@@ -222,12 +201,6 @@ impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
       }
     }
     (data, false)
-  }
-}
-
-impl AsRef<[u8]> for LogEntry {
-  fn as_ref(&self) -> &[u8] {
-    &self.data
   }
 }
 
@@ -296,16 +269,17 @@ mod tests {
 
   #[test]
   fn test_entry_roundtrip() {
-    let mut entry = LogEntry::new(1);
+    let mut page = Page::new();
+    let mut writer = page.writer();
 
+    let _ = writer.write(&(3 as u16).to_be_bytes());
     let r1 = LogRecord::new_start(1, 1);
     let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
     let r3 = LogRecord::new_commit(3, 1);
-    entry.append(&r1).expect("append r1");
-    entry.append(&r2).expect("append r2");
-    entry.append(&r3).expect("append r3");
+    let _ = writer.write(&r1.to_bytes_with_len());
+    let _ = writer.write(&r2.to_bytes_with_len());
+    let _ = writer.write(&r3.to_bytes_with_len());
 
-    let page: Page<WAL_BLOCK_SIZE> = entry.into();
     let (d, complete) = (&page).into();
     assert_eq!(complete, false);
 
@@ -319,33 +293,6 @@ mod tests {
     assert_eq!(d[2].log_id, 3);
     assert_eq!(d[2].tx_id, 1);
     assert!(matches!(d[2].operation, Operation::Commit));
-  }
-
-  #[test]
-  fn test_entry_overflow() {
-    let mut entry = LogEntry::new(0);
-    let mut count = 0;
-    loop {
-      let r = LogRecord::new_start(0, 0);
-      if entry.append(&r).is_err() {
-        break;
-      }
-      count += 1;
-    }
-    assert!(count > 0);
-
-    // insert records are larger, so fewer fit before exceeding WAL_BLOCK_SIZE
-    let mut entry2 = LogEntry::new(0);
-    let r = LogRecord::new_insert(0, 0, 0, Page::new());
-    let mut insert_count = 0;
-    loop {
-      if entry2.append(&r).is_err() {
-        break;
-      }
-      insert_count += 1;
-    }
-    assert!(insert_count > 0);
-    assert!(insert_count < count);
   }
 
   #[test]

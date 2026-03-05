@@ -295,7 +295,7 @@ fn test_crash_recovery() {
     thread::sleep(Duration::from_millis(50));
     stop.store(true, Ordering::Release);
     for h in handles {
-      let _ = h.join();
+      h.join().expect("join error");
     }
     // engine dropped here
   }

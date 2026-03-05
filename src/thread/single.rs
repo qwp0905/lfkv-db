@@ -109,8 +109,8 @@ where
   }
 
   pub fn close(&self) {
-    self.channel.must_send(Context::Term);
     if let Some(v) = self.threads.take() {
+      self.channel.must_send(Context::Term);
       let _ = v.join();
     }
   }
@@ -185,6 +185,15 @@ mod tests {
       panic!("Panic was not converted to Error::Panic");
     }
 
+    thread.close();
+  }
+
+  #[test]
+  fn test_multiple_close() {
+    let work = SafeWork::with_timeout(Duration::from_secs(10), |_: Option<()>| {});
+    let thread = SingleWorkThread::new("test-multiple-close", DEFAULT_STACK_SIZE, work);
+
+    thread.close();
     thread.close();
   }
 }

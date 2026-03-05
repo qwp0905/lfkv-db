@@ -1,7 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet},
   fs::read_dir,
-  sync::Arc,
   time::Duration,
 };
 
@@ -35,7 +34,7 @@ pub fn replay(
   prefix: &str,
   flush_count: usize,
   flush_interval: Duration,
-  page_pool: Arc<PagePool<WAL_BLOCK_SIZE>>,
+  page_pool: &PagePool<WAL_BLOCK_SIZE>,
 ) -> Result<ReplayResult> {
   let mut files = Vec::new();
   for file in read_dir(base_dir).map_err(Error::IO)? {
@@ -53,17 +52,18 @@ pub fn replay(
   let mut tx_id = 0;
   let mut log_id = 0;
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
-  let mut aborted = BTreeSet::new();
+  let mut aborted = BTreeMap::<usize, usize>::new();
 
   let mut segments = Vec::new();
 
+  let mut last_checkpoint = None as Option<usize>;
   files.sort();
   for path in files.into_iter() {
-    let wal = WALSegment::open_exists(path, flush_count, flush_interval)?; // only for replay. file number does not matter
+    let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?; // only for replay. file number does not matter
     let len = wal.len()?;
     let mut records = vec![];
 
-    for i in 0..=len {
+    for i in 0..len {
       let mut page = page_pool.acquire();
       wal.read(i, &mut page)?;
 
@@ -73,14 +73,13 @@ pub fn replay(
         break;
       }
     }
-    records.sort_by_key(|(_, r)| r.log_id);
-
-    if let Some((_, record)) = records.last() {
-      log_id = record.log_id;
-    }
 
     for (_, record) in records {
+      log_id = record.log_id.max(log_id);
       tx_id = tx_id.max(record.tx_id);
+      if last_checkpoint.map_or(false, |c| c >= record.log_id) {
+        continue;
+      }
       match record.operation {
         Operation::Insert(i, page) => {
           redo.insert(record.log_id, (i, page));
@@ -88,25 +87,29 @@ pub fn replay(
         Operation::Start => {}
         Operation::Commit => {}
         Operation::Abort => {
-          aborted.insert(record.tx_id);
+          aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id) => {
           redo = redo.split_off(&last_log_id);
+          aborted = aborted.split_off(&last_log_id);
+          last_checkpoint = Some(last_log_id)
         }
       };
     }
 
     segments.push(wal);
   }
+  let mut redo: Vec<(usize, usize, Page)> = redo
+    .into_iter()
+    .map(|(id, (index, data))| (id, index, data))
+    .collect();
+  redo.sort_by_key(|(id, _, _)| *id);
 
   Ok(ReplayResult {
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
-    aborted,
-    redo: redo
-      .into_iter()
-      .map(|(id, (index, data))| (id, index, data))
-      .collect(),
+    aborted: aborted.into_values().collect(),
+    redo,
     segments,
   })
 }

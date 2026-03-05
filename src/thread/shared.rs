@@ -256,4 +256,16 @@ mod tests {
 
     thread.close();
   }
+
+  #[test]
+  fn test_multiple_close() {
+    let thread_count = 4;
+    let work = |_: ()| {};
+    let thread =
+      SharedWorkThread::new("test-multi-close", DEFAULT_STACK_SIZE, thread_count, work);
+
+    thread.close();
+    thread.close();
+    thread.close();
+  }
 }

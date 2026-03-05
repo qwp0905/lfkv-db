@@ -1,5 +1,3 @@
-// use std::ops::{Add, AddAssign, Index, IndexMut};
-
 use crate::error::{Error, Result};
 
 pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
@@ -12,9 +10,15 @@ impl<const T: usize> Page<T> {
     Self([0; T])
   }
 
-  fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
+  pub fn range_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
     let end = end.min(self.0.len());
     &mut self.0[start..end]
+  }
+
+  pub fn copy_nonoverlapping<B: AsRef<[u8]>>(&self, data: &B, offset: usize) {
+    let ptr = self.0.as_ptr() as *mut u8;
+    let data = data.as_ref();
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset), data.len()) };
   }
 
   pub fn copy(&self) -> Self {
@@ -74,6 +78,7 @@ impl<const T: usize> From<&[u8]> for Page<T> {
   }
 }
 
+#[derive(Debug)]
 pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
   inner: &'a [u8; T],
   offset: usize,

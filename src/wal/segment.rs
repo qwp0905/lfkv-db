@@ -8,7 +8,7 @@ use std::{
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
-  disk::{DirectIO, PageRef, Pread, Pwrite},
+  disk::{DirectIO, Page, Pread, Pwrite},
   error::Result,
   thread::{SingleWorkThread, WorkBuilder, WorkResult},
   utils::ToArc,
@@ -63,14 +63,18 @@ impl WALSegment {
     })
   }
 
-  pub fn read(&self, index: usize, page: &mut PageRef<WAL_BLOCK_SIZE>) -> Result {
+  pub fn read<P: AsMut<Page<WAL_BLOCK_SIZE>>>(
+    &self,
+    index: usize,
+    page: &mut P,
+  ) -> Result {
     self
       .file
       .pread(page.as_mut().as_mut(), (index * WAL_BLOCK_SIZE) as u64)
       .map(|_| ())
       .map_err(Error::IO)
   }
-  pub fn write(&self, index: usize, page: &PageRef<WAL_BLOCK_SIZE>) -> Result {
+  pub fn write<P: AsRef<Page<WAL_BLOCK_SIZE>>>(&self, index: usize, page: &P) -> Result {
     self
       .file
       .pwrite(page.as_ref().as_ref(), (index * WAL_BLOCK_SIZE) as u64)
@@ -79,7 +83,7 @@ impl WALSegment {
   }
   pub fn len(&self) -> Result<usize> {
     let metadata = self.file.metadata().map_err(Error::IO)?;
-    Ok(metadata.len() as usize / WAL_BLOCK_SIZE)
+    Ok((metadata.len() as usize).div_ceil(WAL_BLOCK_SIZE))
   }
 
   pub fn open_new<P: AsRef<Path>>(

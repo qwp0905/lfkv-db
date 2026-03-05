@@ -14,6 +14,7 @@ pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
   let node = CursorNode::initial_state();
   let mut node_slot = orchestrator.alloc()?;
   node_slot.as_mut().serialize_from(&node)?;
+  orchestrator.log(0, &node_slot)?;
 
   let root = TreeHeader::new(node_slot.get_index());
   let mut root_slot = orchestrator.fetch(HEADER_INDEX)?.for_write();

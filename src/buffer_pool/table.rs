@@ -1,6 +1,7 @@
 use std::{
   hash::{BuildHasher, RandomState},
   sync::{Mutex, MutexGuard},
+  thread::yield_now,
 };
 
 use super::LRUShard;
@@ -91,6 +92,7 @@ impl LRUTable {
       let ((evicted, id), evicted_hash) = shard.lru.evict(&self.hasher).unwrap();
       if !guard_fn(id) {
         shard.lru.insert(evicted, id, evicted_hash, &self.hasher);
+        yield_now();
         continue;
       }
 
