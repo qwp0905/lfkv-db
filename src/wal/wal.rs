@@ -5,7 +5,7 @@ use std::{
   time::Duration,
 };
 
-use crossbeam::epoch::{pin, Atomic, Owned};
+use crossbeam::epoch::{self, Atomic, Owned};
 
 use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
@@ -116,7 +116,7 @@ impl WAL {
     let log_id = self.last_log_id.fetch_add(1, Ordering::Release);
     let record = create_record(log_id).to_bytes_with_len();
     let len = record.len();
-    let guard = &pin();
+    let guard = &epoch::pin();
     let mut fsync: Vec<FsyncResult> = vec![];
 
     loop {
@@ -149,24 +149,20 @@ impl WAL {
         continue;
       }
 
+      let (mut segment, mut pin) = buffer.copy_segment();
       let mut index = buffer.get_index() + 1;
-      let (segment, pin, is_new) = if index >= self.max_index {
+      let replaced = index >= self.max_index;
+      if replaced {
         index = 0;
-        (
-          WALSegment::open_new(
-            &self.prefix,
-            log_id,
-            self.flush_count,
-            self.flush_interval,
-          )?
-          .to_raw_ptr(),
-          AtomicUsize::new(0).to_raw_ptr(),
-          true,
-        )
-      } else {
-        let (s, p) = buffer.copy_segment();
-        (s, p, false)
-      };
+        segment = WALSegment::open_new(
+          &self.prefix,
+          log_id,
+          self.flush_count,
+          self.flush_interval,
+        )?
+        .to_raw_ptr();
+        pin = AtomicUsize::new(0).to_raw_ptr();
+      }
 
       match self.buffer.compare_exchange(
         buffer_ptr,
@@ -190,7 +186,7 @@ impl WAL {
 
           buffer.apply_entry_len(ready);
           buffer.write_to_disk()?;
-          if !is_new {
+          if !replaced {
             buffer.unpin_segment();
             yield_now();
             continue;
@@ -205,7 +201,7 @@ impl WAL {
           self.segment_rotate.send(segment);
         },
         Err(failed) => unsafe {
-          if !is_new {
+          if !replaced {
             (&*failed.current.as_raw()).unpin_segment();
             yield_now();
             continue;
@@ -252,7 +248,7 @@ impl WAL {
     self.segment_rotate.close();
 
     || {
-      let guard = &pin();
+      let guard = &epoch::pin();
       loop {
         unsafe {
           let ptr = self.buffer.load(Ordering::Acquire, guard);
