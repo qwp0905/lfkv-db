@@ -8,10 +8,12 @@ pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
 pub struct Page<const T: usize = PAGE_SIZE>([u8; T]);
 
 impl<const T: usize> Page<T> {
+  #[inline]
   pub fn new() -> Self {
     Self([0; T])
   }
 
+  #[inline]
   pub fn as_ptr(&self) -> *const u8 {
     self.0.as_ptr()
   }
