@@ -19,12 +19,6 @@ impl<const T: usize> Page<T> {
     &mut self.0[start..end]
   }
 
-  pub fn copy_nonoverlapping<B: AsRef<[u8]>>(&self, data: &B, offset: usize) {
-    let ptr = self.0.as_ptr() as *mut u8;
-    let data = data.as_ref();
-    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset), data.len()) };
-  }
-
   pub fn copy(&self) -> Self {
     let mut p = Self::new();
     p.as_mut().copy_from_slice(self.as_ref());
