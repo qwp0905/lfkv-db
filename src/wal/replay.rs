@@ -63,7 +63,6 @@ pub fn replay(
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
   let mut started = HashSet::<usize>::new();
-  let mut closed = HashSet::<usize>::new();
 
   let mut segments = Vec::new();
 
@@ -78,13 +77,13 @@ pub fn replay(
       wal.read(i, &mut page)?;
 
       let (r, complete) = page.as_ref().into();
-      records.extend(r.into_iter().map(|record| (i, record)));
+      records.extend(r.into_iter());
       if complete {
         break;
       }
     }
 
-    for (_, record) in records {
+    for record in records {
       log_id = record.log_id.max(log_id);
       tx_id = tx_id.max(record.tx_id);
       if last_checkpoint.map_or(false, |c| c >= record.log_id) {
@@ -98,10 +97,10 @@ pub fn replay(
           started.insert(record.tx_id);
         }
         Operation::Commit => {
-          closed.insert(record.tx_id);
+          started.remove(&record.tx_id);
         }
         Operation::Abort => {
-          closed.insert(record.tx_id);
+          started.remove(&record.tx_id);
           aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id) => {
@@ -123,10 +122,7 @@ pub fn replay(
   Ok(ReplayResult {
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
-    aborted: aborted
-      .into_values()
-      .chain(started.into_iter().filter(|i| !closed.contains(&i)))
-      .collect(),
+    aborted: aborted.into_values().chain(started.into_iter()).collect(),
     redo,
     segments,
     generation,

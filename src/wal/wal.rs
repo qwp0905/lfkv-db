@@ -164,7 +164,7 @@ impl WAL {
         pin = AtomicUsize::new(0).to_raw_ptr();
       }
 
-      match self.buffer.compare_exchange(
+      if let Err(failed) = self.buffer.compare_exchange(
         buffer_ptr,
         Owned::init(LogBuffer::new(
           self.page_pool.acquire(),
@@ -176,39 +176,37 @@ impl WAL {
         Ordering::Acquire,
         guard,
       ) {
-        Ok(_) => unsafe {
-          guard.defer_destroy(buffer_ptr);
+        if buffer.get_index() + 1 < self.max_index {
+          unsafe { &*failed.current.as_raw() }.unpin_segment();
+          yield_now();
+          continue;
+        }
+        let (segment, _) = failed.new.take_segement();
+        self.preloader.reuse(segment);
+        continue;
+      }
 
-          let buffer = &*buffer_ptr.as_raw();
-          while ready > buffer.load_commit() {
-            yield_now();
-          }
+      unsafe { guard.defer_destroy(buffer_ptr) };
 
-          buffer.apply_entry_len(ready);
-          buffer.write_to_disk()?;
-          if buffer.get_index() + 1 < self.max_index {
-            buffer.unpin_segment();
-            yield_now();
-            continue;
-          }
-          while buffer.load_segment_pinned() > 1 {
-            yield_now();
-          }
+      let buffer = unsafe { &*buffer_ptr.as_raw() };
+      while ready > buffer.load_commit() {
+        yield_now();
+      }
 
-          let (segment, _) = buffer.take_segement();
-          fsync.push(segment.fsync());
-          self.wait_checkpoint.send(segment);
-        },
-        Err(failed) => unsafe {
-          if !buffer.get_index() + 1 < self.max_index {
-            (&*failed.current.as_raw()).unpin_segment();
-            yield_now();
-            continue;
-          }
-          let (segment, _) = failed.new.take_segement();
-          self.preloader.reuse(segment);
-        },
-      };
+      buffer.apply_entry_len(ready);
+      buffer.write_to_disk()?;
+      if buffer.get_index() + 1 < self.max_index {
+        buffer.unpin_segment();
+        yield_now();
+        continue;
+      }
+      while buffer.load_segment_pinned() > 1 {
+        yield_now();
+      }
+
+      let (segment, _) = buffer.take_segement();
+      fsync.push(segment.fsync());
+      self.wait_checkpoint.send(segment);
     }
   }
 

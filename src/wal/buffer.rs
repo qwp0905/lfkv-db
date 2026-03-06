@@ -6,7 +6,7 @@ use std::{
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{disk::PageRef, error::Result};
 
-const U16_MASK: u32 = 0xFFFF_FFFF;
+const U16_MASK: u32 = 0xFFFF;
 
 pub struct LogBuffer {
   offset: AtomicU64, // entry pin (24bit) + offest (40bit)
