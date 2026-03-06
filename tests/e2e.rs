@@ -596,7 +596,13 @@ fn test_process_crash_recovery() {
   // Phase 2: reopen engine and verify all committed keys survived
   {
     let engine = build_engine(&dir);
-    let tx = engine.new_transaction().unwrap();
+    let mut tx = engine.new_transaction().unwrap();
+    // let mut c = 0;
+    // let mut iter = tx.scan_all().unwrap();
+    // while let Ok(Some(_)) = iter.try_next() {
+    //   c += 1;
+    // }
+    // println!("{c} {}", committed.len());
     for i in &committed {
       let key = format!("key-{:06}", i).into_bytes();
       let expected = format!("val-{:06}", i).into_bytes();
@@ -608,6 +614,7 @@ fn test_process_crash_recovery() {
         i
       );
     }
+    tx.commit().unwrap();
   }
 
   eprintln!(

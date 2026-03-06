@@ -63,6 +63,7 @@ pub fn replay(
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
   let mut started = HashSet::<usize>::new();
+  let mut closed = HashSet::<usize>::new();
 
   let mut segments = Vec::new();
 
@@ -97,10 +98,10 @@ pub fn replay(
           started.insert(record.tx_id);
         }
         Operation::Commit => {
-          started.remove(&record.tx_id);
+          closed.insert(record.tx_id);
         }
         Operation::Abort => {
-          started.remove(&record.tx_id);
+          closed.insert(record.tx_id);
           aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id) => {
@@ -122,7 +123,10 @@ pub fn replay(
   Ok(ReplayResult {
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
-    aborted: aborted.into_values().chain(started.into_iter()).collect(),
+    aborted: aborted
+      .into_values()
+      .chain(started.into_iter().filter(|c| !closed.contains(&c)))
+      .collect(),
     redo,
     segments,
     generation,
