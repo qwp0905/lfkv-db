@@ -12,7 +12,7 @@ use crate::{
   utils::{ShortenedMutex, ToArc},
 };
 
-use super::{oneshot, BatchWorkResult, Context, SafeFn, WorkResult};
+use super::{oneshot, BatchWorkResult, Context, SharedFn, WorkResult};
 
 fn pop_or_steal<A>(
   local: &Worker<A>,
@@ -47,7 +47,7 @@ fn worker_loop<T, R>(
   local: Worker<Context<T, R>>,
   global: Arc<Injector<Context<T, R>>>,
   stealers: Arc<Vec<Stealer<Context<T, R>>>>,
-  work: SafeFn<T, R>,
+  work: SharedFn<T, R>,
 ) -> impl Fn()
 where
   T: Send + UnwindSafe + 'static,
@@ -111,7 +111,7 @@ where
           local,
           Arc::clone(&global),
           Arc::clone(&stealers),
-          SafeFn(build(i)?),
+          SharedFn::new(build(i)?),
         ))
         .unwrap();
 

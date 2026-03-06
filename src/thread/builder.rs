@@ -92,7 +92,7 @@ impl SafeWorkBuilder {
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(T) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
     SingleWorkThread::new(
       self.builder.name,
@@ -105,7 +105,7 @@ impl SafeWorkBuilder {
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
     SingleWorkThread::new(
       self.builder.name,
@@ -124,8 +124,8 @@ impl SafeWorkBuilder {
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    E: Fn((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
-    F: Fn(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
+    E: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
     SingleWorkThread::new(
       self.builder.name,
@@ -146,7 +146,7 @@ where
 {
   pub fn with_timeout<F>(self, timeout: Duration, f: F) -> Result<SingleWorkThread<T, R>>
   where
-    F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
     SingleWorkThread::from_channel(
       self.builder.name,

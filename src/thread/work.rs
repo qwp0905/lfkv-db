@@ -9,7 +9,7 @@ use crossbeam::channel::{Receiver, RecvTimeoutError};
 use super::{Oneshot, OneshotFulfill};
 use crate::{
   error::{Error, Result},
-  utils::{AsTimer, SafeCallable, ToArc},
+  utils::{AsTimer, SafeCallable, SafeCallableMut},
 };
 
 pub enum Context<T, R> {
@@ -17,46 +17,73 @@ pub enum Context<T, R> {
   Term,
 }
 
-pub struct SafeFn<T, R>(pub Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>);
-impl<T, R> SafeFn<T, R>
+pub struct SharedFn<T, R>(Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>);
+impl<T, R> SharedFn<T, R>
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
+  pub fn new(f: Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>) -> Self {
+    Self(f)
+  }
+  #[inline]
   pub fn call(&self, v: T) -> Result<R> {
     self.0.as_ref().safe_call(v).map_err(Error::Panic)
   }
 }
 
-pub enum SafeWork<T, R> {
-  NoTimeout(SafeFn<T, R>),
-  WithTimeout(Duration, SafeFn<Option<T>, R>),
-  Buffering(Duration, usize, SafeFn<(T, bool), R>, SafeFn<(), bool>),
+pub struct SingleFn<T, R>(Box<dyn FnMut(T) -> R + RefUnwindSafe + Send + Sync>);
+impl<T, R> SingleFn<T, R>
+where
+  T: Send + UnwindSafe + 'static,
+  R: Send + 'static,
+{
+  pub fn new<F>(f: F) -> Self
+  where
+    F: FnMut(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+  {
+    Self(Box::new(f))
+  }
+
+  #[inline]
+  pub fn call(&mut self, v: T) -> Result<R> {
+    self.0.as_mut().safe_call_mut(v).map_err(Error::Panic)
+  }
 }
-impl<T, R> SafeWork<T, R> {
+
+pub enum SafeWork<T, R> {
+  NoTimeout(SingleFn<T, R>),
+  WithTimeout(Duration, SingleFn<Option<T>, R>),
+  Buffering(Duration, usize, SingleFn<(T, bool), R>, SingleFn<(), bool>),
+}
+impl<T, R> SafeWork<T, R>
+where
+  T: Send + UnwindSafe + 'static,
+  R: Send + 'static,
+{
   pub fn no_timeout<F>(f: F) -> Self
   where
-    F: Fn(T) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(T) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::NoTimeout(SafeFn(f.to_arc()))
+    SafeWork::NoTimeout(SingleFn::new(f))
   }
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
-    F: Fn(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SafeWork::WithTimeout(timeout, SafeFn(f.to_arc()))
+    SafeWork::WithTimeout(timeout, SingleFn::new(f))
   }
 
   pub fn buffering<F, E>(timeout: Duration, count: usize, each: F, before_each: E) -> Self
   where
-    F: Fn((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
-    E: Fn(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
+    E: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
     SafeWork::Buffering(
       timeout,
       count,
-      SafeFn(each.to_arc()),
-      SafeFn(before_each.to_arc()),
+      SingleFn::new(each),
+      SingleFn::new(before_each),
     )
   }
 }
@@ -65,7 +92,7 @@ where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
-  pub fn run(&self, rx: Receiver<Context<T, R>>) {
+  pub fn run(&mut self, rx: Receiver<Context<T, R>>) {
     match self {
       SafeWork::NoTimeout(work) => {
         while let Ok(Context::Work((v, done))) = rx.recv() {
@@ -84,7 +111,7 @@ where
       SafeWork::Buffering(timeout, count, each, before_each) => {
         let mut buffer = Vec::<(T, OneshotFulfill<Result<R>>)>::with_capacity(*count);
         let mut timer = timeout.as_timer();
-        let flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
+        let mut flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
           let r = before_each.call(()).unwrap_or(false);
           for (v, done) in buffer.drain(..) {
             done.fulfill(each.call((v, r)));
