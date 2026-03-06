@@ -742,6 +742,11 @@ fn write_not_commit() {
   t.insert(key.as_bytes().to_vec(), key.as_bytes().to_vec())
     .expect("insert failed");
 
+  let mut t2 = engine.new_transaction().expect("start failed.");
+  t2.insert(vec![1, 2, 3], vec![1, 2, 3])
+    .expect("insert failed");
+  t2.commit().expect("commit failed");
+
   std::process::exit(0);
 }
 
