@@ -11,7 +11,7 @@ use std::{
 use super::constant::{DATA_PATH, FILE_SUFFIX};
 use crate::{
   buffer_pool::BufferPoolConfig,
-  cursor::{initialize, Cursor, GarbageCollectionConfig},
+  cursor::{Cursor, GarbageCollectionConfig},
   disk::PAGE_SIZE,
   error::{Error, Result},
   transaction::TxOrchestrator,
@@ -76,18 +76,21 @@ impl Engine {
       interval: config.gc_trigger_interval,
       thread_count: config.gc_thread_count,
     };
-    let orchestrator =
-      TxOrchestrator::new(buffer_pool_config, wal_config, gc_config, logger.clone())?
-        .to_arc();
+    let (orchestrator, initial_state) =
+      TxOrchestrator::new(buffer_pool_config, wal_config, gc_config, logger.clone())?;
 
-    initialize(orchestrator.clone())?;
-
-    logger.info("engine initialized.");
-    Ok(Self {
-      orchestrator,
+    let engine = Self {
+      orchestrator: orchestrator.to_arc(),
       available: AtomicBool::new(true),
       logger,
-    })
+    };
+    if initial_state {
+      engine.logger.info("engine has initial state.");
+      let cursor = engine.new_transaction()?;
+      cursor.initialize()?;
+    }
+
+    Ok(engine)
   }
 
   pub fn new_transaction(&self) -> Result<Cursor> {

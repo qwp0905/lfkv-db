@@ -726,3 +726,53 @@ fn insert_and_remove_and_gc() {
   assert_eq!(c, count + 1);
   t.commit().expect("commit error");
 }
+
+#[test]
+#[ignore]
+fn write_not_commit() {
+  let dir = std::env::var("CRASH_DIR").expect("CRASH_DIR not set");
+  let key = std::env::var("CRASH_KEY").expect("CRASH_KEY not set");
+  let engine = EngineBuilder::new(std::path::Path::new(&dir))
+    .group_commit_delay(Duration::from_millis(1))
+    .group_commit_count(10)
+    .build()
+    .expect("engine bootstrap failed");
+
+  let t = engine.new_transaction().expect("start failed.");
+  t.insert(key.as_bytes().to_vec(), key.as_bytes().to_vec())
+    .expect("insert failed");
+
+  std::process::exit(0);
+}
+
+#[test]
+fn test_start_not_commit() {
+  use std::io::stdout;
+  use std::process::Command;
+  let dir = tempdir_in(".").unwrap();
+
+  let key = format!("key");
+  // Phase 1: spawn child that writes concurrently then crashes
+  if !Command::new(std::env::current_exe().unwrap())
+    .arg("--ignored")
+    .arg("--exact")
+    .arg("write_not_commit")
+    .arg("--")
+    .arg("--nocapture")
+    .env("CRASH_DIR", dir.path())
+    .env("CRASH_KEY", key.clone())
+    .stdout(stdout())
+    .stderr(stdout())
+    .status()
+    .expect("failed to spawn write_not_commit")
+    .success()
+  {
+    panic!("fail to run child")
+  }
+
+  let engine = build_engine(&dir);
+
+  let mut t = engine.new_transaction().expect("tx start error");
+  assert_eq!(t.get(&key.into_bytes()).expect("find error"), None);
+  t.commit().expect("commit error")
+}

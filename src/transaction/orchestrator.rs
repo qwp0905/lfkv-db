@@ -27,7 +27,7 @@ impl TxOrchestrator {
     wal_config: WALConfig,
     gc_config: GarbageCollectionConfig,
     logger: LogFilter,
-  ) -> Result<Self> {
+  ) -> Result<(Self, bool)> {
     let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
     let checkpoint_ch = SingleWorkInput::new();
@@ -60,10 +60,11 @@ impl TxOrchestrator {
     )
     .to_arc();
 
-    if disk_len != 0 {
+    if !replay.is_new {
       logger.info("create initial checkpoint");
       let log_id = wal.current_log_id();
       gc.release_orphand(disk_len)?;
+      logger.info("orphand block has released successfully.");
       gc.run()?;
       buffer_pool.flush()?;
       wal.checkpoint_and_flush(log_id)?;
@@ -83,15 +84,18 @@ impl TxOrchestrator {
         handle_checkpoint(wal.clone(), buffer_pool.clone(), gc.clone()),
       )?;
 
-    Ok(Self {
-      checkpoint,
-      wal,
-      free_list,
-      buffer_pool,
-      version_visibility,
-      gc,
-      logger,
-    })
+    Ok((
+      Self {
+        checkpoint,
+        wal,
+        free_list,
+        buffer_pool,
+        version_visibility,
+        gc,
+        logger,
+      },
+      replay.is_new,
+    ))
   }
   pub fn fetch(&self, index: usize) -> Result<PageSlot<'_>> {
     self.buffer_pool.read(index)

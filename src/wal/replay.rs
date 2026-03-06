@@ -1,5 +1,5 @@
 use std::{
-  collections::{BTreeMap, BTreeSet},
+  collections::{BTreeMap, BTreeSet, HashSet},
   fs::read_dir,
   time::Duration,
 };
@@ -17,6 +17,7 @@ pub struct ReplayResult {
   pub redo: Vec<(usize, usize, Page)>,
   pub segments: Vec<WALSegment>,
   pub generation: usize,
+  pub is_new: bool,
 }
 impl ReplayResult {
   fn empty() -> Self {
@@ -27,6 +28,7 @@ impl ReplayResult {
       aborted: Default::default(),
       redo: Default::default(),
       segments: Default::default(),
+      is_new: true,
     }
   }
 }
@@ -59,6 +61,7 @@ pub fn replay(
   let mut log_id = 0;
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
+  let mut started = HashSet::<usize>::new();
 
   let mut segments = Vec::new();
 
@@ -89,9 +92,14 @@ pub fn replay(
         Operation::Insert(i, page) => {
           redo.insert(record.log_id, (i, page));
         }
-        Operation::Start => {}
-        Operation::Commit => {}
+        Operation::Start => {
+          started.insert(record.tx_id);
+        }
+        Operation::Commit => {
+          started.remove(&record.tx_id);
+        }
         Operation::Abort => {
+          started.remove(&record.tx_id);
           aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id) => {
@@ -113,9 +121,10 @@ pub fn replay(
   Ok(ReplayResult {
     last_log_id: log_id + 1,
     last_tx_id: tx_id + 1,
-    aborted: aborted.into_values().collect(),
+    aborted: aborted.into_values().chain(started.into_iter()).collect(),
     redo,
     segments,
     generation,
+    is_new: false,
   })
 }

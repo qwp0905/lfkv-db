@@ -40,8 +40,8 @@ impl Serializable for FreeBlock {
     writer.write_usize(self.next.unwrap_or(0))?;
     writer.write_usize(self.prev.unwrap_or(0))?;
     writer.write_usize(self.list.len())?;
-    for i in self.list.iter() {
-      writer.write_usize(*i)?;
+    for &i in self.list.iter() {
+      writer.write_usize(i)?;
     }
     Ok(())
   }

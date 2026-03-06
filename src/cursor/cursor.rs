@@ -6,30 +6,28 @@ use super::{
 };
 use crate::{serialize::SerializeFrom, transaction::TxOrchestrator, Error, Result};
 
-pub fn initialize(orchestrator: Arc<TxOrchestrator>) -> Result {
-  if !orchestrator.is_disk_empty()? {
-    return Ok(());
-  }
-
-  let node = CursorNode::initial_state();
-  let mut node_slot = orchestrator.alloc()?;
-  node_slot.as_mut().serialize_from(&node)?;
-  orchestrator.log(0, &node_slot)?;
-
-  let root = TreeHeader::new(node_slot.get_index());
-  let mut root_slot = orchestrator.fetch(HEADER_INDEX)?.for_write();
-  orchestrator.log(0, &root_slot)?;
-  root_slot.as_mut().serialize_from(&root)?;
-
-  Ok(())
-}
-
 pub struct Cursor {
   orchestrator: Arc<TxOrchestrator>,
   committed: bool,
   tx_id: usize,
 }
 impl Cursor {
+  pub fn initialize(mut self) -> Result {
+    let node = CursorNode::initial_state();
+    let mut node_slot = self.orchestrator.alloc()?;
+    node_slot.as_mut().serialize_from(&node)?;
+    self.orchestrator.log(self.tx_id, &node_slot)?;
+    let node_index = node_slot.get_index();
+    drop(node_slot);
+
+    let root = TreeHeader::new(node_index);
+    let mut root_slot = self.orchestrator.fetch(HEADER_INDEX)?.for_write();
+    root_slot.as_mut().serialize_from(&root)?;
+    self.orchestrator.log(self.tx_id, &root_slot)?;
+    drop(root_slot);
+
+    self.commit()
+  }
   pub fn new(orchestrator: Arc<TxOrchestrator>, tx_id: usize) -> Self {
     Self {
       orchestrator,

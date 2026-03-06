@@ -34,7 +34,7 @@ impl TreeHeader {
 
 impl Serializable for TreeHeader {
   fn get_type() -> SerializeType {
-    SerializeType::DataEntry
+    SerializeType::Header
   }
 
   fn write_at(&self, writer: &mut PageWriter) -> Result {
