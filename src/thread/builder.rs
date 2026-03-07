@@ -88,18 +88,18 @@ impl SafeWorkBuilder {
     }
   }
 
-  pub fn no_timeout<T, R, F>(self, f: F) -> SingleWorkThread<T, R>
-  where
-    T: Send + UnwindSafe + 'static,
-    R: Send + 'static,
-    F: FnMut(T) -> R + Send + RefUnwindSafe + Sync + 'static,
-  {
-    SingleWorkThread::new(
-      self.builder.name,
-      self.builder.stack_size,
-      SafeWork::no_timeout(f),
-    )
-  }
+  // pub fn no_timeout<T, R, F>(self, f: F) -> SingleWorkThread<T, R>
+  // where
+  //   T: Send + UnwindSafe + 'static,
+  //   R: Send + 'static,
+  //   F: FnMut(T) -> R + Send + RefUnwindSafe + Sync + 'static,
+  // {
+  //   SingleWorkThread::new(
+  //     self.builder.name,
+  //     self.builder.stack_size,
+  //     SafeWork::no_timeout(f),
+  //   )
+  // }
 
   pub fn with_timeout<T, R, F>(self, timeout: Duration, f: F) -> SingleWorkThread<T, R>
   where

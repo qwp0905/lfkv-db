@@ -12,6 +12,8 @@ use crate::{
   Result,
 };
 
+const SEGMENT_MAX_LIFE: Duration = Duration::from_secs(5);
+
 pub struct SegmentPreload {
   reuse: Arc<SegQueue<WALSegment>>,
   queue: Receiver<Result<WALSegment>>,
@@ -33,19 +35,27 @@ impl SegmentPreload {
       .name("wal segment preloader")
       .stack_size(2 << 20)
       .single()
-      .no_timeout(move |_| {
-        let current = generation;
-        generation += 1;
+      .with_timeout(SEGMENT_MAX_LIFE, move |v| match v {
+        Some(_) => {
+          let current = generation;
+          generation += 1;
 
-        let segment = reuse_c
-          .pop()
-          .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
-          .unwrap_or_else(|| {
-            WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
-          })?;
+          let segment = reuse_c
+            .pop()
+            .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
+            .unwrap_or_else(|| {
+              WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
+            })?;
 
-        tx.send(Ok(segment)).unwrap();
-        Ok(())
+          tx.send(Ok(segment)).unwrap();
+          Ok(())
+        }
+        None => {
+          if let Some(seg) = reuse_c.pop() {
+            seg.truncate()?;
+          }
+          Ok(())
+        }
       });
 
     let _ = thread.send(());
