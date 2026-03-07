@@ -154,7 +154,7 @@ impl TryFrom<&[u8]> for LogRecord {
     let tx_id = usize::from_le_bytes(unsafe { (ptr.add(12) as *const [u8; 8]).read() });
     let operation = match unsafe { *ptr.add(20) } {
       1 => {
-        if len < PAGE_SIZE + 29 {
+        if len != PAGE_SIZE + 29 {
           return Err(Error::InvalidFormat("invalid len for insert log."));
         }
         let index =
@@ -164,11 +164,26 @@ impl TryFrom<&[u8]> for LogRecord {
         unsafe { copy_nonoverlapping(ptr.add(29), data.as_ptr() as *mut u8, PAGE_SIZE) };
         Operation::Insert(index, Page::from(data))
       }
-      2 => Operation::Start,
-      3 => Operation::Commit,
-      4 => Operation::Abort,
+      2 => {
+        if len != 21 {
+          return Err(Error::InvalidFormat("invalid len for start log."));
+        }
+        Operation::Start
+      }
+      3 => {
+        if len != 21 {
+          return Err(Error::InvalidFormat("invalid len for commit log."));
+        }
+        Operation::Commit
+      }
+      4 => {
+        if len != 21 {
+          return Err(Error::InvalidFormat("invalid len for abort log."));
+        };
+        Operation::Abort
+      }
       5 => {
-        if len < 37 {
+        if len != 37 {
           return Err(Error::InvalidFormat("invalid len for checkpoint log."));
         }
         let log_id =

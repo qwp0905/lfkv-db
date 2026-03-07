@@ -114,15 +114,7 @@ pub fn replay(
           aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id, min_active) => {
-          match last_checkpoint.as_mut() {
-            Some(id) => {
-              if *id >= record.log_id {
-                continue;
-              }
-              *id = last_log_id.max(*id)
-            }
-            None => last_checkpoint = Some(last_log_id),
-          }
+          last_checkpoint = Some(last_checkpoint.unwrap_or(0).max(last_log_id));
           redo = redo.split_off(&last_log_id);
           aborted = aborted.split_off(&last_log_id);
 
