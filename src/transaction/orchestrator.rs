@@ -81,7 +81,7 @@ impl TxOrchestrator {
       .with_channel::<(), Result>(checkpoint_ch)
       .with_timeout(
         checkpoint_interval,
-        handle_checkpoint(wal.clone(), buffer_pool.clone(), gc.clone()),
+        handle_checkpoint(wal.clone(), buffer_pool.clone(), gc.clone(), logger.clone()),
       )?;
 
     Ok((
@@ -170,14 +170,23 @@ fn handle_checkpoint(
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   gc: Arc<GarbageCollector>,
+  logger: LogFilter,
 ) -> impl Fn(Option<()>) -> Result {
-  move |_| run_checkpoint(&wal, &buffer_pool, &gc)
+  move |_| run_checkpoint(&wal, &buffer_pool, &gc, &logger)
 }
 
-fn run_checkpoint(wal: &WAL, buffer_pool: &BufferPool, gc: &GarbageCollector) -> Result {
+fn run_checkpoint(
+  wal: &WAL,
+  buffer_pool: &BufferPool,
+  gc: &GarbageCollector,
+  logger: &LogFilter,
+) -> Result {
   let log_id = wal.current_log_id();
+  logger.debug(format!("checkpoint trigger id {log_id}"));
   gc.run()?;
+  logger.debug(format!("checkpoint garbage collected id {log_id}"));
   buffer_pool.flush()?;
   wal.checkpoint_and_flush(log_id)?;
+  logger.debug(format!("checkpoint complete id {log_id}"));
   Ok(())
 }
