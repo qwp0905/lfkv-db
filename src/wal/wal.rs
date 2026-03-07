@@ -250,23 +250,21 @@ impl WAL {
     || {
       let guard = &epoch::pin();
       loop {
-        unsafe {
-          let ptr = self.buffer.load(Ordering::Acquire, guard);
-          let buffer = &*ptr.as_raw();
-          if buffer.load_offset() >= WAL_BLOCK_SIZE {
-            yield_now();
-            continue;
-          }
-          if buffer.load_segment_pinned() > 0 {
-            yield_now();
-            continue;
-          }
-
-          let taken = ptr.into_owned();
-          let (segment, _) = taken.take_segement();
-          let _ = self.preloader.close();
-          return segment.close();
+        let ptr = self.buffer.load(Ordering::Acquire, guard);
+        let buffer = ptr.as_raw().borrow_unsafe();
+        if buffer.load_offset() >= WAL_BLOCK_SIZE {
+          yield_now();
+          continue;
         }
+        if buffer.load_segment_pinned() > 0 {
+          yield_now();
+          continue;
+        }
+
+        let taken = unsafe { ptr.into_owned() };
+        let (segment, _) = taken.take_segement();
+        let _ = self.preloader.close();
+        return segment.close();
       }
     }
   }
