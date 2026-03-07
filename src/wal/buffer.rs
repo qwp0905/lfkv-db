@@ -4,7 +4,11 @@ use std::{
 };
 
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
-use crate::{disk::PageRef, error::Result};
+use crate::{
+  disk::PageRef,
+  error::Result,
+  utils::{UnsafeBorrow, UnsafeTake},
+};
 
 const U16_MASK: u32 = 0xFFFF;
 
@@ -13,8 +17,8 @@ pub struct LogBuffer {
   entry: PageRef<WAL_BLOCK_SIZE>,
   commit_count: AtomicU32,
   index: usize,
-  segment_pin: *mut AtomicUsize,
-  segment: *mut WALSegment,
+  segment_pin: *const AtomicUsize,
+  segment: *const WALSegment,
 }
 impl LogBuffer {
   const BIT: u64 = 40;
@@ -24,8 +28,8 @@ impl LogBuffer {
   pub fn new(
     entry: PageRef<WAL_BLOCK_SIZE>,
     index: usize,
-    segment_pin: *mut AtomicUsize,
-    segment: *mut WALSegment,
+    segment_pin: *const AtomicUsize,
+    segment: *const WALSegment,
   ) -> Self {
     Self {
       offset: AtomicU64::new(Self::OFFSET_BYTE),
@@ -59,38 +63,36 @@ impl LogBuffer {
     self.commit_count.load(Ordering::Acquire)
   }
   pub fn flush(&self) -> Result<FsyncResult> {
-    let segment = unsafe { &*self.segment };
+    let segment = self.segment.borrow_unsafe();
     segment.write(self.index, &self.entry)?;
     Ok(segment.fsync())
   }
   pub fn write_to_disk(&self) -> Result {
-    unsafe { &*self.segment }.write(self.index, &self.entry)
+    self.segment.borrow_unsafe().write(self.index, &self.entry)
   }
   pub fn commit_entry(&self) {
     self.commit_count.fetch_add(1, Ordering::Release);
   }
   pub fn unpin_segment(&self) {
-    unsafe { &*self.segment_pin }.fetch_sub(1, Ordering::Release);
+    self
+      .segment_pin
+      .borrow_unsafe()
+      .fetch_sub(1, Ordering::Release);
   }
   pub fn get_index(&self) -> usize {
     self.index
   }
-  pub fn copy_segment(&self) -> (*mut WALSegment, *mut AtomicUsize) {
+  pub fn copy_segment(&self) -> (*const WALSegment, *const AtomicUsize) {
     (self.segment, self.segment_pin)
   }
   pub fn take_segement(&self) -> (WALSegment, AtomicUsize) {
-    unsafe {
-      (
-        *Box::from_raw(self.segment),
-        *Box::from_raw(self.segment_pin),
-      )
-    }
+    (self.segment.take_unsafe(), self.segment_pin.take_unsafe())
   }
   pub fn load_offset(&self) -> usize {
     (self.offset.load(Ordering::Acquire) & Self::MASK) as usize
   }
   pub fn load_segment_pinned(&self) -> usize {
-    unsafe { &*self.segment_pin }.load(Ordering::Acquire)
+    self.segment_pin.borrow_unsafe().load(Ordering::Acquire)
   }
 }
 

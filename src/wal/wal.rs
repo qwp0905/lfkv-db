@@ -17,7 +17,7 @@ use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToArc, ToRawPointer},
+  utils::{LogFilter, ToArc, ToRawPointer, UnsafeBorrow},
 };
 
 use super::{
@@ -128,7 +128,7 @@ impl WAL {
 
     loop {
       let buffer_ptr = self.buffer.load(Ordering::Acquire, guard);
-      let buffer = unsafe { &*(buffer_ptr.as_raw()) };
+      let buffer = buffer_ptr.as_raw().borrow_unsafe();
 
       buffer.pin_segment();
       let (offset, ready) = buffer.pin_entry(len);
@@ -177,7 +177,7 @@ impl WAL {
         guard,
       ) {
         if buffer.get_index() + 1 < self.max_index {
-          unsafe { &*failed.current.as_raw() }.unpin_segment();
+          failed.current.as_raw().borrow_unsafe().unpin_segment();
           yield_now();
           continue;
         }
@@ -188,7 +188,7 @@ impl WAL {
 
       unsafe { guard.defer_destroy(buffer_ptr) };
 
-      let buffer = unsafe { &*buffer_ptr.as_raw() };
+      let buffer = buffer_ptr.as_raw().borrow_unsafe();
       while ready > buffer.load_commit() {
         yield_now();
       }
