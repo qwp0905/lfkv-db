@@ -42,7 +42,10 @@ impl LogBuffer {
   }
 
   pub fn pin_segment(&self) {
-    unsafe { &*self.segment_pin }.fetch_add(1, Ordering::Release);
+    self
+      .segment_pin
+      .borrow_unsafe()
+      .fetch_add(1, Ordering::Release);
   }
   pub fn pin_entry(&self, len: usize) -> (usize, u32) {
     let prev = self.offset.fetch_add(

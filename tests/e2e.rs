@@ -528,7 +528,7 @@ fn crash_writer() {
         cursor.commit().unwrap();
         let _ = std::io::Write::write_all(
           &mut std::io::stdout().lock(),
-          format!("{}\n", i).as_bytes(),
+          format!("{:07}\n", i).as_bytes(),
         );
         let _ = done.send(());
       }
@@ -577,6 +577,9 @@ fn test_process_crash_recovery() {
 
   let mut committed = std::collections::HashSet::new();
   for s in reader.lines().map_while(|l| l.ok()) {
+    if s.len() < 7 {
+      continue;
+    }
     if let Ok(i) = s.trim().parse::<usize>() {
       committed.insert(i);
     }
@@ -593,12 +596,12 @@ fn test_process_crash_recovery() {
   {
     let engine = build_engine(&dir);
     let mut tx = engine.new_transaction().unwrap();
-    // let mut c = 0;
-    // let mut iter = tx.scan_all().unwrap();
-    // while let Ok(Some(_)) = iter.try_next() {
-    //   c += 1;
-    // }
-    // println!("{c} {}", committed.len());
+    let mut c = 0;
+    let mut iter = tx.scan_all().unwrap();
+    while let Ok(Some(_)) = iter.try_next() {
+      c += 1;
+    }
+    println!("{c} {}", committed.len());
     for i in &committed {
       let key = format!("key-{:06}", i).into_bytes();
       let expected = format!("val-{:06}", i).into_bytes();
