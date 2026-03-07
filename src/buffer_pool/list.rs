@@ -37,7 +37,7 @@ impl<K, V> LRUList<K, V> {
   }
 
   pub fn remove(&mut self, bucket: &mut NonNull<Bucket<K, V>>) {
-    if self.len_.eq(&0) {
+    if self.len_ == 0 {
       return;
     }
 
