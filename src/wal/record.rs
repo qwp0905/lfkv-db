@@ -1,3 +1,5 @@
+use std::{ptr::copy_nonoverlapping, slice::from_raw_parts};
+
 use crate::{
   disk::{Page, PAGE_SIZE},
   Error,
@@ -19,7 +21,7 @@ pub enum Operation {
   ),
 }
 impl Operation {
-  pub fn type_u8(&self) -> u8 {
+  fn type_byte(&self) -> u8 {
     match self {
       Operation::Insert(_, _) => 1,
       Operation::Start => 2,
@@ -28,19 +30,16 @@ impl Operation {
       Operation::Checkpoint(_) => 5,
     }
   }
-  fn to_bytes(&self) -> Vec<u8> {
-    let mut v = vec![self.type_u8()];
+
+  const INSERT_LEN: usize = 1 + 8 + PAGE_SIZE;
+  const CHECKPOINT_LEN: usize = 1 + 8;
+  const OTHER_LEN: usize = 1;
+  fn byte_len(&self) -> usize {
     match self {
-      Operation::Insert(index, page) => {
-        v.extend_from_slice(&index.to_le_bytes());
-        v.extend_from_slice(page.as_ref());
-      }
-      Operation::Checkpoint(log_id) => {
-        v.extend_from_slice(&log_id.to_le_bytes());
-      }
-      _ => {}
-    };
-    v
+      Operation::Insert(_, _) => Self::INSERT_LEN,
+      Operation::Checkpoint(_) => Self::CHECKPOINT_LEN,
+      _ => Self::OTHER_LEN,
+    }
   }
 }
 
@@ -79,92 +78,104 @@ impl LogRecord {
     LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id))
   }
 
-  pub fn to_bytes_with_len(&self) -> Vec<u8> {
-    let mut vec = vec![0, 0, 0, 0, 0, 0]; // len + checksum
+  unsafe fn write_at(&self, ptr: *mut u8) {
+    let mut offset = 4;
+    copy_nonoverlapping(self.log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+    offset += 8;
 
-    vec.extend_from_slice(&self.log_id.to_le_bytes());
-    vec.extend_from_slice(&self.tx_id.to_le_bytes());
-    vec.extend_from_slice(&self.operation.to_bytes());
-    let len = ((vec.len() - 2) as u16).to_le_bytes();
+    copy_nonoverlapping(self.tx_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+    offset += 8;
+
+    *ptr.add(offset) = self.operation.type_byte();
+    offset += 1;
+    match &self.operation {
+      Operation::Insert(index, page) => {
+        copy_nonoverlapping(index.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+        offset += 8;
+        copy_nonoverlapping(page.as_ptr(), ptr.add(offset), PAGE_SIZE);
+        offset += PAGE_SIZE;
+      }
+      Operation::Checkpoint(log_id) => {
+        copy_nonoverlapping(log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+        offset += 8;
+      }
+      Operation::Start => {}
+      Operation::Commit => {}
+      Operation::Abort => {}
+    };
 
     let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&vec[6..]);
+    hasher.update(unsafe { from_raw_parts(ptr.add(4), offset - 4) });
+    let checksum = hasher.finalize().to_le_bytes();
+    unsafe { copy_nonoverlapping(checksum.as_ptr(), ptr, 4) };
+  }
 
-    vec[2..6].copy_from_slice(&hasher.finalize().to_le_bytes());
-    vec[..2].copy_from_slice(&len);
+  fn byte_len(&self) -> usize {
+    self.operation.byte_len() 
+    + 4 // crc32 (u32)
+    + 8 // log id (usize)
+    + 8 // tx id (usize)
+  }
+  pub fn to_bytes_with_len(&self) -> Vec<u8> {
+    let len = self.byte_len();
+    let mut vec = Vec::<u8>::with_capacity(len + 2);
+    unsafe { vec.set_len(len + 2) };
+    let ptr = vec.as_mut_ptr();
+    unsafe { self.write_at(ptr.add(2)) };
+    unsafe { copy_nonoverlapping((len as u16).to_le_bytes().as_ptr(), ptr, 2) };
     vec
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
-    let mut vec = vec![0, 0, 0, 0]; // checksum
-
-    vec.extend_from_slice(&self.log_id.to_le_bytes());
-    vec.extend_from_slice(&self.tx_id.to_le_bytes());
-    vec.extend_from_slice(&self.operation.to_bytes());
-
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&vec[4..]);
-    vec[0..4].copy_from_slice(&hasher.finalize().to_le_bytes());
+    let len = self.byte_len();
+    let mut vec = Vec::<u8>::with_capacity(len);
+    unsafe { vec.set_len(len) };
+    unsafe { self.write_at(vec.as_mut_ptr()) };
     vec
   }
 }
-impl TryFrom<Vec<u8>> for LogRecord {
+
+impl TryFrom<&[u8]> for LogRecord {
   type Error = Error;
 
-  fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+  fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
     let len = value.len();
     if len < 21 {
       return Err(Error::InvalidFormat("log record too short."));
     }
+    
+    let ptr = value.as_ptr();
 
-    let checksum = u32::from_le_bytes(
-      value[0..4]
-        .try_into()
-        .map_err(|_| Error::InvalidFormat("cannot read checksum from log record"))?,
-    );
+    let checksum = u32::from_le_bytes(unsafe { (ptr as *const [u8; 4]).read() });
     let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&value[4..]);
+    hasher.update(unsafe { from_raw_parts(ptr.add(4), len - 4) });
     if hasher.finalize() != checksum {
       return Err(Error::InvalidFormat("checksum not matched."));
     }
 
-    let log_id = usize::from_le_bytes(
-      value[4..12]
-        .try_into()
-        .map_err(|_| Error::InvalidFormat("invalid log id in log record"))?,
-    );
-    let tx_id = usize::from_le_bytes(
-      value[12..20]
-        .try_into()
-        .map_err(|_| Error::InvalidFormat("invalid tx id in log record"))?,
-    );
-    let operation = match value[20] {
+    let log_id = usize::from_le_bytes(unsafe { (ptr.add(4) as *const [u8; 8]).read() });
+    let tx_id = usize::from_le_bytes(unsafe { (ptr.add(12) as *const [u8; 8]).read() });
+    let operation = match unsafe { *ptr.add(20) } { // type byte
       1 => {
-        if len != PAGE_SIZE + 29 {
+        if len < PAGE_SIZE + 29 {
           return Err(Error::InvalidFormat("invalid len for insert log."));
         }
-        let index = usize::from_le_bytes(
-          value[21..29]
-            .try_into()
-            .map_err(|_| Error::InvalidFormat("invalid index for insert log."))?,
-        );
-        let data = value[29..]
-          .try_into()
-          .map_err(|_| Error::InvalidFormat("invalid data for insert log."))?;
-        Operation::Insert(index, data)
+        let index =
+          usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
+
+        let data = [0; PAGE_SIZE];
+        unsafe { copy_nonoverlapping(ptr.add(29), data.as_ptr() as *mut u8, PAGE_SIZE) };
+        Operation::Insert(index, Page::from(data))
       }
       2 => Operation::Start,
       3 => Operation::Commit,
       4 => Operation::Abort,
       5 => {
         if len < 29 {
-          return Err(Error::InvalidFormat("checkpoint log too short."));
+          return Err(Error::InvalidFormat("invalid len for checkpoint log."));
         }
-        let log_id = usize::from_le_bytes(
-          value[21..29]
-            .try_into()
-            .map_err(|_| Error::InvalidFormat("invalid log id for checkpoint log."))?,
-        );
+        let log_id =
+          usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
         Operation::Checkpoint(log_id)
       }
       _ => return Err(Error::InvalidFormat("invalid type log record.")),
@@ -187,10 +198,7 @@ impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
         Ok(s) => s,
         Err(_) => return (data, true), // ignore error cause of partial write
       };
-      match scanner
-        .read_n(size as usize)
-        .and_then(|p| p.to_vec().try_into())
-      {
+      match scanner.read_n(size as usize).and_then(|p| p.try_into()) {
         Ok(record) => data.push(record),
         Err(_) => return (data, true), // ignore error cause of partial write
       }
@@ -204,7 +212,7 @@ mod tests {
   use super::*;
 
   fn assert_roundtrip(record: &LogRecord) -> LogRecord {
-    let bytes = record.to_bytes();
+    let bytes: &[u8] = &record.to_bytes();
     let parsed: LogRecord = bytes.try_into().expect("deserialize failed");
     assert_eq!(parsed.log_id, record.log_id);
     assert_eq!(parsed.tx_id, record.tx_id);
@@ -293,10 +301,10 @@ mod tests {
   #[test]
   fn test_invalid_format() {
     let short: Vec<u8> = vec![0; 10];
-    assert!(LogRecord::try_from(short).is_err());
+    assert!(LogRecord::try_from(short.as_ref()).is_err());
 
     let mut bad_op = vec![0u8; 17];
     bad_op[16] = 255; // invalid operation type
-    assert!(LogRecord::try_from(bad_op).is_err());
+    assert!(LogRecord::try_from(bad_op.as_ref()).is_err());
   }
 }
