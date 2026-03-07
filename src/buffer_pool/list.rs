@@ -1,5 +1,7 @@
 use std::ptr::NonNull;
 
+use crate::utils::UnsafeBorrowMut;
+
 use super::Bucket;
 
 pub struct LRUList<K, V> {
@@ -25,10 +27,10 @@ impl<K, V> LRUList<K, V> {
   pub fn push_head(&mut self, bucket: &mut NonNull<Bucket<K, V>>) {
     self.len_ += 1;
     match &self.head {
-      Some(mut head) => unsafe {
-        head.as_mut().set_prev(Some(*bucket));
-        bucket.as_mut().set_next(Some(head));
-      },
+      Some(head) => {
+        head.borrow_mut_unsafe().set_prev(Some(*bucket));
+        bucket.borrow_mut_unsafe().set_next(Some(*head));
+      }
       None => {
         self.tail = Some(*bucket);
       }
@@ -41,18 +43,18 @@ impl<K, V> LRUList<K, V> {
       return;
     }
 
-    let bucket = unsafe { bucket.as_mut() };
+    let bucket = bucket.borrow_mut_unsafe();
     let n = bucket.set_next(None);
     let p = bucket.set_prev(None);
 
-    if let Some(mut next) = &n {
-      unsafe { next.as_mut() }.set_prev(p.clone());
+    if let Some(next) = &n {
+      next.borrow_mut_unsafe().set_prev(p.clone());
     } else {
       self.tail = p;
     }
 
-    if let Some(mut prev) = &p {
-      unsafe { prev.as_mut() }.set_next(n);
+    if let Some(prev) = &p {
+      prev.borrow_mut_unsafe().set_next(n);
     } else {
       self.head = n;
     }

@@ -4,13 +4,15 @@ use std::{
   ptr::NonNull,
 };
 
+use crate::utils::{UnsafeBorrow, UnsafeBorrowMut, UnsafeTake};
+
 use super::{Bucket, LRUList};
 use hashbrown::{raw::RawTable, Equivalent};
 
 fn equivalent<'a, K, V, Q: ?Sized + Equivalent<K>>(
   key: &'a Q,
 ) -> impl Fn(&NonNull<Bucket<K, V>>) -> bool + 'a {
-  move |&ptr| key.equivalent(unsafe { ptr.as_ref() }.get_key())
+  move |&ptr| key.equivalent(ptr.borrow_unsafe().get_key())
 }
 
 fn make_hasher<'a, K, V, S>(
@@ -20,7 +22,7 @@ where
   K: Hash,
   S: BuildHasher,
 {
-  move |&ptr| hash_builder.hash_one(unsafe { ptr.as_ref() }.get_key())
+  move |&ptr| hash_builder.hash_one(ptr.borrow_unsafe().get_key())
 }
 
 pub struct LRUShard<K, V> {
@@ -67,7 +69,7 @@ where
   {
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(key)) {
       self.new_sub_list.move_to_head(bucket);
-      return Some(unsafe { bucket.as_mut() });
+      return Some(bucket.borrow_mut_unsafe());
     }
 
     let mut bucket = self.old_entries.remove_entry(hash, equivalent(key))?;
@@ -75,7 +77,7 @@ where
     self.new_sub_list.push_head(&mut bucket);
     self.new_entries.insert(hash, bucket, make_hasher(hasher));
     self.rebalance(hasher);
-    Some(unsafe { bucket.as_mut() })
+    Some(bucket.borrow_mut_unsafe())
   }
   pub fn get<Q: ?Sized, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<&V>
   where
@@ -121,7 +123,7 @@ where
   {
     while self.new_sub_list.len() * 3 > self.old_sub_list.len() * 5 {
       let key = match self.new_sub_list.pop_tail() {
-        Some(bucket) => unsafe { bucket.as_ref() }.get_key(),
+        Some(bucket) => bucket.borrow_unsafe().get_key(),
         None => break,
       };
       let h = hasher.hash_one(key);
@@ -135,12 +137,12 @@ where
   where
     S: BuildHasher,
   {
-    let key = unsafe { self.old_sub_list.pop_tail()?.as_ref() }.get_key();
+    let key = self.old_sub_list.pop_tail()?.borrow_unsafe().get_key();
     let h = hasher.hash_one(key);
     let bucket = self
       .old_entries
       .remove_entry(h, equivalent(key))
-      .map(|ptr| unsafe { Box::from_raw(ptr.as_ptr()) })?;
+      .map(|ptr| ptr.take_unsafe())?;
     self.rebalance(hasher);
     Some((bucket.take(), h))
   }
@@ -150,14 +152,14 @@ where
     S: BuildHasher,
   {
     if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(&key)) {
-      let prev = unsafe { bucket.as_mut() }.set_value(value);
+      let prev = bucket.borrow_mut_unsafe().set_value(value);
       self.new_sub_list.move_to_head(bucket);
       return Some(prev);
     }
 
     if let Some(mut bucket) = self.old_entries.remove_entry(hash, equivalent(&key)) {
       self.old_sub_list.remove(&mut bucket);
-      let prev = unsafe { bucket.as_mut() }.set_value(value);
+      let prev = bucket.borrow_mut_unsafe().set_value(value);
 
       self.new_sub_list.push_head(&mut bucket);
       self.new_entries.insert(hash, bucket, make_hasher(hasher));
