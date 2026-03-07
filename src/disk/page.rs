@@ -57,11 +57,6 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
     page
   }
 }
-impl<const T: usize> From<Page<T>> for Vec<u8> {
-  fn from(value: Page<T>) -> Self {
-    value.0.into()
-  }
-}
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
     let page = Page::new();
@@ -433,20 +428,6 @@ mod tests {
     for &expected in data.iter() {
       assert_eq!(scanner.read().unwrap(), expected);
     }
-  }
-
-  #[test]
-  fn test_into_vec() {
-    const SIZE: usize = 5;
-    let page = Page::<SIZE>::new();
-    let test_data = [1, 2, 3, 4, 5];
-
-    let mut writer = page.writer();
-    writer.write(&test_data).unwrap();
-
-    // Convert page to Vec<u8>
-    let vec: Vec<u8> = page.into();
-    assert_eq!(&vec[..SIZE], &test_data);
   }
 
   #[test]
