@@ -12,11 +12,7 @@ use tempfile::{tempdir_in, TempDir};
 struct TestLogger;
 impl Logger for TestLogger {
   fn log(&self, level: LogLevel, msg: &[u8]) {
-    println!(
-      "[{}] {}",
-      Into::<&str>::into(level),
-      String::from_utf8_lossy(msg)
-    )
+    println!("[{}] {}", level.to_str(), String::from_utf8_lossy(msg))
   }
 }
 

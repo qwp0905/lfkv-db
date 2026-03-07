@@ -10,9 +10,9 @@ pub enum LogLevel {
   Error = 4,
   Fatal = 5,
 }
-impl From<LogLevel> for &str {
-  fn from(value: LogLevel) -> Self {
-    match value {
+impl LogLevel {
+  pub fn to_str(&self) -> &str {
+    match self {
       LogLevel::Trace => "trace",
       LogLevel::Debug => "debug",
       LogLevel::Info => "info",

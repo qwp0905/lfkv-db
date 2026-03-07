@@ -3,11 +3,7 @@ use lfkv_db::{EngineBuilder, LogLevel, Logger};
 struct DebugLogger;
 impl Logger for DebugLogger {
   fn log(&self, level: LogLevel, msg: &[u8]) {
-    println!(
-      "[{}] {}",
-      Into::<&str>::into(level),
-      String::from_utf8_lossy(msg)
-    )
+    println!("[{}] {}", level.to_str(), String::from_utf8_lossy(msg))
   }
 }
 fn main() {
