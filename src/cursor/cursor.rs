@@ -1,4 +1,4 @@
-use std::{mem::replace, sync::Arc};
+use std::{marker::PhantomData, mem::replace, sync::Arc};
 
 use super::{
   CursorIterator, CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData,
@@ -10,6 +10,7 @@ pub struct Cursor {
   orchestrator: Arc<TxOrchestrator>,
   committed: bool,
   tx_id: usize,
+  _marker: PhantomData<*const ()>, // do not send to another thread!!!.
 }
 impl Cursor {
   pub fn initialize(mut self) -> Result {
@@ -33,6 +34,7 @@ impl Cursor {
       orchestrator,
       committed: false,
       tx_id,
+      _marker: Default::default(),
     }
   }
 

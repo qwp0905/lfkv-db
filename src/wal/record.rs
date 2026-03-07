@@ -32,11 +32,11 @@ impl Operation {
     let mut v = vec![self.type_u8()];
     match self {
       Operation::Insert(index, page) => {
-        v.extend_from_slice(&index.to_be_bytes());
+        v.extend_from_slice(&index.to_le_bytes());
         v.extend_from_slice(page.as_ref());
       }
       Operation::Checkpoint(log_id) => {
-        v.extend_from_slice(&log_id.to_be_bytes());
+        v.extend_from_slice(&log_id.to_le_bytes());
       }
       _ => {}
     };
@@ -82,15 +82,15 @@ impl LogRecord {
   pub fn to_bytes_with_len(&self) -> Vec<u8> {
     let mut vec = vec![0, 0, 0, 0, 0, 0]; // len + checksum
 
-    vec.extend_from_slice(&self.log_id.to_be_bytes());
-    vec.extend_from_slice(&self.tx_id.to_be_bytes());
+    vec.extend_from_slice(&self.log_id.to_le_bytes());
+    vec.extend_from_slice(&self.tx_id.to_le_bytes());
     vec.extend_from_slice(&self.operation.to_bytes());
-    let len = ((vec.len() - 2) as u16).to_be_bytes();
+    let len = ((vec.len() - 2) as u16).to_le_bytes();
 
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&vec[6..]);
 
-    vec[2..6].copy_from_slice(&hasher.finalize().to_be_bytes());
+    vec[2..6].copy_from_slice(&hasher.finalize().to_le_bytes());
     vec[..2].copy_from_slice(&len);
     vec
   }
@@ -98,13 +98,13 @@ impl LogRecord {
   pub fn to_bytes(&self) -> Vec<u8> {
     let mut vec = vec![0, 0, 0, 0]; // checksum
 
-    vec.extend_from_slice(&self.log_id.to_be_bytes());
-    vec.extend_from_slice(&self.tx_id.to_be_bytes());
+    vec.extend_from_slice(&self.log_id.to_le_bytes());
+    vec.extend_from_slice(&self.tx_id.to_le_bytes());
     vec.extend_from_slice(&self.operation.to_bytes());
 
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&vec[4..]);
-    vec[0..4].copy_from_slice(&hasher.finalize().to_be_bytes());
+    vec[0..4].copy_from_slice(&hasher.finalize().to_le_bytes());
     vec
   }
 }
@@ -122,7 +122,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
       return Err(Error::InvalidFormat("log record too short."));
     }
 
-    let checksum = u32::from_be_bytes(
+    let checksum = u32::from_le_bytes(
       value[0..4]
         .try_into()
         .map_err(|_| Error::InvalidFormat("cannot read checksum from log record"))?,
@@ -133,12 +133,12 @@ impl TryFrom<Vec<u8>> for LogRecord {
       return Err(Error::InvalidFormat("checksum not matched."));
     }
 
-    let log_id = usize::from_be_bytes(
+    let log_id = usize::from_le_bytes(
       value[4..12]
         .try_into()
         .map_err(|_| Error::InvalidFormat("invalid log id in log record"))?,
     );
-    let tx_id = usize::from_be_bytes(
+    let tx_id = usize::from_le_bytes(
       value[12..20]
         .try_into()
         .map_err(|_| Error::InvalidFormat("invalid tx id in log record"))?,
@@ -148,7 +148,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
         if len != PAGE_SIZE + 29 {
           return Err(Error::InvalidFormat("invalid len for insert log."));
         }
-        let index = usize::from_be_bytes(
+        let index = usize::from_le_bytes(
           value[21..29]
             .try_into()
             .map_err(|_| Error::InvalidFormat("invalid index for insert log."))?,
@@ -165,7 +165,7 @@ impl TryFrom<Vec<u8>> for LogRecord {
         if len < 29 {
           return Err(Error::InvalidFormat("checkpoint log too short."));
         }
-        let log_id = usize::from_be_bytes(
+        let log_id = usize::from_le_bytes(
           value[21..29]
             .try_into()
             .map_err(|_| Error::InvalidFormat("invalid log id for checkpoint log."))?,
@@ -272,7 +272,7 @@ mod tests {
     let page = Page::new();
     let mut writer = page.writer();
 
-    let _ = writer.write(&(3 as u16).to_be_bytes());
+    let _ = writer.write(&(3 as u16).to_le_bytes());
     let r1 = LogRecord::new_start(1, 1);
     let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
     let r3 = LogRecord::new_commit(3, 1);

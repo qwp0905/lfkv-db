@@ -1,4 +1,8 @@
-use std::ptr::{copy, copy_nonoverlapping};
+use std::{
+  marker::PhantomData,
+  ptr::{copy, copy_nonoverlapping},
+  slice::from_raw_parts,
+};
 
 use crate::error::{Error, Result};
 
@@ -76,65 +80,82 @@ impl<const T: usize> From<&[u8]> for Page<T> {
   }
 }
 
-#[derive(Debug)]
 pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
-  inner: &'a [u8; T],
+  inner: *const u8,
   offset: usize,
+  _marker: PhantomData<&'a Page<T>>,
 }
 impl<'a, const T: usize> PageScanner<'a, T> {
   fn new(inner: &'a [u8; T]) -> Self {
-    Self { inner, offset: 0 }
+    Self {
+      inner: inner.as_ptr(),
+      offset: 0,
+      _marker: Default::default(),
+    }
   }
 
   pub fn read(&mut self) -> Result<u8> {
-    if let Some(&i) = self.inner.get(self.offset) {
-      self.offset += 1;
-      return Ok(i);
+    if self.offset >= T {
+      return Err(Error::EOF);
     }
-    Err(Error::EOF)
+    let v = unsafe { *self.inner.add(self.offset) };
+    self.offset += 1;
+    Ok(v)
   }
 
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
     let end = self.offset + n;
-    if end > self.inner.len() {
+    if end > T {
       return Err(Error::EOF);
     }
-
-    let b = &self.inner[self.offset..end];
+    let b = unsafe { from_raw_parts(self.inner.add(self.offset), n) };
     self.offset = end;
     Ok(b)
   }
 
   pub fn read_usize(&mut self) -> Result<usize> {
-    let b = self.read_n(8)?.try_into().map_err(|_| Error::EOF)?;
-    Ok(usize::from_be_bytes(b))
+    if self.offset + 8 > T {
+      return Err(Error::EOF);
+    }
+    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 8]).read() };
+    self.offset += 8;
+    Ok(usize::from_le_bytes(v))
   }
 
   pub fn read_u16(&mut self) -> Result<u16> {
-    let b = self.read_n(2)?.try_into().map_err(|_| Error::EOF)?;
-    Ok(u16::from_be_bytes(b))
+    if self.offset + 2 > T {
+      return Err(Error::EOF);
+    }
+    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 2]).read() };
+    self.offset += 2;
+    Ok(u16::from_le_bytes(v))
   }
+
   pub fn read_u32(&mut self) -> Result<u32> {
-    let b = self.read_n(4)?.try_into().map_err(|_| Error::EOF)?;
-    Ok(u32::from_be_bytes(b))
+    if self.offset + 4 > T {
+      return Err(Error::EOF);
+    }
+    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 4]).read() };
+    self.offset += 4;
+    Ok(u32::from_le_bytes(v))
   }
 
   pub fn is_eof(&self) -> bool {
-    self.inner.len() <= self.offset
+    T <= self.offset
   }
 }
 
 pub struct PageWriter<'a, const T: usize = PAGE_SIZE> {
   inner: *mut u8,
   offset: usize,
-  page: &'a Page<T>,
+  marker: PhantomData<&'a Page<T>>,
 }
 impl<'a, const T: usize> PageWriter<'a, T> {
   fn new(page: &'a Page<T>) -> Self {
     Self {
       inner: page.0.as_ptr() as *mut u8,
       offset: 0,
-      page,
+      marker: Default::default(),
     }
   }
 
@@ -150,14 +171,14 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
 
   pub fn write_usize(&mut self, value: usize) -> Result<()> {
-    self.write(&value.to_be_bytes())
+    self.write(&value.to_le_bytes())
   }
   pub fn write_u32(&mut self, value: u32) -> Result {
-    self.write(&value.to_be_bytes())
+    self.write(&value.to_le_bytes())
   }
 
   pub fn is_eof(&self) -> bool {
-    self.page.0.len() <= self.offset
+    T <= self.offset
   }
 }
 
@@ -443,7 +464,7 @@ mod tests {
     let test_value: usize = 42;
 
     // Write usize value
-    let bytes = test_value.to_be_bytes();
+    let bytes = test_value.to_le_bytes();
     let mut writer = page.writer();
     writer.write(&bytes).unwrap();
 
