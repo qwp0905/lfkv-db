@@ -35,27 +35,23 @@ impl SegmentPreload {
       .name("wal segment preloader")
       .stack_size(2 << 20)
       .single()
-      .with_timeout(SEGMENT_MAX_LIFE, move |v| match v {
-        Some(_) => {
-          let current = generation;
-          generation += 1;
-
-          let segment = reuse_c
-            .pop()
-            .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
-            .unwrap_or_else(|| {
-              WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
-            })?;
-
-          tx.send(Ok(segment)).unwrap();
-          Ok(())
+      .with_timeout(SEGMENT_MAX_LIFE, move |trigger| {
+        if trigger.is_none() {
+          return reuse_c.pop().map(|seg| seg.truncate()).unwrap_or(Ok(()));
         }
-        None => {
-          if let Some(seg) = reuse_c.pop() {
-            seg.truncate()?;
-          }
-          Ok(())
-        }
+
+        let current = generation;
+        generation += 1;
+
+        let segment = reuse_c
+          .pop()
+          .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
+          .unwrap_or_else(|| {
+            WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
+          })?;
+
+        tx.send(Ok(segment)).unwrap();
+        Ok(())
       });
 
     let _ = thread.send(());
