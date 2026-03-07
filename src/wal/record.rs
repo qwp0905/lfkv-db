@@ -31,10 +31,10 @@ impl Operation {
     }
   }
 
-  const INSERT_LEN: usize = 1 + 8 + PAGE_SIZE;
-  const CHECKPOINT_LEN: usize = 1 + 8;
-  const OTHER_LEN: usize = 1;
-  fn byte_len(&self) -> usize {
+  const INSERT_LEN: u16 = 1 + 8 + (PAGE_SIZE as u16);
+  const CHECKPOINT_LEN: u16 = 1 + 8;
+  const OTHER_LEN: u16 = 1;
+  fn byte_len(&self) -> u16 {
     match self {
       Operation::Insert(_, _) => Self::INSERT_LEN,
       Operation::Checkpoint(_) => Self::CHECKPOINT_LEN,
@@ -110,26 +110,21 @@ impl LogRecord {
     unsafe { copy_nonoverlapping(checksum.as_ptr(), ptr, 4) };
   }
 
-  fn byte_len(&self) -> usize {
-    self.operation.byte_len() 
-    + 4 // crc32 (u32)
-    + 8 // log id (usize)
-    + 8 // tx id (usize)
+  fn byte_len(&self) -> u16 {
+    self.operation.byte_len() + 4 + 8 + 8
   }
   pub fn to_bytes_with_len(&self) -> Vec<u8> {
     let len = self.byte_len();
-    let mut vec = Vec::<u8>::with_capacity(len + 2);
-    unsafe { vec.set_len(len + 2) };
+    let mut vec = vec![0; (len + 2) as usize];
     let ptr = vec.as_mut_ptr();
-    unsafe { self.write_at(ptr.add(2)) };
     unsafe { copy_nonoverlapping((len as u16).to_le_bytes().as_ptr(), ptr, 2) };
+    unsafe { self.write_at(ptr.add(2)) };
     vec
   }
 
   pub fn to_bytes(&self) -> Vec<u8> {
     let len = self.byte_len();
-    let mut vec = Vec::<u8>::with_capacity(len);
-    unsafe { vec.set_len(len) };
+    let mut vec = vec![0; len as usize];
     unsafe { self.write_at(vec.as_mut_ptr()) };
     vec
   }
@@ -143,7 +138,6 @@ impl TryFrom<&[u8]> for LogRecord {
     if len < 21 {
       return Err(Error::InvalidFormat("log record too short."));
     }
-    
     let ptr = value.as_ptr();
 
     let checksum = u32::from_le_bytes(unsafe { (ptr as *const [u8; 4]).read() });
@@ -155,7 +149,7 @@ impl TryFrom<&[u8]> for LogRecord {
 
     let log_id = usize::from_le_bytes(unsafe { (ptr.add(4) as *const [u8; 8]).read() });
     let tx_id = usize::from_le_bytes(unsafe { (ptr.add(12) as *const [u8; 8]).read() });
-    let operation = match unsafe { *ptr.add(20) } { // type byte
+    let operation = match unsafe { *ptr.add(20) } {
       1 => {
         if len < PAGE_SIZE + 29 {
           return Err(Error::InvalidFormat("invalid len for insert log."));

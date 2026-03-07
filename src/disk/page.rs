@@ -59,7 +59,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
 }
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
-    let page = Page::new();
+    let page = Self::new();
     let len = value.len().min(T);
     unsafe { copy_nonoverlapping(value.as_ptr(), page.as_ptr() as *mut u8, len) };
     page

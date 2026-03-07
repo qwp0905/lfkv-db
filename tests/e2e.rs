@@ -383,12 +383,12 @@ fn test_entry_split() {
 #[test]
 fn test_btree_node_split_and_recovery() {
   let dir = tempdir_in(".").unwrap();
-  let key_count: usize = 5000;
+  let key_count: usize = 100000;
 
   // Phase 1: worker pool (100 threads) concurrently insert → forces leaf + internal node splits
   {
     let engine = Arc::new(build_engine(&dir));
-    let thread_count = 100;
+    let thread_count = 1000;
     let (task_tx, task_rx) =
       crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();
 
@@ -624,8 +624,8 @@ fn test_hard_workload() {
   let dir = tempdir_in(".").unwrap();
   let engine = Arc::new(build_engine(&dir));
 
-  let key_count = 100_000_usize;
-  let thread_count = 1_000_usize;
+  let key_count: usize = 100000;
+  let thread_count: usize = 1000;
   let mut keys: Vec<Vec<u8>> = (0..key_count)
     .map(|i| format!("123{:06}", i))
     .map(|s| s.as_bytes().to_vec())
@@ -678,7 +678,7 @@ fn insert_and_remove_and_gc() {
   let dir = tempdir_in(".").unwrap();
   let engine = build_engine(&dir);
 
-  let count = 1_000_usize;
+  let count: usize = 1000;
   for i in 0..count {
     let mut t = engine.new_transaction().expect("tx start error");
     let bytes: Vec<u8> = i.to_le_bytes().into();
