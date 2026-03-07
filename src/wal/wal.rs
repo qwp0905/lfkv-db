@@ -225,9 +225,9 @@ impl WAL {
       false,
     )
   }
-  pub fn checkpoint_and_flush(&self, last_log_id: usize) -> Result {
+  pub fn checkpoint_and_flush(&self, last_log_id: usize, min_active: usize) -> Result {
     self.append(
-      move |log_id| LogRecord::new_checkpoint(log_id, last_log_id),
+      move |log_id| LogRecord::new_checkpoint(log_id, last_log_id, min_active),
       true,
     )
   }

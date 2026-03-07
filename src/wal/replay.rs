@@ -62,12 +62,13 @@ pub fn replay(
   let mut log_id = 0;
   let mut redo = BTreeMap::<usize, (usize, Page)>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
-  let mut started = HashSet::<usize>::new();
+  let mut started = BTreeSet::<usize>::new();
   let mut closed = HashSet::<usize>::new();
 
   let mut segments = Vec::new();
 
   let mut last_checkpoint = None as Option<usize>;
+  let mut last_min_active = None as Option<usize>;
   for path in files.into_iter() {
     let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?; // only for replay. file number does not matter
     let len = wal.len()?;
@@ -95,6 +96,11 @@ pub fn replay(
           redo.insert(record.log_id, (i, page));
         }
         Operation::Start => {
+          if let Some(&id) = last_min_active.as_ref() {
+            if id > record.tx_id {
+              continue;
+            }
+          }
           started.insert(record.tx_id);
         }
         Operation::Commit => {
@@ -107,7 +113,7 @@ pub fn replay(
           }
           aborted.insert(record.log_id, record.tx_id);
         }
-        Operation::Checkpoint(last_log_id) => {
+        Operation::Checkpoint(last_log_id, min_active) => {
           match last_checkpoint.as_mut() {
             Some(id) => {
               if *id >= record.log_id {
@@ -119,6 +125,9 @@ pub fn replay(
           }
           redo = redo.split_off(&last_log_id);
           aborted = aborted.split_off(&last_log_id);
+
+          last_min_active = Some(last_checkpoint.unwrap_or(0).max(min_active));
+          started = started.split_off(&min_active)
         }
       };
     }

@@ -67,7 +67,7 @@ impl TxOrchestrator {
       logger.info("orphand block has released successfully.");
       gc.run()?;
       buffer_pool.flush()?;
-      wal.checkpoint_and_flush(log_id)?;
+      wal.checkpoint_and_flush(log_id, version_visibility.min_version())?;
 
       for seg in replay.segments {
         wal.reuse(seg);
@@ -81,7 +81,13 @@ impl TxOrchestrator {
       .with_channel::<(), Result>(checkpoint_ch)
       .with_timeout(
         checkpoint_interval,
-        handle_checkpoint(wal.clone(), buffer_pool.clone(), gc.clone(), logger.clone()),
+        handle_checkpoint(
+          wal.clone(),
+          buffer_pool.clone(),
+          gc.clone(),
+          version_visibility.clone(),
+          logger.clone(),
+        ),
       )?;
 
     Ok((
@@ -167,15 +173,17 @@ fn handle_checkpoint(
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
   gc: Arc<GarbageCollector>,
+  version: Arc<VersionVisibility>,
   logger: LogFilter,
 ) -> impl Fn(Option<()>) -> Result {
-  move |_| run_checkpoint(&wal, &buffer_pool, &gc, &logger)
+  move |_| run_checkpoint(&wal, &buffer_pool, &gc, &version, &logger)
 }
 
 fn run_checkpoint(
   wal: &WAL,
   buffer_pool: &BufferPool,
   gc: &GarbageCollector,
+  version: &VersionVisibility,
   logger: &LogFilter,
 ) -> Result {
   let log_id = wal.current_log_id();
@@ -183,7 +191,7 @@ fn run_checkpoint(
   gc.run()?;
   logger.debug(format!("checkpoint garbage collected id {log_id}"));
   buffer_pool.flush()?;
-  wal.checkpoint_and_flush(log_id)?;
+  wal.checkpoint_and_flush(log_id, version.min_version())?;
   logger.debug(format!("checkpoint complete id {log_id}"));
   Ok(())
 }

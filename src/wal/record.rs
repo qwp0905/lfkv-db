@@ -18,6 +18,7 @@ pub enum Operation {
   Abort,
   Checkpoint(
     usize, // last log id
+    usize, // min active version
   ),
 }
 impl Operation {
@@ -27,17 +28,17 @@ impl Operation {
       Operation::Start => 2,
       Operation::Commit => 3,
       Operation::Abort => 4,
-      Operation::Checkpoint(_) => 5,
+      Operation::Checkpoint(_, _) => 5,
     }
   }
 
   const INSERT_LEN: u16 = 1 + 8 + (PAGE_SIZE as u16);
-  const CHECKPOINT_LEN: u16 = 1 + 8;
+  const CHECKPOINT_LEN: u16 = 1 + 8 + 8;
   const OTHER_LEN: u16 = 1;
   fn byte_len(&self) -> u16 {
     match self {
       Operation::Insert(_, _) => Self::INSERT_LEN,
-      Operation::Checkpoint(_) => Self::CHECKPOINT_LEN,
+      Operation::Checkpoint(_, _) => Self::CHECKPOINT_LEN,
       _ => Self::OTHER_LEN,
     }
   }
@@ -74,8 +75,8 @@ impl LogRecord {
     LogRecord::new(log_id, tx_id, Operation::Abort)
   }
 
-  pub fn new_checkpoint(log_id: usize, last_log_id: usize) -> Self {
-    LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id))
+  pub fn new_checkpoint(log_id: usize, last_log_id: usize, min_active: usize) -> Self {
+    LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id, min_active))
   }
 
   unsafe fn write_at(&self, ptr: *mut u8) {
@@ -95,8 +96,10 @@ impl LogRecord {
         copy_nonoverlapping(page.as_ptr(), ptr.add(offset), PAGE_SIZE);
         offset += PAGE_SIZE;
       }
-      Operation::Checkpoint(log_id) => {
+      Operation::Checkpoint(log_id, min_active) => {
         copy_nonoverlapping(log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+        offset += 8;
+        copy_nonoverlapping(min_active.to_le_bytes().as_ptr(), ptr.add(offset), 8);
         offset += 8;
       }
       Operation::Start => {}
@@ -165,12 +168,14 @@ impl TryFrom<&[u8]> for LogRecord {
       3 => Operation::Commit,
       4 => Operation::Abort,
       5 => {
-        if len < 29 {
+        if len < 37 {
           return Err(Error::InvalidFormat("invalid len for checkpoint log."));
         }
         let log_id =
           usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
-        Operation::Checkpoint(log_id)
+        let min_active =
+          usize::from_le_bytes(unsafe { (ptr.add(29) as *const [u8; 8]).read() });
+        Operation::Checkpoint(log_id, min_active)
       }
       _ => return Err(Error::InvalidFormat("invalid type log record.")),
     };
@@ -254,11 +259,12 @@ mod tests {
 
   #[test]
   fn test_checkpoint_roundtrip() {
-    let r = LogRecord::new_checkpoint(5, 200);
+    let r = LogRecord::new_checkpoint(5, 200, 123);
     let parsed = assert_roundtrip(&r);
     match parsed.operation {
-      Operation::Checkpoint(last_log_id) => {
+      Operation::Checkpoint(last_log_id, min_active) => {
         assert_eq!(last_log_id, 200);
+        assert_eq!(min_active, 123)
       }
       _ => panic!("expected Checkpoint"),
     }
