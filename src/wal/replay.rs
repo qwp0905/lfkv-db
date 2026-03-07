@@ -87,11 +87,11 @@ pub fn replay(
     for record in records {
       log_id = record.log_id.max(log_id);
       tx_id = tx_id.max(record.tx_id);
-      if last_checkpoint.map_or(false, |c| c >= record.log_id) {
-        continue;
-      }
       match record.operation {
         Operation::Insert(i, page) => {
+          if last_checkpoint.map_or(false, |c| c >= record.log_id) {
+            continue;
+          }
           redo.insert(record.log_id, (i, page));
         }
         Operation::Start => {
@@ -102,12 +102,23 @@ pub fn replay(
         }
         Operation::Abort => {
           closed.insert(record.tx_id);
+          if last_checkpoint.map_or(false, |c| c >= record.log_id) {
+            continue;
+          }
           aborted.insert(record.log_id, record.tx_id);
         }
         Operation::Checkpoint(last_log_id) => {
+          match last_checkpoint.as_mut() {
+            Some(id) => {
+              if *id >= record.log_id {
+                continue;
+              }
+              *id = last_log_id.max(*id)
+            }
+            None => last_checkpoint = Some(last_log_id),
+          }
           redo = redo.split_off(&last_log_id);
           aborted = aborted.split_off(&last_log_id);
-          last_checkpoint = Some(last_log_id)
         }
       };
     }
