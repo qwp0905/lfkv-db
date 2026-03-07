@@ -1,8 +1,4 @@
-use std::{
-  marker::PhantomData,
-  ptr::{copy, copy_nonoverlapping},
-  slice::from_raw_parts,
-};
+use std::{marker::PhantomData, ptr::copy_nonoverlapping, slice::from_raw_parts};
 
 use crate::error::{Error, Result};
 
@@ -24,7 +20,7 @@ impl<const T: usize> Page<T> {
 
   pub fn copy(&self) -> Self {
     let p = Self::new();
-    unsafe { copy(self.as_ptr(), p.as_ptr() as *mut u8, T) };
+    unsafe { copy_nonoverlapping(self.as_ptr(), p.as_ptr() as *mut u8, T) };
     p
   }
 
@@ -57,7 +53,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
   fn from(value: Vec<u8>) -> Self {
     let page = Self::new();
     let len = value.len().min(T);
-    unsafe { copy(value.as_ptr(), page.as_ptr() as *mut u8, len) };
+    unsafe { copy_nonoverlapping(value.as_ptr(), page.as_ptr() as *mut u8, len) };
     page
   }
 }
@@ -70,7 +66,7 @@ impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
     let page = Page::new();
     let len = value.len().min(T);
-    unsafe { copy(value.as_ptr(), page.as_ptr() as *mut u8, len) };
+    unsafe { copy_nonoverlapping(value.as_ptr(), page.as_ptr() as *mut u8, len) };
     page
   }
 }
