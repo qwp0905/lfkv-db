@@ -8,28 +8,22 @@ A persistent, ACID-compliant key-value store built on a Blink tree index with MV
 
 - **Blink Tree Index** - Lock-free concurrent B-tree variant with right-link pointers for non-blocking traversal and range scans
 - **MVCC** - Snapshot isolation through version chains; readers never block writers
-- **Write-Ahead Logging** - Segment-based WAL with group commit for durability and crash recovery
-- **Buffer Pool** - LRU-based page cache with configurable capacity
-- **Garbage Collection** - Background 4-channel pipeline that reclaims obsolete versions and freed pages
+- **Lock-Free WAL** - CAS-based append with atomic bit-packed offset, epoch-based buffer reclamation, and segment preloading/reuse
+- **Group Commit** - Batches multiple fsync calls per segment to amortize I/O cost
+- **Buffer Pool** - 2-tier LRU (old/new) page cache with sharded locking and atomic pin-based eviction control
+- **Direct I/O** - OS page cache bypass for predictable I/O performance
+- **Garbage Collection** - Background 4-stage pipeline with parallel work-stealing threads that reclaims obsolete versions and freed pages
 - **Crash Recovery** - Automatic WAL replay on startup with redo of committed transactions
+- **Custom Thread Infrastructure** - Work-stealing thread pool, oneshot channels, and buffered execution modes, all with panic safety
 
 ## Usage
 
 ```rust
-use std::time::Duration;
-use lfkv_db::{Engine, EngineConfig};
+use lfkv_db::EngineBuilder;
 
-let engine = Engine::bootstrap(EngineConfig {
-    base_path: "./data",
-    wal_file_size: 64 * 1024 * 1024,        // 64MB per WAL segment
-    checkpoint_interval: Duration::from_secs(30),
-    group_commit_delay: Duration::from_millis(5),
-    group_commit_count: 16,
-    gc_trigger_interval: Duration::from_secs(10),
-    gc_trigger_count: 1000,
-    buffer_pool_shard_count: 16,
-    buffer_pool_memory_capacity: 128 << 20,  // 128MB for buffer pool
-})?;
+let engine = EngineBuilder::new("./data")
+    .buffer_pool_memory_capacity(128 << 20) // 128MB
+    .build()?;
 
 // Start a transaction
 let mut tx = engine.new_transaction()?;
@@ -43,13 +37,13 @@ let value = tx.get(&b"key1".to_vec())?;
 
 // Range scan [start, end)
 let mut iter = tx.scan(&b"key1".to_vec(), &b"key3".to_vec())?;
-while let Some(data) = iter.try_next()? {
+while let Some((key, value)) = iter.try_next()? {
     // process data
 }
 
 // Full table scan
 let mut iter = tx.scan_all()?;
-while let Some(data) = iter.try_next()? {
+while let Some((key, value)) = iter.try_next()? {
     // process data
 }
 
@@ -70,20 +64,27 @@ tx.commit()?;
                     ┌────────▼─────────┐
                     │  TxOrchestrator   │
                     │  (coordination)   │
-                    └──┬─────┬──────┬──┘
-                       │     │      │
-           ┌───────────┘     │      └───────────┐
-           │                 │                  │
-  ┌────────▼───────┐ ┌──────▼───────┐ ┌────────▼───────┐
-  │   Buffer Pool  │ │     WAL      │ │    Version     │
-  │  (page cache)  │ │  (durability)│ │  Visibility    │
-  │   LRU evict    │ │  group commit│ │   (MVCC)       │
-  └────────┬───────┘ └──────┬───────┘ └────────────────┘
-           │                │
-  ┌────────▼───────┐ ┌──────▼───────┐
-  │ DiskController │ │ WAL Segments │
-  │   (async I/O)  │ │ + Checkpoint │
-  └────────────────┘ └──────────────┘
+                    └──┬──┬──┬──┬──┬───┘
+                       │  │  │  │  │
+         ┌─────────────┘  │  │  │  └─────────────┐
+         │        ┌───────┘  │  └───────┐         │
+         │        │          │          │         │
+┌────────▼──────┐ │ ┌────────▼───────┐  │ ┌───────▼───────┐
+│  Buffer Pool  │ │ │   Free List    │  │ │    Garbage    │
+│ 2-tier LRU    │ │ │  (page alloc)  │  │ │   Collector   │
+│ sharded lock  │ │ └────────────────┘  │ │  4-stage pipe │
+└───────┬───────┘ │                     │ └───────────────┘
+        │  ┌──────▼────────┐  ┌─────────▼──────────┐
+        │  │      WAL      │  │     Version        │
+        │  │  lock-free    │  │    Visibility       │
+        │  │  CAS append   │  │     (MVCC)         │
+        │  └──┬─────┬──────┘  └────────────────────┘
+        │     │     │
+┌───────▼─────▼┐ ┌──▼─────────────┐
+│DiskController│ │  WAL Segments   │
+│ (async I/O)  │ │  + Preloader    │
+│  Direct I/O  │ │  + Checkpoint   │
+└──────────────┘ └────────────────┘
 ```
 
 ### Modules
@@ -91,43 +92,40 @@ tx.commit()?;
 | Module | Description |
 |--------|-------------|
 | `engine` | Bootstrap, configuration, lifecycle management |
-| `cursor` | Blink tree traversal, CRUD operations, range iterator, GC |
+| `cursor` | Blink tree traversal, CRUD operations, range iterator, GC pipeline |
 | `transaction` | Transaction orchestrator, MVCC visibility, free list |
-| `buffer_pool` | LRU page cache with sharded locking, dirty page tracking |
-| `wal` | Segment-based WAL, log records, group commit, replay |
-| `disk` | Async disk I/O controller with read/write thread pools |
-| `serialize` | Page-level serialization/deserialization |
+| `buffer_pool` | 2-tier LRU page cache with sharded locking, atomic pin, dirty page tracking |
+| `wal` | Lock-free CAS-based WAL, segment preloading/reuse, group commit, replay |
+| `disk` | Async disk I/O controller with Direct I/O, page object pool |
+| `thread` | Work-stealing thread pool, oneshot channel, buffered/timeout execution modes |
+| `serialize` | Page-level binary serialization with type tag validation |
 
 ### Transaction Lifecycle
 
 1. `Engine::new_transaction()` allocates a transaction ID and registers it as active
 2. All reads check MVCC visibility - only committed versions are visible to other transactions
-3. Writes append version records to data entries; write-write conflicts trigger auto-abort
+3. Writes append version records to data entries; write-write conflicts return `WriteConflict` error
 4. `commit()` writes a commit record to WAL and calls `fsync` via group commit
 5. `drop` auto-aborts uncommitted transactions
 
 ### Write-Ahead Logging
 
-- **Segment-based**: WAL files rotate at a configurable size threshold
-- **Group commit**: Batches multiple `fsync` calls to amortize I/O cost
-- **Checkpoint**: Old WAL segments are handed off to a background checkpoint thread
-- **Replay**: On startup, replays uncommitted WAL records and rebuilds transaction state
+- **Lock-free append**: Atomic bit-packed `u64` (24-bit pin counter + 40-bit offset) enables concurrent writes without locks
+- **CAS buffer rotation**: When a 16KB buffer fills, one thread wins the CAS to swap in a new buffer; others retry
+- **Epoch-based reclamation**: Replaced buffers are safely freed via crossbeam epoch GC
+- **Segment preloading**: Background thread pre-allocates the next segment; completed segments are reused via rename
+- **Group commit**: Batches fsync calls per segment to amortize disk I/O
+- **Checkpoint**: Periodically flushes buffer pool and advances the recovery point
+- **Replay**: On startup, redoes committed inserts after the last checkpoint; incomplete transactions are marked as aborted
 
 ### Garbage Collection
 
-Background pipeline that:
-1. Identifies versions no longer visible to any active transaction
-2. Removes obsolete version records from data entries
-3. Reclaims freed pages back to the free list
-4. Cleans up aborted transaction metadata
+Background 4-stage pipeline, each stage running on a parallel work-stealing thread pool:
 
-## Dependencies
-
-| Crate | Purpose |
-|-------|---------|
-| `crossbeam` | Lock-free queues, channels, scoped threads |
-| `hashbrown` | Raw hash table API for buffer pool page table |
-| `thiserror` | Error type derivation |
+1. **Leaf scan** - Traverses B-tree leaves to find entries with old versions
+2. **Expiry check** - Identifies versions no longer visible to any active transaction
+3. **Entry cleanup** - Removes obsolete version records from data entries
+4. **Page release** - Reclaims freed pages back to the free list
 
 ## License
 
