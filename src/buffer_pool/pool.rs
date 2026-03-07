@@ -11,7 +11,7 @@ use super::{LRUTable, PageSlot};
 use crate::{
   disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
   error::Result,
-  utils::{Bitmap, ShortenedRwLock, ToArc},
+  utils::{Bitmap, LogFilter, ShortenedRwLock, ToArc},
 };
 
 pub struct BufferPoolConfig {
@@ -27,9 +27,10 @@ pub struct BufferPool {
   pins: Vec<AtomicUsize>,
   dirty: Bitmap,
   disk: Arc<DiskController<PAGE_SIZE>>,
+  logger: LogFilter,
 }
 impl BufferPool {
-  pub fn open(config: BufferPoolConfig) -> Result<Self> {
+  pub fn open(config: BufferPoolConfig, logger: LogFilter) -> Result<Self> {
     let disk_config = DiskControllerConfig {
       path: config.path,
       thread_count: config.io_thread_count,
@@ -49,6 +50,7 @@ impl BufferPool {
       disk,
       table: LRUTable::new(config.shard_count, frame_cap),
       dirty: Bitmap::new(config.capacity),
+      logger,
     })
   }
 
@@ -96,6 +98,7 @@ impl BufferPool {
   }
 
   pub fn flush(&self) -> Result {
+    self.logger.debug("buffer pool flush triggered.");
     let mut waits = Vec::new();
     for id in self.dirty.iter() {
       self.pins[id].fetch_add(1, Ordering::Release);
@@ -109,7 +112,10 @@ impl BufferPool {
     for done in waits {
       done.wait()?;
     }
+    self.logger.debug("buffer pool flushed all pages.");
+
     self.disk.fsync()?;
+    self.logger.debug("buffer pool synced.");
     Ok(())
   }
 

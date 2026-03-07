@@ -28,7 +28,7 @@ impl TxOrchestrator {
     gc_config: GarbageCollectionConfig,
     logger: LogFilter,
   ) -> Result<(Self, bool)> {
-    let buffer_pool = BufferPool::open(buffer_pool_config)?.to_arc();
+    let buffer_pool = BufferPool::open(buffer_pool_config, logger.clone())?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
     let checkpoint_ch = SingleWorkInput::new();
 

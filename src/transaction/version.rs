@@ -32,8 +32,7 @@ impl VersionVisibility {
     self.inner.rl().aborted.contains(tx_id)
   }
   pub fn min_active(&self) -> Option<usize> {
-    let inner = self.inner.rl();
-    Some(*inner.active.first()?)
+    self.inner.rl().active.first().cloned()
   }
   pub fn min_version(&self) -> usize {
     self
