@@ -60,10 +60,10 @@ impl<'a> CursorIterator<'a> {
 
           for record in entry.get_versions() {
             if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
-              match record.data.get_data() {
+              match record.data.cloned() {
                 Some(data) => {
                   self.pos = i + 1;
-                  return Ok(Some((key.clone(), data.clone())));
+                  return Ok(Some((key.clone(), data)));
                 }
                 None => continue 'leaf,
               }

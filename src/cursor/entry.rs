@@ -18,9 +18,10 @@ impl RecordData {
       RecordData::Tombstone => 1,
     }
   }
-  pub fn get_data(&self) -> Option<&Vec<u8>> {
+
+  pub fn cloned(&self) -> Option<Vec<u8>> {
     match self {
-      RecordData::Data(data) => Some(data),
+      RecordData::Data(data) => Some(data.clone()),
       RecordData::Tombstone => None,
     }
   }

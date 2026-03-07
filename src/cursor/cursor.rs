@@ -107,7 +107,7 @@ impl Cursor {
 
       for record in entry.get_versions() {
         if record.owner == self.tx_id {
-          return Ok(record.data.get_data().cloned());
+          return Ok(record.data.cloned());
         }
 
         if record.version > self.tx_id {
@@ -117,7 +117,7 @@ impl Cursor {
           continue;
         }
 
-        return Ok(record.data.get_data().cloned());
+        return Ok(record.data.cloned());
       }
 
       match entry.get_next() {
