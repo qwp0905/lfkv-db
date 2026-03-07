@@ -1,11 +1,4 @@
-use std::{
-  path::PathBuf,
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
-  time::Duration,
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use crossbeam::{
   channel::{unbounded, Receiver},
@@ -35,24 +28,22 @@ impl SegmentPreload {
     let (tx, rx) = unbounded();
     let reuse = SegQueue::<WALSegment>::new().to_arc();
     let reuse_c = reuse.clone();
-    let generation = AtomicUsize::new(generation);
+    let mut generation = generation;
     let thread = WorkBuilder::new()
       .name("wal segment preloader")
       .stack_size(2 << 20)
       .single()
       .no_timeout(move |_| {
-        if let Some(seg) = reuse_c.pop() {
-          seg.reuse(&prefix, generation.fetch_add(1, Ordering::Release))?;
-          tx.send(Ok(seg)).unwrap();
-          return Ok(());
-        }
-        let segment = WALSegment::open_new(
-          &prefix,
-          generation.fetch_add(1, Ordering::Release),
-          flush_count,
-          flush_interval,
-          max_len,
-        )?;
+        let current = generation;
+        generation += 1;
+
+        let segment = reuse_c
+          .pop()
+          .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
+          .unwrap_or_else(|| {
+            WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
+          })?;
+
         tx.send(Ok(segment)).unwrap();
         Ok(())
       });
