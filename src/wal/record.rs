@@ -108,11 +108,6 @@ impl LogRecord {
     vec
   }
 }
-impl From<LogRecord> for Vec<u8> {
-  fn from(value: LogRecord) -> Self {
-    value.to_bytes()
-  }
-}
 impl TryFrom<Vec<u8>> for LogRecord {
   type Error = Error;
 
