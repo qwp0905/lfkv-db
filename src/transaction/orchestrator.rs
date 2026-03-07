@@ -148,9 +148,6 @@ impl TxOrchestrator {
   pub fn is_aborted(&self, tx_id: &usize) -> bool {
     self.version_visibility.is_aborted(tx_id)
   }
-  pub fn is_disk_empty(&self) -> Result<bool> {
-    self.buffer_pool.is_empty()
-  }
 
   pub fn close(&self) -> Result {
     let wal_close = self.wal.twostep_close();

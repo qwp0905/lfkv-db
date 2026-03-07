@@ -30,9 +30,6 @@ impl<'a> PageSlot<'a> {
       pin,
     }
   }
-  pub fn get_index(&self) -> usize {
-    self.index
-  }
 
   pub fn for_read<'b>(self) -> PageSlotRead<'b>
   where

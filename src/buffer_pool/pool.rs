@@ -119,10 +119,6 @@ impl BufferPool {
     Ok(())
   }
 
-  pub fn is_empty(&self) -> Result<bool> {
-    Ok(self.disk_len()? == 0)
-  }
-
   pub fn close(&self) {
     self.disk.close();
   }
