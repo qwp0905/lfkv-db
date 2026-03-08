@@ -7,12 +7,12 @@ A persistent, ACID-compliant key-value store built on a Blink tree index with MV
 ## Features
 
 - **Blink Tree Index** - Lock-free concurrent B-tree variant with right-link pointers for non-blocking traversal and range scans
-- **MVCC** - Snapshot isolation through version chains; readers never block writers
+- **MVCC** - Snapshot isolation via append-only version chains; readers never block writers, latch coupling on read path prevents use-after-free from concurrent GC
 - **Lock-Free WAL** - CAS-based append with atomic bit-packed offset, epoch-based buffer reclamation, and segment preloading/reuse
 - **Group Commit** - Batches multiple fsync calls per segment to amortize I/O cost
 - **Buffer Pool** - 2-tier LRU (old/new) page cache with sharded locking and atomic pin-based eviction control
 - **Direct I/O** - OS page cache bypass for predictable I/O performance
-- **Garbage Collection** - Background 4-stage pipeline with parallel work-stealing threads that reclaims obsolete versions and freed pages
+- **2-Phase Garbage Collection** - Phase 1 cleans version chains (removes expired/aborted versions, frees empty tail pages); Phase 2 prunes empty entries from leaf nodes
 - **Crash Recovery** - Automatic WAL replay on startup with redo of committed transactions
 - **Custom Thread Infrastructure** - Work-stealing thread pool, oneshot channels, and buffered execution modes, all with panic safety
 
@@ -72,7 +72,7 @@ tx.commit()?;
 ┌────────▼──────┐ │ ┌────────▼───────┐  │ ┌───────▼───────┐
 │  Buffer Pool  │ │ │   Free List    │  │ │    Garbage    │
 │ 2-tier LRU    │ │ │  (page alloc)  │  │ │   Collector   │
-│ sharded lock  │ │ └────────────────┘  │ │  4-stage pipe │
+│ sharded lock  │ │ └────────────────┘  │ │  2-phase GC   │
 └───────┬───────┘ │                     │ └───────────────┘
         │  ┌──────▼────────┐  ┌─────────▼──────────┐
         │  │      WAL      │  │     Version        │
@@ -104,7 +104,7 @@ tx.commit()?;
 
 1. `Engine::new_transaction()` allocates a transaction ID and registers it as active
 2. All reads check MVCC visibility - only committed versions are visible to other transactions
-3. Writes append version records to data entries; write-write conflicts return `WriteConflict` error
+3. Writes append version records to the head page of data entries; when the head page is full, existing content is pushed to a new next page (max 2 page writes). Write-write conflicts return `WriteConflict` error
 4. `commit()` writes a commit record to WAL and calls `fsync` via group commit
 5. `drop` auto-aborts uncommitted transactions
 
@@ -120,12 +120,17 @@ tx.commit()?;
 
 ### Garbage Collection
 
-Background 4-stage pipeline, each stage running on a parallel work-stealing thread pool:
+2-phase background GC with 5 parallel worker groups:
 
-1. **Leaf scan** - Traverses B-tree leaves to find entries with old versions
-2. **Expiry check** - Identifies versions no longer visible to any active transaction
-3. **Entry cleanup** - Removes obsolete version records from data entries
-4. **Page release** - Reclaims freed pages back to the free list
+**Phase 1 — Version Chain Cleanup** (`clean_entry` → `clean_version_chain` → `release`)
+- Traverses all leaf nodes and dispatches version chains to parallel workers
+- Per chain: removes aborted versions, discards expired versions below `min_version`, keeps at most one expired Data record as the baseline
+- When a page becomes empty: copies next page's content forward and frees the tail page
+- Latch safety: write latch on current page, read latch on next — always forward, no deadlock
+
+**Phase 2 — Leaf Node Pruning** (`clean_leaf` → `check_empty` → `release`)
+- Traverses leaves with write latch, checks each entry's head page for emptiness
+- Removes fully empty entries from the leaf and frees their head pages
 
 ## License
 
