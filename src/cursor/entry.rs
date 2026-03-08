@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, mem::replace};
+use std::collections::VecDeque;
 
 use crate::{
   cursor::Pointer,
@@ -41,6 +41,10 @@ impl VersionRecord {
       data,
     }
   }
+
+  fn byte_len(&self) -> usize {
+    24 + self.data.len() // owner 8byte + version 8byte + data lenth 8byte + data
+  }
 }
 
 #[derive(Debug)]
@@ -51,31 +55,27 @@ pub struct DataEntry {
 impl DataEntry {
   pub fn init(version: VersionRecord) -> Self {
     let mut versions = VecDeque::new();
-    versions.push_front(version);
+    versions.push_back(version);
     Self {
       next: None,
       versions,
     }
   }
-  pub fn new() -> Self {
-    Self {
-      next: None,
-      versions: Default::default(),
-    }
+
+  pub fn drain(&mut self) -> impl Iterator<Item = VersionRecord> + '_ {
+    self.versions.drain(..)
+  }
+  pub fn set_records(&mut self, records: VecDeque<VersionRecord>) {
+    self.versions = records;
+  }
+
+  pub fn is_available(&self, record: &VersionRecord) -> bool {
+    let byte_len = 8 + 8 + self.versions.iter().fold(0, |a, c| a + c.byte_len());
+    record.byte_len() + byte_len < SERIALIZABLE_BYTES
   }
 
   pub fn get_versions(&self) -> impl Iterator<Item = &VersionRecord> {
     self.versions.iter()
-  }
-
-  pub fn filter_aborted<F: Fn(&usize) -> bool>(&mut self, is_aborted: F) -> bool {
-    let len = self.versions.len();
-    self.versions = self
-      .versions
-      .drain(..)
-      .filter(|v| !is_aborted(&v.owner))
-      .collect();
-    self.versions.len() < len
   }
 
   pub fn get_last_owner(&self) -> Option<usize> {
@@ -89,40 +89,12 @@ impl DataEntry {
     self.next = Some(index);
   }
 
-  pub fn apply_split(&mut self, versions: VecDeque<VersionRecord>) {
-    let exists = replace(&mut self.versions, versions);
-    self.versions.extend(exists);
-  }
-
   pub fn append(&mut self, record: VersionRecord) {
     self.versions.push_front(record);
   }
 
-  pub fn split_if_full(&mut self) -> Option<VecDeque<VersionRecord>> {
-    let mut byte_len = 8 + 8;
-
-    for i in 0..self.versions.len() {
-      byte_len += 8 * 3 + self.versions[i].data.len();
-      if byte_len >= SERIALIZABLE_BYTES {
-        return Some(self.versions.split_off(self.versions.len() >> 1));
-      }
-    }
-
-    None
-  }
-
-  pub fn remove_until(&mut self, min_version: usize) -> bool {
-    let i = self
-      .versions
-      .binary_search_by(|v| min_version.cmp(&v.version))
-      .unwrap_or_else(|i| i)
-      + 1;
-    if i >= self.versions.len() {
-      return false;
-    }
-    let _ = self.versions.split_off(i);
-    let _ = self.next.take();
-    true
+  pub fn len(&self) -> usize {
+    self.versions.len()
   }
 
   pub fn is_empty(&self) -> bool {

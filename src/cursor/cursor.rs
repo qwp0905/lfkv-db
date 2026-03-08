@@ -99,14 +99,9 @@ impl Cursor {
       }
     }
 
+    let mut read_latch = self.orchestrator.fetch(index)?.for_read();
     loop {
-      let entry: DataEntry = self
-        .orchestrator
-        .fetch(index)?
-        .for_read()
-        .as_ref()
-        .deserialize()?;
-
+      let entry: DataEntry = read_latch.as_ref().deserialize()?;
       for record in entry.get_versions() {
         if record.owner == self.tx_id {
           return Ok(record.data.cloned());
@@ -123,7 +118,10 @@ impl Cursor {
       }
 
       match entry.get_next() {
-        Some(i) => index = i,
+        Some(i) => drop(replace(
+          &mut read_latch,
+          self.orchestrator.fetch(i)?.for_read(),
+        )),
         None => return Ok(None),
       }
     }
@@ -325,42 +323,23 @@ impl Cursor {
 
     let version = self.orchestrator.current_version();
     let record = VersionRecord::new(self.tx_id, version, data);
-    entry.append(record);
 
-    let mut latches = Vec::new();
-
-    loop {
-      let versions = match entry.split_if_full() {
-        Some(versions) => versions,
-        None => {
-          latch.as_mut().serialize_from(&entry)?;
-          latches.push(latch);
-          break;
-        }
-      };
-
-      let (next_latch, mut next_entry) = match entry.get_next() {
-        Some(i) => {
-          let next_latch = self.orchestrator.fetch(i)?.for_write();
-          let next_entry = next_latch.as_ref().deserialize::<DataEntry>()?;
-          (next_latch, next_entry)
-        }
-        None => {
-          let next_latch = self.orchestrator.alloc()?;
-          let next_entry = DataEntry::new();
-          entry.set_next(next_latch.get_index());
-          (next_latch, next_entry)
-        }
-      };
-      next_entry.apply_split(versions);
+    if entry.is_available(&record) {
+      entry.append(record);
       latch.as_mut().serialize_from(&entry)?;
-      latches.push(replace(&mut latch, next_latch));
-      entry = next_entry;
+      self.orchestrator.log(self.tx_id, &latch)?;
+      return Ok(());
     }
 
-    while let Some(latch) = latches.pop() {
-      self.orchestrator.log(self.tx_id, &latch)?;
-    }
+    let mut new_slot = self.orchestrator.alloc()?;
+    let mut new_entry = DataEntry::init(record);
+    new_entry.set_next(new_slot.get_index());
+
+    new_slot.as_mut().serialize_from(&entry)?;
+    self.orchestrator.log(self.tx_id, &new_slot)?;
+
+    latch.as_mut().serialize_from(&new_entry)?;
+    self.orchestrator.log(self.tx_id, &latch)?;
 
     Ok(())
   }

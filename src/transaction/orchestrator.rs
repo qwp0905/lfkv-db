@@ -51,7 +51,7 @@ impl TxOrchestrator {
     let version_visibility =
       VersionVisibility::new(replay.aborted, replay.last_tx_id).to_arc();
 
-    let gc = GarbageCollector::start(
+    let gc = GarbageCollector::new(
       buffer_pool.clone(),
       version_visibility.clone(),
       free_list.clone(),
