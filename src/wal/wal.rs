@@ -10,14 +10,13 @@ use std::{
 use crossbeam::{
   epoch::{self, Atomic, Owned},
   queue::SegQueue,
-  utils::Backoff,
 };
 
 use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToArc, ToRawPointer, UnsafeBorrow},
+  utils::{Backoff, LogFilter, ToArc, ToRawPointer, UnsafeBorrow},
 };
 
 use super::{
@@ -211,12 +210,13 @@ impl WAL {
         }
 
         while ready > buffer.load_commit() {
-          backoff.snooze();
+          backoff.spin();
         }
         buffer.apply_record_count(ready + 1);
         buffer.commit_entry();
 
         buffer.write_to_disk()?;
+
         while !buffer.is_ready_to_flush() {
           backoff.snooze();
         }
@@ -224,19 +224,22 @@ impl WAL {
         let f = buffer.flush();
         buffer.unpin_segment();
 
+        backoff.reset();
         while buffer.get_generation() > self.syned_count.load(Ordering::Acquire) {
-          if let Some(f) = self.fsync_queue.pop() {
-            f.wait()?;
-            self.syned_count.fetch_add(1, Ordering::Release);
+          match self.fsync_queue.pop() {
+            Some(f) => {
+              f.wait()?; // non busy wait
+              self.syned_count.fetch_add(1, Ordering::Release);
+            }
+            None => backoff.snooze(), // might be busy wait
           }
-          backoff.snooze()
         }
         return f.wait();
       }
 
       if offset >= WAL_BLOCK_SIZE {
         buffer.unpin_segment();
-        backoff.snooze();
+        backoff.spin();
         continue;
       }
 
@@ -267,9 +270,10 @@ impl WAL {
       ) {
         if buffer.get_index() + 1 < self.max_index {
           failed.current.as_raw().borrow_unsafe().unpin_segment();
-          backoff.snooze();
+          backoff.spin();
           continue;
         }
+
         let (segment, _) = failed.new.take_segement();
         self.preloader.reuse(segment);
         continue;
@@ -279,7 +283,7 @@ impl WAL {
 
       let buffer = buffer_ptr.as_raw().borrow_unsafe();
       while ready > buffer.load_commit() {
-        backoff.snooze();
+        backoff.spin();
       }
 
       buffer.apply_record_count(ready);
@@ -288,7 +292,7 @@ impl WAL {
 
       if buffer.get_index() + 1 < self.max_index {
         buffer.unpin_segment();
-        backoff.snooze();
+        backoff.spin();
         continue;
       }
       while buffer.load_segment_pinned() > 1 {

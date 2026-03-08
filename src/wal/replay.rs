@@ -96,10 +96,8 @@ pub fn replay(
           redo.insert(record.log_id, (i, page));
         }
         Operation::Start => {
-          if let Some(&id) = last_min_active.as_ref() {
-            if id > record.tx_id {
-              continue;
-            }
+          if last_min_active.map_or(false, |id| id > record.tx_id) {
+            continue;
           }
           started.insert(record.tx_id);
         }

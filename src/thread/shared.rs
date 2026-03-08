@@ -1,16 +1,14 @@
 use std::{
-  hint::spin_loop,
   panic::{RefUnwindSafe, UnwindSafe},
   sync::{Arc, Mutex},
-  thread::{park_timeout, yield_now, Builder, JoinHandle},
-  time::Duration,
+  thread::{Builder, JoinHandle},
 };
 
 use crossbeam::deque::{Injector, Stealer, Worker};
 
 use crate::{
   error::Result,
-  utils::{ShortenedMutex, ToArc},
+  utils::{Backoff, ShortenedMutex, ToArc},
 };
 
 use super::{oneshot, BatchWorkResult, Context, SharedFn, WorkResult};
@@ -35,10 +33,6 @@ fn pop_or_steal<A>(
   None
 }
 
-const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
-const YIELD_LIMIT: u8 = 16;
-const SPIN_LIMIT: u8 = 8;
-
 fn return_task<A>(global: &Injector<A>, local: &Worker<A>) {
   while let Some(v) = local.pop() {
     global.push(v);
@@ -56,28 +50,18 @@ where
   R: Send + 'static,
 {
   move || {
-    let mut count = 0;
+    let backoff = Backoff::new();
     loop {
-      if let Some(task) = pop_or_steal(&local, &global, &stealers) {
-        count = 0;
-        match task {
-          Context::Work((data, out)) => out.fulfill(work.call(data)),
-          Context::Term => return return_task(&global, &local),
+      match pop_or_steal(&local, &global, &stealers) {
+        Some(task) => {
+          backoff.reset();
+          match task {
+            Context::Work((data, out)) => out.fulfill(work.call(data)),
+            Context::Term => return return_task(&global, &local),
+          }
         }
-        continue;
+        None => backoff.snooze(),
       }
-
-      if count >= YIELD_LIMIT {
-        park_timeout(THREAD_PARK_TIMEOUT);
-        continue;
-      }
-
-      if count >= SPIN_LIMIT {
-        yield_now();
-      } else {
-        spin_loop();
-      }
-      count += 1;
     }
   }
 }
