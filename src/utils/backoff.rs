@@ -6,8 +6,8 @@ use std::{
 };
 
 const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
-const YIELD_LIMIT: u8 = 16;
-const SPIN_LIMIT: u8 = 8;
+const YIELD_LIMIT: u8 = 10;
+const SPIN_LIMIT: u8 = 6;
 
 pub struct Backoff {
   step: Cell<u8>,
@@ -23,22 +23,26 @@ impl Backoff {
 
   pub fn spin(&self) {
     let step = self.step.get();
-    if step < SPIN_LIMIT {
+    for _ in 0..(1 << step.min(SPIN_LIMIT)) {
+      spin_loop();
+    }
+    if step <= SPIN_LIMIT {
       self.step.set(step + 1);
     }
-    spin_loop();
   }
 
   pub fn snooze(&self) {
     let step = self.step.get();
-    if step >= YIELD_LIMIT {
+    if step > YIELD_LIMIT {
       return sleep(THREAD_PARK_TIMEOUT);
     }
     self.step.set(step + 1);
 
-    if step >= SPIN_LIMIT {
+    if step > SPIN_LIMIT {
       return yield_now();
     }
-    spin_loop();
+    for _ in 0..(1 << step) {
+      spin_loop();
+    }
   }
 }
