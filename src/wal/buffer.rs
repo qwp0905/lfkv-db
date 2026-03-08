@@ -1,6 +1,9 @@
 use std::{
   ptr::copy_nonoverlapping,
-  sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
+  sync::{
+    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+    Arc,
+  },
 };
 
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
@@ -19,6 +22,7 @@ pub struct LogBuffer {
   index: usize,
   segment_pin: *const AtomicUsize,
   segment: *const WALSegment,
+  prev_flushed: Arc<AtomicBool>,
 }
 impl LogBuffer {
   const BIT: u64 = 40;
@@ -30,6 +34,7 @@ impl LogBuffer {
     index: usize,
     segment_pin: *const AtomicUsize,
     segment: *const WALSegment,
+    prev_flushed: Arc<AtomicBool>,
   ) -> Self {
     Self {
       offset: AtomicU64::new(Self::OFFSET_BYTE),
@@ -38,6 +43,7 @@ impl LogBuffer {
       index,
       segment_pin,
       segment,
+      prev_flushed,
     }
   }
 
@@ -85,8 +91,8 @@ impl LogBuffer {
   pub fn get_index(&self) -> usize {
     self.index
   }
-  pub fn copy_segment(&self) -> (*const WALSegment, *const AtomicUsize) {
-    (self.segment, self.segment_pin)
+  pub fn copy_segment(&self) -> (*const WALSegment, *const AtomicUsize, Arc<AtomicBool>) {
+    (self.segment, self.segment_pin, self.prev_flushed.clone())
   }
   pub fn take_segement(&self) -> (WALSegment, AtomicUsize) {
     (self.segment.take_unsafe(), self.segment_pin.take_unsafe())
@@ -96,6 +102,9 @@ impl LogBuffer {
   }
   pub fn load_segment_pinned(&self) -> usize {
     self.segment_pin.borrow_unsafe().load(Ordering::Acquire)
+  }
+  pub fn is_prev_flushed(&self) -> bool {
+    self.prev_flushed.load(Ordering::Acquire)
   }
 }
 

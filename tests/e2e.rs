@@ -383,7 +383,7 @@ fn test_entry_split() {
 #[test]
 fn test_btree_node_split_and_recovery() {
   let dir = tempdir_in(".").unwrap();
-  let key_count: usize = 10000;
+  let key_count: usize = 100_000;
 
   // Phase 1: worker pool (100 threads) concurrently insert → forces leaf + internal node splits
   {
@@ -510,7 +510,7 @@ fn crash_writer() {
     .build()
     .expect("engine bootstrap failed");
 
-  let key_count: usize = 30000;
+  let key_count: usize = 30_000;
   let thread_count = 1000;
   let (task_tx, task_rx) =
     crossbeam::channel::unbounded::<(usize, crossbeam::channel::Sender<()>)>();

@@ -1,7 +1,7 @@
 use std::{
   path::PathBuf,
   sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
   },
   time::Duration,
@@ -44,6 +44,7 @@ pub struct WAL {
   page_pool: PagePool<WAL_BLOCK_SIZE>,
   wait_checkpoint: SingleWorkThread<WALSegment, Result>,
   not_flushed: Arc<SegQueue<WALSegment>>,
+  fsync_queue: SegQueue<(FsyncResult, Arc<AtomicBool>)>,
 }
 impl WAL {
   pub fn replay(
@@ -100,6 +101,7 @@ impl WAL {
       0,
       AtomicUsize::new(0).to_raw_ptr(),
       preloader.load()?.to_raw_ptr(),
+      AtomicBool::new(true).to_arc(),
     );
 
     Ok((
@@ -111,6 +113,7 @@ impl WAL {
         max_index,
         wait_checkpoint,
         not_flushed,
+        fsync_queue: SegQueue::new(),
       },
       replay_result,
     ))
@@ -124,7 +127,6 @@ impl WAL {
     let record = create_record(log_id).to_bytes_with_len();
     let len = record.len();
     let guard = &epoch::pin();
-    let mut fsync: Vec<FsyncResult> = vec![];
     let backoff = Backoff::new();
 
     loop {
@@ -135,20 +137,32 @@ impl WAL {
       let (offset, ready) = buffer.pin_entry(len);
       if offset + len < WAL_BLOCK_SIZE {
         buffer.write_at(&record, offset);
-        if flush {
-          while ready > buffer.load_commit() {
-            backoff.snooze();
-          }
-          buffer.apply_entry_len(ready + 1);
-          fsync.push(buffer.flush()?);
+        if !flush {
+          buffer.commit_entry();
+          buffer.unpin_segment();
+          return Ok(());
         }
+
+        while ready > buffer.load_commit() {
+          backoff.snooze();
+        }
+        buffer.apply_entry_len(ready + 1);
+
+        let f = buffer.flush()?;
         buffer.commit_entry();
         buffer.unpin_segment();
 
-        for f in fsync {
-          f.wait()?;
+        while !buffer.is_prev_flushed() {
+          match self.fsync_queue.pop() {
+            Some((result, flushed)) => {
+              result.wait()?;
+              flushed.store(true, Ordering::Release);
+            }
+            None => backoff.snooze(),
+          }
         }
-        return Ok(());
+
+        return f.wait();
       }
 
       if offset >= WAL_BLOCK_SIZE {
@@ -157,12 +171,13 @@ impl WAL {
         continue;
       }
 
-      let (mut segment, mut pin) = buffer.copy_segment();
+      let (mut segment, mut pin, mut prev_flushed) = buffer.copy_segment();
       let mut index = buffer.get_index() + 1;
       if index >= self.max_index {
         index = 0;
         segment = self.preloader.load()?.to_raw_ptr();
         pin = AtomicUsize::new(0).to_raw_ptr();
+        prev_flushed = AtomicBool::new(false).to_arc();
       }
 
       if let Err(failed) = self.buffer.compare_exchange(
@@ -172,6 +187,7 @@ impl WAL {
           index,
           pin,
           segment,
+          prev_flushed.clone(),
         )),
         Ordering::Release,
         Ordering::Acquire,
@@ -206,7 +222,7 @@ impl WAL {
       }
 
       let (segment, _) = buffer.take_segement();
-      fsync.push(segment.fsync());
+      self.fsync_queue.push((segment.fsync(), prev_flushed));
       self.wait_checkpoint.send(segment);
     }
   }
@@ -244,6 +260,11 @@ impl WAL {
 
   pub fn twostep_close<'a>(&'a self) -> impl Fn() + 'a {
     self.wait_checkpoint.close();
+
+    while let Some((r, f)) = self.fsync_queue.pop() {
+      let _ = r.wait();
+      f.store(true, Ordering::Release);
+    }
     while let Some(seg) = self.not_flushed.pop() {
       self.preloader.reuse(seg);
     }
@@ -275,6 +296,8 @@ impl WAL {
     self.preloader.reuse(segment);
   }
 }
+unsafe impl Send for WAL {}
+unsafe impl Sync for WAL {}
 
 fn handle_rotate(
   preloader: Arc<SegmentPreload>,
