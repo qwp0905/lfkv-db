@@ -1,7 +1,7 @@
 use std::{
   path::PathBuf,
   sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Arc,
   },
   time::Duration,
@@ -37,14 +37,45 @@ pub struct WALConfig {
 }
 
 pub struct WAL {
+  /**
+   *  preload wal segment
+   *  reuse synced + checkpoint complete segment
+   */
   preloader: Arc<SegmentPreload>,
+  /**
+   * last log id (LSN)
+   */
   last_log_id: AtomicUsize,
+  /**
+   * wal log buffer.
+   */
   buffer: Atomic<LogBuffer>,
+  /**
+   * wal segment max size
+   */
   max_index: usize,
+  /**
+   * preloaded data block.
+   */
   page_pool: PagePool<WAL_BLOCK_SIZE>,
+  /**
+   * buffering rotated segment and trigger checkpoint.
+   */
   wait_checkpoint: SingleWorkThread<WALSegment, Result>,
+  /**
+   * queue for segment whick checkpoint does not complete.
+   * it will be clear and move to reloader to reuse segment when checkpoint has completed.
+   */
   not_flushed: Arc<SegQueue<WALSegment>>,
-  fsync_queue: SegQueue<(FsyncResult, Arc<AtomicBool>)>,
+  /**
+   * fsync operation result queue.
+   * asynchronously called in segment rotation .
+   */
+  fsync_queue: SegQueue<FsyncResult>,
+  /**
+   * fsync has been completed segments count
+   */
+  syned_count: AtomicUsize,
 }
 impl WAL {
   pub fn replay(
@@ -101,7 +132,8 @@ impl WAL {
       0,
       AtomicUsize::new(0).to_raw_ptr(),
       preloader.load()?.to_raw_ptr(),
-      AtomicBool::new(true).to_arc(),
+      AtomicUsize::new(0).to_arc(),
+      0,
     );
 
     Ok((
@@ -114,11 +146,37 @@ impl WAL {
         wait_checkpoint,
         not_flushed,
         fsync_queue: SegQueue::new(),
+        syned_count: AtomicUsize::new(0),
       },
       replay_result,
     ))
   }
 
+  /**
+   * lock freely append wal record.
+   * 1.  create record by closure.
+   * 2.  load current buffer.
+   * 3.  pinning current segment in buffer.
+   * 4.  obtain offset and record count from buffer.
+   * 5.  is able to write in entry
+   *     5-1. write and commit entry + unpin segment.
+   * 6.  if fsync required and able to write in entry
+   *     6-1. wait commit for previous writes in entry.
+   *     6-2. apply records count to entry and commit entry.
+   *     6-3. wait previous writes in disk and fsync call and then unpin segment.
+   *     6-4. wait previous fsync and current fsync, then return.
+   * 7.  if obtained offset exceed the threshold(eg. WAL_BLOCK_SIZE),
+   *     yield and move to 2 and retry.
+   * 8.  if obtained offset exceed the thredhold at first, then start to rotate current buffer.
+   *     8-1. if current buffer segment index has been exceed the threshold(eg. max len),
+   *          then trying to rotate buffer with rotated segment.
+   * 9.  if failed to rotate buffer, then clear this buffer and reuse segment if the segment has been rotated.
+   * 10. if succeeded to rotate buffer,
+   *     10-1. wait previous writes in entry, and write records count, and write to disk.
+   *     10-2. if current segment has not been rotated, then unpin segment and continue.
+   *     10-3. if current segment has been rotated, wait until pin is emtpy.
+   *     10-4. take segment raw pointer in buffer, and then trigger checkpoint.
+   */
   fn append<F>(&self, create_record: F, flush: bool) -> Result
   where
     F: Fn(usize) -> LogRecord,
@@ -146,22 +204,26 @@ impl WAL {
         while ready > buffer.load_commit() {
           backoff.snooze();
         }
-        buffer.apply_entry_len(ready + 1);
-
-        let f = buffer.flush()?;
+        buffer.apply_record_count(ready + 1);
         buffer.commit_entry();
+
+        buffer.write_to_disk()?;
+        while !buffer.is_ready_to_flush() {
+          backoff.snooze();
+        }
+
+        let f = buffer.flush();
         buffer.unpin_segment();
 
-        while !buffer.is_prev_flushed() {
+        while buffer.get_generation() > self.syned_count.load(Ordering::Acquire) {
           match self.fsync_queue.pop() {
-            Some((result, flushed)) => {
-              result.wait()?;
-              flushed.store(true, Ordering::Release);
+            Some(f) => {
+              f.wait()?;
+              self.syned_count.fetch_add(1, Ordering::Release);
             }
             None => backoff.snooze(),
           }
         }
-
         return f.wait();
       }
 
@@ -171,13 +233,15 @@ impl WAL {
         continue;
       }
 
-      let (mut segment, mut pin, mut prev_flushed) = buffer.copy_segment();
+      let (mut segment, mut pin, mut written_count) = buffer.copy_segment();
       let mut index = buffer.get_index() + 1;
+      let mut generation = buffer.get_generation();
       if index >= self.max_index {
         index = 0;
         segment = self.preloader.load()?.to_raw_ptr();
         pin = AtomicUsize::new(0).to_raw_ptr();
-        prev_flushed = AtomicBool::new(false).to_arc();
+        written_count = AtomicUsize::new(index).to_arc();
+        generation += 1;
       }
 
       if let Err(failed) = self.buffer.compare_exchange(
@@ -187,7 +251,8 @@ impl WAL {
           index,
           pin,
           segment,
-          prev_flushed.clone(),
+          written_count.clone(),
+          generation,
         )),
         Ordering::Release,
         Ordering::Acquire,
@@ -210,8 +275,10 @@ impl WAL {
         backoff.snooze();
       }
 
-      buffer.apply_entry_len(ready);
+      buffer.apply_record_count(ready);
       buffer.write_to_disk()?;
+      buffer.increase_written_count();
+
       if buffer.get_index() + 1 < self.max_index {
         buffer.unpin_segment();
         backoff.snooze();
@@ -222,7 +289,7 @@ impl WAL {
       }
 
       let (segment, _) = buffer.take_segement();
-      self.fsync_queue.push((segment.fsync(), prev_flushed));
+      self.fsync_queue.push(segment.fsync());
       self.wait_checkpoint.send(segment);
     }
   }
@@ -261,9 +328,9 @@ impl WAL {
   pub fn twostep_close<'a>(&'a self) -> impl Fn() + 'a {
     self.wait_checkpoint.close();
 
-    while let Some((r, f)) = self.fsync_queue.pop() {
-      let _ = r.wait();
-      f.store(true, Ordering::Release);
+    while let Some(f) = self.fsync_queue.pop() {
+      let _ = f.wait();
+      self.syned_count.fetch_add(1, Ordering::Release);
     }
     while let Some(seg) = self.not_flushed.pop() {
       self.preloader.reuse(seg);
