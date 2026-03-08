@@ -1,8 +1,9 @@
 use std::{
   hash::{BuildHasher, RandomState},
   sync::{Mutex, MutexGuard},
-  thread::yield_now,
 };
+
+use crossbeam::utils::Backoff;
 
 use super::LRUShard;
 use crate::utils::ShortenedMutex;
@@ -73,6 +74,7 @@ impl LRUTable {
   where
     T: Fn(usize) -> bool,
   {
+    let backoff = Backoff::new();
     let (h, s) = self.get_shard(index);
     let mut shard = s.l();
     if let Some(&id) = shard.lru.get(&index, h, &self.hasher) {
@@ -92,7 +94,7 @@ impl LRUTable {
       let ((evicted, id), evicted_hash) = shard.lru.evict(&self.hasher).unwrap();
       if !guard_fn(id) {
         shard.lru.insert(evicted, id, evicted_hash, &self.hasher);
-        yield_now();
+        backoff.snooze();
         continue;
       }
 

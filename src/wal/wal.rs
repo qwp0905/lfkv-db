@@ -4,13 +4,13 @@ use std::{
     atomic::{AtomicUsize, Ordering},
     Arc,
   },
-  thread::yield_now,
   time::Duration,
 };
 
 use crossbeam::{
   epoch::{self, Atomic, Owned},
   queue::SegQueue,
+  utils::Backoff,
 };
 
 use crate::{
@@ -125,6 +125,7 @@ impl WAL {
     let len = record.len();
     let guard = &epoch::pin();
     let mut fsync: Vec<FsyncResult> = vec![];
+    let backoff = Backoff::new();
 
     loop {
       let buffer_ptr = self.buffer.load(Ordering::Acquire, guard);
@@ -136,7 +137,7 @@ impl WAL {
         buffer.write_at(&record, offset);
         if flush {
           while ready > buffer.load_commit() {
-            yield_now();
+            backoff.snooze();
           }
           buffer.apply_entry_len(ready + 1);
           fsync.push(buffer.flush()?);
@@ -152,7 +153,7 @@ impl WAL {
 
       if offset >= WAL_BLOCK_SIZE {
         buffer.unpin_segment();
-        yield_now();
+        backoff.snooze();
         continue;
       }
 
@@ -178,7 +179,7 @@ impl WAL {
       ) {
         if buffer.get_index() + 1 < self.max_index {
           failed.current.as_raw().borrow_unsafe().unpin_segment();
-          yield_now();
+          backoff.snooze();
           continue;
         }
         let (segment, _) = failed.new.take_segement();
@@ -190,18 +191,18 @@ impl WAL {
 
       let buffer = buffer_ptr.as_raw().borrow_unsafe();
       while ready > buffer.load_commit() {
-        yield_now();
+        backoff.snooze();
       }
 
       buffer.apply_entry_len(ready);
       buffer.write_to_disk()?;
       if buffer.get_index() + 1 < self.max_index {
         buffer.unpin_segment();
-        yield_now();
+        backoff.snooze();
         continue;
       }
       while buffer.load_segment_pinned() > 1 {
-        yield_now();
+        backoff.snooze();
       }
 
       let (segment, _) = buffer.take_segement();
@@ -249,15 +250,16 @@ impl WAL {
 
     || {
       let guard = &epoch::pin();
+      let backoff = Backoff::new();
       loop {
         let ptr = self.buffer.load(Ordering::Acquire, guard);
         let buffer = ptr.as_raw().borrow_unsafe();
         if buffer.load_offset() >= WAL_BLOCK_SIZE {
-          yield_now();
+          backoff.snooze();
           continue;
         }
         if buffer.load_segment_pinned() > 0 {
-          yield_now();
+          backoff.snooze();
           continue;
         }
 

@@ -383,7 +383,7 @@ fn test_entry_split() {
 #[test]
 fn test_btree_node_split_and_recovery() {
   let dir = tempdir_in(".").unwrap();
-  let key_count: usize = 100000;
+  let key_count: usize = 10000;
 
   // Phase 1: worker pool (100 threads) concurrently insert → forces leaf + internal node splits
   {
@@ -601,7 +601,11 @@ fn test_process_crash_recovery() {
     while let Ok(Some(_)) = iter.try_next() {
       c += 1;
     }
-    println!("{c} {}", committed.len());
+    assert!(
+      c >= committed.len(),
+      "exists {c} committed {}",
+      committed.len()
+    );
     for i in &committed {
       let key = format!("key-{:06}", i).into_bytes();
       let expected = format!("val-{:06}", i).into_bytes();

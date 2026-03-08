@@ -1,4 +1,5 @@
 use std::{
+  hint::spin_loop,
   panic::{RefUnwindSafe, UnwindSafe},
   sync::{Arc, Mutex},
   thread::{park_timeout, yield_now, Builder, JoinHandle},
@@ -35,7 +36,8 @@ fn pop_or_steal<A>(
 }
 
 const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
-const YIELD_LIMIT: usize = 16;
+const YIELD_LIMIT: u8 = 16;
+const SPIN_LIMIT: u8 = 8;
 
 fn return_task<A>(global: &Injector<A>, local: &Worker<A>) {
   while let Some(v) = local.pop() {
@@ -67,10 +69,15 @@ where
 
       if count >= YIELD_LIMIT {
         park_timeout(THREAD_PARK_TIMEOUT);
-      } else {
-        count += 1;
-        yield_now();
+        continue;
       }
+
+      if count >= SPIN_LIMIT {
+        yield_now();
+      } else {
+        spin_loop();
+      }
+      count += 1;
     }
   }
 }
