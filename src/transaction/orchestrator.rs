@@ -64,8 +64,11 @@ impl TxOrchestrator {
       logger.info("create initial checkpoint");
       let log_id = wal.current_log_id();
       gc.release_orphand(disk_len)?;
-      logger.info("orphand block has released successfully.");
-      gc.run()?;
+      logger.debug("orphand block has released successfully.");
+      gc.clean_entry()?;
+      logger.debug("clean all unreachable entries.");
+      gc.clean_leaf()?;
+      logger.debug("clean all removable entries.");
       buffer_pool.flush()?;
       wal.checkpoint_and_flush(log_id, version_visibility.min_version())?;
 
@@ -188,7 +191,7 @@ fn run_checkpoint(
 ) -> Result {
   let log_id = wal.current_log_id();
   logger.debug(format!("checkpoint trigger id {log_id}"));
-  gc.run()?;
+  gc.clean_entry()?;
   logger.debug(format!("checkpoint garbage collected id {log_id}"));
   buffer_pool.flush()?;
   wal.checkpoint_and_flush(log_id, version.min_version())?;

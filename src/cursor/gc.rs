@@ -36,8 +36,11 @@ pub struct GarbageCollector {
   initialized: Arc<AtomicBool>,
 }
 impl GarbageCollector {
-  pub fn run(&self) -> Result {
+  pub fn clean_entry(&self) -> Result {
     self.clean_entry.send_await(())?
+  }
+  pub fn clean_leaf(&self) -> Result {
+    self.clean_leaf.send_await(())?
   }
   pub fn new(
     buffer_pool: Arc<BufferPool>,
