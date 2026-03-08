@@ -63,8 +63,8 @@ pub struct WAL {
    */
   wait_checkpoint: SingleWorkThread<WALSegment, Result>,
   /**
-   * queue for segment whick checkpoint does not complete.
-   * it will be clear and move to reloader to reuse segment when checkpoint has completed.
+   * queue for segment whick checkpoint failed.
+   * it will be clear and move to preloader to reuse segment when checkpoint complete.
    */
   not_flushed: Arc<SegQueue<WALSegment>>,
   /**
@@ -153,29 +153,38 @@ impl WAL {
   }
 
   /**
-   * lock freely append wal record.
+   * ## lock freely append wal record.
+   *
    * 1.  create record by closure.
+   *
    * 2.  load current buffer.
+   *
    * 3.  pinning current segment in buffer.
+   *
    * 4.  obtain offset and record count from buffer.
+   *
    * 5.  is able to write in entry
-   *     5-1. write and commit entry + unpin segment.
+   *   5-1. write and commit entry + unpin segment.
+   *
    * 6.  if fsync required and able to write in entry
-   *     6-1. wait commit for previous writes in entry.
-   *     6-2. apply records count to entry and commit entry.
-   *     6-3. wait previous writes in disk and fsync call and then unpin segment.
-   *     6-4. wait previous fsync and current fsync, then return.
-   * 7.  if obtained offset exceed the threshold(eg. WAL_BLOCK_SIZE),
-   *     yield and move to 2 and retry.
+   *   6-1. wait commit for previous writes in entry.
+   *   6-2. apply records count to entry and commit entry.
+   *   6-3. wait previous writes in disk and fsync call and then unpin segment.
+   *   6-4. wait previous fsync and current fsync, then return.
+   *
+   * 7.  if obtained offset exceed the threshold(eg. WAL_BLOCK_SIZE), yield and move to 2 and retry.
+   *
    * 8.  if obtained offset exceed the thredhold at first, then start to rotate current buffer.
-   *     8-1. if current buffer segment index has been exceed the threshold(eg. max len),
+   *   8-1. if current buffer segment index has been exceed the threshold(eg. max len),
    *          then trying to rotate buffer with rotated segment.
+   *
    * 9.  if failed to rotate buffer, then clear this buffer and reuse segment if the segment has been rotated.
+   *
    * 10. if succeeded to rotate buffer,
-   *     10-1. wait previous writes in entry, and write records count, and write to disk.
-   *     10-2. if current segment has not been rotated, then unpin segment and continue.
-   *     10-3. if current segment has been rotated, wait until pin is emtpy.
-   *     10-4. take segment raw pointer in buffer, and then trigger checkpoint.
+   *   10-1. wait previous writes in entry, and write records count, and write to disk.
+   *   10-2. if current segment has not been rotated, then unpin segment and continue.
+   *   10-3. if current segment has been rotated, wait until pin is emtpy.
+   *   10-4. take segment raw pointer in buffer, and then trigger checkpoint.
    */
   fn append<F>(&self, create_record: F, flush: bool) -> Result
   where
@@ -216,13 +225,11 @@ impl WAL {
         buffer.unpin_segment();
 
         while buffer.get_generation() > self.syned_count.load(Ordering::Acquire) {
-          match self.fsync_queue.pop() {
-            Some(f) => {
-              f.wait()?;
-              self.syned_count.fetch_add(1, Ordering::Release);
-            }
-            None => backoff.snooze(),
+          if let Some(f) = self.fsync_queue.pop() {
+            f.wait()?;
+            self.syned_count.fetch_add(1, Ordering::Release);
           }
+          backoff.snooze()
         }
         return f.wait();
       }
