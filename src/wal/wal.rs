@@ -228,10 +228,10 @@ impl WAL {
         while buffer.get_generation() > self.syned_count.load(Ordering::Acquire) {
           match self.fsync_queue.pop() {
             Some(f) => {
-              f.wait()?; // non busy wait
+              f.wait()?;
               self.syned_count.fetch_add(1, Ordering::Release);
             }
-            None => backoff.snooze(), // might be busy wait
+            None => backoff.snooze(),
           }
         }
         return f.wait();
