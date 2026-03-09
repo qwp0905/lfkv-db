@@ -51,9 +51,9 @@ impl<'a> CursorIterator<'a> {
           return Ok(None);
         }
 
-        let mut read_latch = self.orchestrator.fetch(*ptr)?.for_read();
+        let mut read_slot = self.orchestrator.fetch(*ptr)?.for_read();
         loop {
-          let entry = read_latch.as_ref().deserialize::<DataEntry>()?;
+          let entry = read_slot.as_ref().deserialize::<DataEntry>()?;
 
           for record in entry.get_versions() {
             if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
@@ -69,7 +69,7 @@ impl<'a> CursorIterator<'a> {
 
           match entry.get_next() {
             Some(i) => drop(replace(
-              &mut read_latch,
+              &mut read_slot,
               self.orchestrator.fetch(i)?.for_read(),
             )),
             None => continue 'leaf,

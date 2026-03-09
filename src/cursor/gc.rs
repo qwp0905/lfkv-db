@@ -260,8 +260,8 @@ fn run_clean_leaf(
 
     let mut index = Some(index);
     while let Some(i) = index.take() {
-      let mut latch = buffer_pool.read(i)?.for_write();
-      let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
       index = leaf.get_next();
 
       let prev_len = leaf.len();
@@ -286,8 +286,8 @@ fn run_clean_leaf(
       }
 
       leaf.set_entries(new_entries);
-      latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
+      slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
+      wal.append_insert(0, slot.get_index(), slot.as_ref())?;
     }
 
     Ok(())
@@ -316,8 +316,8 @@ fn run_clean_version_chain(
     let mut max_found = false;
 
     while let Some(i) = index.take() {
-      let mut latch = buffer_pool.read(i)?.for_write();
-      let mut entry: DataEntry = latch.as_ref().deserialize()?;
+      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut entry: DataEntry = slot.as_ref().deserialize()?;
 
       let prev_len = entry.len();
       let mut expired_max: Option<VersionRecord> = None;
@@ -359,8 +359,8 @@ fn run_clean_version_chain(
 
       if new_versions.len() > 0 {
         entry.set_records(new_versions);
-        latch.as_mut().serialize_from(&entry)?;
-        wal.append_insert(0, latch.get_index(), latch.as_ref())?;
+        slot.as_mut().serialize_from(&entry)?;
+        wal.append_insert(0, slot.get_index(), slot.as_ref())?;
         index = entry.get_next();
         continue;
       }
@@ -368,15 +368,15 @@ fn run_clean_version_chain(
       let next = match entry.get_next() {
         Some(next) => next,
         None => {
-          latch.as_mut().serialize_from(&entry)?;
-          return wal.append_insert(0, latch.get_index(), latch.as_ref());
+          slot.as_mut().serialize_from(&entry)?;
+          return wal.append_insert(0, slot.get_index(), slot.as_ref());
         }
       };
 
       let next_entry: DataEntry =
         buffer_pool.read(next)?.for_read().as_ref().deserialize()?;
-      latch.as_mut().serialize_from(&next_entry)?;
-      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
+      slot.as_mut().serialize_from(&next_entry)?;
+      wal.append_insert(0, slot.get_index(), slot.as_ref())?;
       index = Some(i);
 
       release.send_no_wait(next);

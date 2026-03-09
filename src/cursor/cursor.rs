@@ -99,9 +99,9 @@ impl Cursor {
       }
     }
 
-    let mut read_latch = self.orchestrator.fetch(index)?.for_read();
+    let mut slot = self.orchestrator.fetch(index)?.for_read();
     loop {
-      let entry: DataEntry = read_latch.as_ref().deserialize()?;
+      let entry: DataEntry = slot.as_ref().deserialize()?;
       for record in entry.get_versions() {
         if record.owner == self.tx_id {
           return Ok(record.data.cloned());
@@ -118,10 +118,7 @@ impl Cursor {
       }
 
       match entry.get_next() {
-        Some(i) => drop(replace(
-          &mut read_latch,
-          self.orchestrator.fetch(i)?.for_read(),
-        )),
+        Some(i) => drop(replace(&mut slot, self.orchestrator.fetch(i)?.for_read())),
         None => return Ok(None),
       }
     }
@@ -215,29 +212,29 @@ impl Cursor {
     }
 
     loop {
-      let mut header_latch = self.orchestrator.fetch(HEADER_INDEX)?.for_write();
-      let mut header: TreeHeader = header_latch.as_ref().deserialize()?;
+      let mut header_slot = self.orchestrator.fetch(HEADER_INDEX)?.for_write();
+      let mut header: TreeHeader = header_slot.as_ref().deserialize()?;
       let current_height = header.get_height();
       let mut index = header.get_root();
       if old_height == current_height {
-        let mut new_root_latch = self.orchestrator.alloc()?;
+        let mut new_root_slot = self.orchestrator.alloc()?;
         let new_root = InternalNode::initialize(split_key, index, split_pointer);
-        new_root_latch
+        new_root_slot
           .as_mut()
           .serialize_from(&CursorNode::Internal(new_root))?;
-        self.orchestrator.log(self.tx_id, &new_root_latch)?;
-        header.set_root(new_root_latch.get_index());
-        drop(new_root_latch);
+        self.orchestrator.log(self.tx_id, &new_root_slot)?;
+        header.set_root(new_root_slot.get_index());
+        drop(new_root_slot);
 
         header.increase_height();
-        header_latch.as_mut().serialize_from(&header)?;
-        self.orchestrator.log(self.tx_id, &header_latch)?;
+        header_slot.as_mut().serialize_from(&header)?;
+        self.orchestrator.log(self.tx_id, &header_slot)?;
         return Ok(());
       }
 
       let diff = (current_height - old_height) as usize;
       old_height = current_height;
-      drop(header_latch);
+      drop(header_slot);
       let mut stack = vec![];
 
       while stack.len() < diff {
@@ -313,8 +310,8 @@ impl Cursor {
   }
 
   fn insert_at(&self, entry_index: usize, data: RecordData) -> Result {
-    let mut latch = self.orchestrator.fetch(entry_index)?.for_write();
-    let mut entry: DataEntry = latch.as_ref().deserialize()?;
+    let mut slot = self.orchestrator.fetch(entry_index)?.for_write();
+    let mut entry: DataEntry = slot.as_ref().deserialize()?;
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
         return Err(Error::WriteConflict);
@@ -326,8 +323,8 @@ impl Cursor {
 
     if entry.is_available(&record) {
       entry.append(record);
-      latch.as_mut().serialize_from(&entry)?;
-      self.orchestrator.log(self.tx_id, &latch)?;
+      slot.as_mut().serialize_from(&entry)?;
+      self.orchestrator.log(self.tx_id, &slot)?;
       return Ok(());
     }
 
@@ -338,8 +335,8 @@ impl Cursor {
     new_slot.as_mut().serialize_from(&entry)?;
     self.orchestrator.log(self.tx_id, &new_slot)?;
 
-    latch.as_mut().serialize_from(&new_entry)?;
-    self.orchestrator.log(self.tx_id, &latch)?;
+    slot.as_mut().serialize_from(&new_entry)?;
+    self.orchestrator.log(self.tx_id, &slot)?;
 
     Ok(())
   }
