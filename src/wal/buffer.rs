@@ -114,7 +114,7 @@ impl LogBuffer {
   /**
    * to complete writing data to entry
    */
-  pub fn commit_entry(&self) {
+  pub fn unpin_entry(&self) {
     self.commit_count.fetch_add(1, Ordering::Release);
   }
   pub fn unpin_segment(&self) {

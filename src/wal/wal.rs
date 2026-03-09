@@ -204,7 +204,7 @@ impl WAL {
       if offset + len < WAL_BLOCK_SIZE {
         buffer.write_at(&record, offset);
         if !flush {
-          buffer.commit_entry();
+          buffer.unpin_entry();
           buffer.unpin_segment();
           return Ok(());
         }
@@ -213,7 +213,7 @@ impl WAL {
           backoff.spin();
         }
         buffer.apply_record_count(ready + 1);
-        buffer.commit_entry();
+        buffer.unpin_entry();
 
         buffer.write_to_disk()?;
 
