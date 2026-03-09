@@ -163,11 +163,11 @@ impl WAL {
    * 4.  obtain offset and record count from buffer.
    *
    * 5.  is able to write in entry
-   *   5-1. write and commit entry + unpin segment.
+   *   5-1. write and unpin entry + unpin segment.
    *
    * 6.  if fsync required and able to write in entry
-   *   6-1. wait commit for previous writes in entry.
-   *   6-2. apply records count to entry and commit entry.
+   *   6-1. wait unpin for previous writes in entry.
+   *   6-2. apply records count to entry and unpin entry.
    *   6-3. wait previous writes in disk and fsync call and then unpin segment.
    *   6-4. wait previous fsync and current fsync, then return.
    *
