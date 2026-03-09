@@ -1,9 +1,6 @@
 use std::{
   ptr::copy_nonoverlapping,
-  sync::{
-    atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
@@ -47,7 +44,7 @@ pub struct LogBuffer {
   /**
    * rotated and written complete data block count for current segment
    */
-  written_count: Arc<AtomicUsize>,
+  written_count: *const AtomicUsize,
   /**
    * current generation for current segment
    */
@@ -66,7 +63,7 @@ impl LogBuffer {
     segment_index: usize,
     segment_pin: *const AtomicUsize,
     segment: *const WALSegment,
-    written_count: Arc<AtomicUsize>,
+    written_count: *const AtomicUsize,
     generation: usize,
   ) -> Self {
     Self {
@@ -134,15 +131,18 @@ impl LogBuffer {
    */
   pub fn copy_segment(
     &self,
-  ) -> (*const WALSegment, *const AtomicUsize, Arc<AtomicUsize>) {
-    (self.segment, self.segment_pin, self.written_count.clone())
+  ) -> (*const WALSegment, *const AtomicUsize, *const AtomicUsize) {
+    (self.segment, self.segment_pin, self.written_count)
   }
   /**
    * to drop segment and pin
    * it should be call when nothing to refer this segment
    */
-  pub fn take_segement(&self) -> (WALSegment, AtomicUsize) {
-    (self.segment.take_unsafe(), self.segment_pin.take_unsafe())
+  pub fn take_segement(&self) -> WALSegment {
+    let segment = self.segment.take_unsafe();
+    let _ = self.segment_pin.take_unsafe();
+    let _ = self.written_count.take_unsafe();
+    segment
   }
   pub fn load_offset(&self) -> usize {
     (self.offset.load(Ordering::Acquire) & Self::MASK) as usize
@@ -151,13 +151,16 @@ impl LogBuffer {
     self.segment_pin.borrow_unsafe().load(Ordering::Acquire)
   }
   pub fn increase_written_count(&self) {
-    self.written_count.fetch_add(1, Ordering::Release);
+    self
+      .written_count
+      .borrow_unsafe()
+      .fetch_add(1, Ordering::Release);
   }
   /**
    * previous index blocks for current segment has been written to disk
    */
   pub fn is_ready_to_flush(&self) -> bool {
-    self.segment_index <= self.written_count.load(Ordering::Acquire) + 1
+    self.segment_index <= self.written_count.borrow_unsafe().load(Ordering::Acquire) + 1
   }
   pub fn get_generation(&self) -> usize {
     self.generation

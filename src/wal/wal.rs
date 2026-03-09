@@ -131,7 +131,7 @@ impl WAL {
       0,
       AtomicUsize::new(0).to_raw_ptr(),
       preloader.load()?.to_raw_ptr(),
-      AtomicUsize::new(0).to_arc(),
+      AtomicUsize::new(0).to_raw_ptr(),
       0,
     );
 
@@ -250,7 +250,7 @@ impl WAL {
         index = 0;
         segment = self.preloader.load()?.to_raw_ptr();
         pin = AtomicUsize::new(0).to_raw_ptr();
-        written_count = AtomicUsize::new(index).to_arc();
+        written_count = AtomicUsize::new(0).to_raw_ptr();
         generation += 1;
       }
 
@@ -268,14 +268,13 @@ impl WAL {
         Ordering::Acquire,
         guard,
       ) {
+        failed.current.as_raw().borrow_unsafe().unpin_segment();
         if buffer.get_index() + 1 < self.max_index {
-          failed.current.as_raw().borrow_unsafe().unpin_segment();
           backoff.spin();
           continue;
         }
 
-        let (segment, _) = failed.new.take_segement();
-        self.preloader.reuse(segment);
+        self.preloader.reuse(failed.new.take_segement());
         continue;
       }
 
@@ -299,7 +298,7 @@ impl WAL {
         backoff.snooze();
       }
 
-      let (segment, _) = buffer.take_segement();
+      let segment = buffer.take_segement();
       self.fsync_queue.push(segment.fsync());
       self.wait_checkpoint.send(segment);
       backoff.reset();
@@ -364,7 +363,7 @@ impl WAL {
         }
 
         let taken = unsafe { ptr.into_owned() };
-        let (segment, _) = taken.take_segement();
+        let segment = taken.take_segement();
         let _ = self.preloader.close();
         return segment.close();
       }
