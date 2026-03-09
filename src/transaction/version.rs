@@ -53,13 +53,13 @@ impl VersionVisibility {
   }
 
   pub fn move_to_abort(&self, tx_id: usize) {
-    self.aborted.insert(tx_id);
-    self.deactive(&tx_id);
+    self.deactive(self.aborted.insert(tx_id).value());
   }
   pub fn new_transaction(&self) -> usize {
-    let tx_id = self.last_tx_id.fetch_add(1, Ordering::Release);
-    self.active.insert(tx_id);
-    tx_id
+    *self
+      .active
+      .insert(self.last_tx_id.fetch_add(1, Ordering::Release))
+      .value()
   }
 }
 
