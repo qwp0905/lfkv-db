@@ -1,2 +1,3 @@
 [alias]
-"test:cov" = "test --test coverage -- --ignored --test-threads=1"
+"test:cov:html" = "llvm-cov --workspace --html --open"
+"test:cov" = "llvm-cov --workspace"

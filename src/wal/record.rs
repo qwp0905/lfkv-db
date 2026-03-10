@@ -1,8 +1,8 @@
 use std::{ptr::copy_nonoverlapping, slice::from_raw_parts};
 
 use crate::{
-  disk::{Page, PAGE_SIZE},
   Error,
+  disk::{PAGE_SIZE, Page},
 };
 
 pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
@@ -80,37 +80,39 @@ impl LogRecord {
   }
 
   unsafe fn write_at(&self, ptr: *mut u8) {
-    let mut offset = 4;
-    copy_nonoverlapping(self.log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-    offset += 8;
+    unsafe {
+      let mut offset = 4;
+      copy_nonoverlapping(self.log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+      offset += 8;
 
-    copy_nonoverlapping(self.tx_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-    offset += 8;
+      copy_nonoverlapping(self.tx_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+      offset += 8;
 
-    *ptr.add(offset) = self.operation.type_byte();
-    offset += 1;
-    match &self.operation {
-      Operation::Insert(index, page) => {
-        copy_nonoverlapping(index.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-        offset += 8;
-        copy_nonoverlapping(page.as_ptr(), ptr.add(offset), PAGE_SIZE);
-        offset += PAGE_SIZE;
-      }
-      Operation::Checkpoint(log_id, min_active) => {
-        copy_nonoverlapping(log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-        offset += 8;
-        copy_nonoverlapping(min_active.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-        offset += 8;
-      }
-      Operation::Start => {}
-      Operation::Commit => {}
-      Operation::Abort => {}
-    };
+      *ptr.add(offset) = self.operation.type_byte();
+      offset += 1;
+      match &self.operation {
+        Operation::Insert(index, page) => {
+          copy_nonoverlapping(index.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+          offset += 8;
+          copy_nonoverlapping(page.as_ptr(), ptr.add(offset), PAGE_SIZE);
+          offset += PAGE_SIZE;
+        }
+        Operation::Checkpoint(log_id, min_active) => {
+          copy_nonoverlapping(log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+          offset += 8;
+          copy_nonoverlapping(min_active.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+          offset += 8;
+        }
+        Operation::Start => {}
+        Operation::Commit => {}
+        Operation::Abort => {}
+      };
 
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(unsafe { from_raw_parts(ptr.add(4), offset - 4) });
-    let checksum = hasher.finalize().to_le_bytes();
-    unsafe { copy_nonoverlapping(checksum.as_ptr(), ptr, 4) };
+      let mut hasher = crc32fast::Hasher::new();
+      hasher.update(from_raw_parts(ptr.add(4), offset - 4));
+      let checksum = hasher.finalize().to_le_bytes();
+      copy_nonoverlapping(checksum.as_ptr(), ptr, 4);
+    }
   }
 
   fn byte_len(&self) -> u16 {
@@ -222,104 +224,5 @@ impl From<&Page<WAL_BLOCK_SIZE>> for (Vec<LogRecord>, bool) {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-
-  fn assert_roundtrip(record: &LogRecord) -> LogRecord {
-    let bytes: &[u8] = &record.to_bytes();
-    let parsed: LogRecord = bytes.try_into().expect("deserialize failed");
-    assert_eq!(parsed.log_id, record.log_id);
-    assert_eq!(parsed.tx_id, record.tx_id);
-    parsed
-  }
-
-  #[test]
-  fn test_start_roundtrip() {
-    let r = LogRecord::new_start(1, 42);
-    let parsed = assert_roundtrip(&r);
-    assert!(matches!(parsed.operation, Operation::Start));
-  }
-
-  #[test]
-  fn test_commit_roundtrip() {
-    let r = LogRecord::new_commit(2, 42);
-    let parsed = assert_roundtrip(&r);
-    assert!(matches!(parsed.operation, Operation::Commit));
-  }
-
-  #[test]
-  fn test_abort_roundtrip() {
-    let r = LogRecord::new_abort(3, 42);
-    let parsed = assert_roundtrip(&r);
-    assert!(matches!(parsed.operation, Operation::Abort));
-  }
-
-  #[test]
-  fn test_insert_roundtrip() {
-    let mut page = Page::new();
-    page.as_mut()[0] = 0xAB;
-    page.as_mut()[PAGE_SIZE - 1] = 0xCD;
-
-    let r = LogRecord::new_insert(4, 42, 99, page);
-    let parsed = assert_roundtrip(&r);
-    match parsed.operation {
-      Operation::Insert(index, data) => {
-        assert_eq!(index, 99);
-        assert_eq!(data.as_ref()[0], 0xAB);
-        assert_eq!(data.as_ref()[PAGE_SIZE - 1], 0xCD);
-      }
-      _ => panic!("expected Insert"),
-    }
-  }
-
-  #[test]
-  fn test_checkpoint_roundtrip() {
-    let r = LogRecord::new_checkpoint(5, 200, 123);
-    let parsed = assert_roundtrip(&r);
-    match parsed.operation {
-      Operation::Checkpoint(last_log_id, min_active) => {
-        assert_eq!(last_log_id, 200);
-        assert_eq!(min_active, 123)
-      }
-      _ => panic!("expected Checkpoint"),
-    }
-  }
-
-  #[test]
-  fn test_entry_roundtrip() {
-    let page = Page::new();
-    let mut writer = page.writer();
-
-    let _ = writer.write(&(3 as u16).to_le_bytes());
-    let r1 = LogRecord::new_start(1, 1);
-    let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
-    let r3 = LogRecord::new_commit(3, 1);
-    let _ = writer.write(&r1.to_bytes_with_len());
-    let _ = writer.write(&r2.to_bytes_with_len());
-    let _ = writer.write(&r3.to_bytes_with_len());
-
-    let (d, complete) = (&page).into();
-    assert_eq!(complete, false);
-
-    assert_eq!(d.len(), 3);
-    assert_eq!(d[0].log_id, 1);
-    assert_eq!(d[0].tx_id, 1);
-    assert!(matches!(d[0].operation, Operation::Start));
-    assert_eq!(d[1].log_id, 2);
-    assert_eq!(d[1].tx_id, 1);
-    assert!(matches!(d[1].operation, Operation::Insert(10, _)));
-    assert_eq!(d[2].log_id, 3);
-    assert_eq!(d[2].tx_id, 1);
-    assert!(matches!(d[2].operation, Operation::Commit));
-  }
-
-  #[test]
-  fn test_invalid_format() {
-    let short: Vec<u8> = vec![0; 10];
-    assert!(LogRecord::try_from(short.as_ref()).is_err());
-
-    let mut bad_op = vec![0u8; 17];
-    bad_op[16] = 255; // invalid operation type
-    assert!(LogRecord::try_from(bad_op.as_ref()).is_err());
-  }
-}
+#[path = "tests/record.rs"]
+mod tests;
