@@ -7,7 +7,7 @@ use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::PageRef,
   error::Result,
-  utils::{UnsafeBorrow, UnsafeTake},
+  utils::{ToRawPointer, UnsafeBorrow, UnsafeTake},
 };
 
 const U16_MASK: u32 = 0xFFFF;
@@ -57,6 +57,39 @@ impl LogBuffer {
    * default offset for entry to write records len
    */
   const OFFSET_BYTE: u64 = 2;
+
+  /**
+   * it whould be calling in segment rotation or initialization.
+   */
+  pub fn init(
+    entry: PageRef<WAL_BLOCK_SIZE>,
+    segment: WALSegment,
+    generation: usize,
+  ) -> Self {
+    Self::new(
+      entry,
+      0,
+      AtomicUsize::new(0).to_raw_ptr(),
+      segment.to_raw_ptr(),
+      AtomicUsize::new(0).to_raw_ptr(),
+      generation,
+    )
+  }
+
+  /**
+   * if segment is not full,
+   * then copy pointers and recreate buffer to write at next index block.
+   */
+  pub fn create_next_index(&self, entry: PageRef<WAL_BLOCK_SIZE>) -> Self {
+    Self::new(
+      entry,
+      self.segment_index + 1,
+      self.segment_pin,
+      self.segment,
+      self.written_count,
+      self.generation,
+    )
+  }
 
   pub fn new(
     entry: PageRef<WAL_BLOCK_SIZE>,
@@ -114,7 +147,7 @@ impl LogBuffer {
   /**
    * to complete writing data to entry
    */
-  pub fn unpin_entry(&self) {
+  pub fn commit_entry(&self) {
     self.commit_count.fetch_add(1, Ordering::Release);
   }
   pub fn unpin_segment(&self) {
@@ -126,14 +159,7 @@ impl LogBuffer {
   pub fn get_index(&self) -> usize {
     self.segment_index
   }
-  /**
-   * if segment is not full, then copy pointers and recreate buffer
-   */
-  pub fn copy_segment(
-    &self,
-  ) -> (*const WALSegment, *const AtomicUsize, *const AtomicUsize) {
-    (self.segment, self.segment_pin, self.written_count)
-  }
+
   /**
    * to drop segment and pin
    * it should be call when nothing to refer this segment

@@ -4,7 +4,12 @@ use super::{
   CursorIterator, CursorNode, DataEntry, InternalNode, NodeFindResult, RecordData,
   TreeHeader, VersionRecord, HEADER_INDEX,
 };
-use crate::{serialize::SerializeFrom, transaction::TxOrchestrator, Error, Result};
+use crate::{
+  buffer_pool::PageSlotWrite,
+  serialize::{Serializable, SerializeFrom},
+  transaction::TxOrchestrator,
+  Error, Result,
+};
 
 pub struct Cursor {
   orchestrator: Arc<TxOrchestrator>,
@@ -13,20 +18,28 @@ pub struct Cursor {
   _marker: PhantomData<*const ()>, // do not send to another thread!!!.
 }
 impl Cursor {
+  #[inline]
+  fn alloc_and_log<T: Serializable>(&self, data: &T) -> Result<usize> {
+    let mut slot = self.orchestrator.alloc()?;
+    self.write_and_log(&mut slot, data)?;
+    Ok(slot.get_index())
+  }
+  #[inline]
+  fn write_and_log<T: Serializable>(&self, slot: &mut PageSlotWrite, data: &T) -> Result {
+    slot.as_mut().serialize_from(data)?;
+    self.orchestrator.log(self.tx_id, slot)?;
+    Ok(())
+  }
+
   pub fn initialize(mut self) -> Result {
     let node = CursorNode::initial_state();
-    let mut node_slot = self.orchestrator.alloc()?;
-    node_slot.as_mut().serialize_from(&node)?;
-    self.orchestrator.log(self.tx_id, &node_slot)?;
-    let node_index = node_slot.get_index();
-    drop(node_slot);
+    let node_index = self.alloc_and_log(&node)?;
 
-    let root = TreeHeader::new(node_index);
-    let mut root_slot = self.orchestrator.fetch(HEADER_INDEX)?.for_write();
-    root_slot.as_mut().serialize_from(&root)?;
-    self.orchestrator.log(self.tx_id, &root_slot)?;
-    drop(root_slot);
-
+    {
+      let root = TreeHeader::new(node_index);
+      let mut root_slot = self.orchestrator.fetch(HEADER_INDEX)?.for_write();
+      self.write_and_log(&mut root_slot, &root)?;
+    }
     self.commit()
   }
   pub fn new(orchestrator: Arc<TxOrchestrator>, tx_id: usize) -> Self {
@@ -170,31 +183,21 @@ impl Cursor {
             self.orchestrator.current_version(),
             RecordData::Data(value),
           ));
-          entry_slot.as_mut().serialize_from(&entry)?;
-          self.orchestrator.log(self.tx_id, &entry_slot)?;
+          self.write_and_log(&mut entry_slot, &entry)?;
 
           let mut split = match leaf.insert_at(i, key.clone(), entry_slot.get_index()) {
             Some(split) => split,
-            None => {
-              leaf_slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-              self.orchestrator.log(self.tx_id, &leaf_slot)?;
-              return Ok(());
-            }
+            None => return self.write_and_log(&mut leaf_slot, &CursorNode::Leaf(leaf)),
           };
 
-          let mut split_slot = self.orchestrator.alloc()?;
           let mid_key = split.top().clone();
           split.set_prev(leaf_slot.get_index());
-          split_slot
-            .as_mut()
-            .serialize_from(&CursorNode::Leaf(split))?;
-          self.orchestrator.log(self.tx_id, &split_slot)?;
+          let split_index = self.alloc_and_log(&CursorNode::Leaf(split))?;
 
-          leaf.set_next(split_slot.get_index());
-          leaf_slot.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-          self.orchestrator.log(self.tx_id, &leaf_slot)?;
+          leaf.set_next(split_index);
+          self.write_and_log(&mut leaf_slot, &CursorNode::Leaf(leaf))?;
 
-          break (mid_key, split_slot.get_index());
+          break (mid_key, split_index);
         }
       }
     };
@@ -217,19 +220,12 @@ impl Cursor {
       let current_height = header.get_height();
       let mut index = header.get_root();
       if old_height == current_height {
-        let mut new_root_slot = self.orchestrator.alloc()?;
         let new_root = InternalNode::initialize(split_key, index, split_pointer);
-        new_root_slot
-          .as_mut()
-          .serialize_from(&CursorNode::Internal(new_root))?;
-        self.orchestrator.log(self.tx_id, &new_root_slot)?;
-        header.set_root(new_root_slot.get_index());
-        drop(new_root_slot);
+        let new_root_index = self.alloc_and_log(&CursorNode::Internal(new_root))?;
 
+        header.set_root(new_root_index);
         header.increase_height();
-        header_slot.as_mut().serialize_from(&header)?;
-        self.orchestrator.log(self.tx_id, &header_slot)?;
-        return Ok(());
+        return self.write_and_log(&mut header_slot, &header);
       }
 
       let diff = (current_height - old_height) as usize;
@@ -283,29 +279,16 @@ impl Cursor {
     let (split_node, split_key) = match internal.split_if_needed() {
       Some(split) => split,
       None => {
-        slot
-          .as_mut()
-          .serialize_from(&CursorNode::Internal(internal))?;
-        self.orchestrator.log(self.tx_id, &slot)?;
-        return Ok(None);
+        return self
+          .write_and_log(&mut slot, &CursorNode::Internal(internal))
+          .map(|_| None);
       }
     };
 
-    let split_index = {
-      let mut split_slot = self.orchestrator.alloc()?;
-      internal.set_right(&split_key, split_slot.get_index());
-      split_slot
-        .as_mut()
-        .serialize_from(&CursorNode::Internal(split_node))?;
-      self.orchestrator.log(self.tx_id, &split_slot)?;
-      split_slot.get_index()
-    };
+    let split_index = self.alloc_and_log(&CursorNode::Internal(split_node))?;
 
-    slot
-      .as_mut()
-      .serialize_from(&CursorNode::Internal(internal))?;
-    self.orchestrator.log(self.tx_id, &slot)?;
-
+    internal.set_right(&split_key, split_index);
+    self.write_and_log(&mut slot, &CursorNode::Internal(internal))?;
     Ok(Some((split_key, split_index)))
   }
 
@@ -323,21 +306,14 @@ impl Cursor {
 
     if entry.is_available(&record) {
       entry.append(record);
-      slot.as_mut().serialize_from(&entry)?;
-      self.orchestrator.log(self.tx_id, &slot)?;
-      return Ok(());
+      return self.write_and_log(&mut slot, &entry);
     }
 
-    let mut new_slot = self.orchestrator.alloc()?;
+    let new_entry_index = self.alloc_and_log(&entry)?;
+
     let mut new_entry = DataEntry::init(record);
-    new_entry.set_next(new_slot.get_index());
-
-    new_slot.as_mut().serialize_from(&entry)?;
-    self.orchestrator.log(self.tx_id, &new_slot)?;
-
-    slot.as_mut().serialize_from(&new_entry)?;
-    self.orchestrator.log(self.tx_id, &slot)?;
-
+    new_entry.set_next(new_entry_index);
+    self.write_and_log(&mut slot, &new_entry)?;
     Ok(())
   }
 
@@ -398,14 +374,13 @@ impl Cursor {
       return Err(Error::TransactionClosed);
     }
 
-    let header: TreeHeader = self
+    let mut index = self
       .orchestrator
       .fetch(HEADER_INDEX)?
       .for_read()
       .as_ref()
-      .deserialize()?;
-
-    let mut index = header.get_root();
+      .deserialize::<TreeHeader>()?
+      .get_root();
     let leaf = loop {
       let node: CursorNode = self
         .orchestrator

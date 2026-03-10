@@ -16,7 +16,7 @@ use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{Backoff, LogFilter, ToArc, ToRawPointer, UnsafeBorrow},
+  utils::{Backoff, LogFilter, ToArc, UnsafeBorrow},
 };
 
 use super::{
@@ -123,17 +123,10 @@ impl WAL {
         config.segment_flush_delay,
         config.segment_flush_count,
         handle_rotate(preloader.clone(), not_flushed.clone()),
-        move |_| checkpoint.send(()).wait().is_ok(),
+        move |_| checkpoint.send(()).wait_flatten().is_ok(),
       );
 
-    let buffer = LogBuffer::new(
-      page_pool.acquire(),
-      0,
-      AtomicUsize::new(0).to_raw_ptr(),
-      preloader.load()?.to_raw_ptr(),
-      AtomicUsize::new(0).to_raw_ptr(),
-      0,
-    );
+    let buffer = LogBuffer::init(page_pool.acquire(), preloader.load()?, 0);
 
     Ok((
       Self {
@@ -204,7 +197,7 @@ impl WAL {
       if offset + len < WAL_BLOCK_SIZE {
         buffer.write_at(&record, offset);
         if !flush {
-          buffer.unpin_entry();
+          buffer.commit_entry();
           buffer.unpin_segment();
           return Ok(());
         }
@@ -213,7 +206,7 @@ impl WAL {
           backoff.spin();
         }
         buffer.apply_record_count(ready + 1);
-        buffer.unpin_entry();
+        buffer.commit_entry();
 
         buffer.write_to_disk()?;
 
@@ -243,27 +236,13 @@ impl WAL {
         continue;
       }
 
-      let (mut segment, mut pin, mut written_count) = buffer.copy_segment();
-      let mut index = buffer.get_index() + 1;
-      let mut generation = buffer.get_generation();
-      if index >= self.max_index {
-        index = 0;
-        segment = self.preloader.load()?.to_raw_ptr();
-        pin = AtomicUsize::new(0).to_raw_ptr();
-        written_count = AtomicUsize::new(0).to_raw_ptr();
-        generation += 1;
-      }
+      let replacement = (buffer.get_index() + 1 < self.max_index)
+        .then(|| Ok(buffer.create_next_index(self.page_pool.acquire())))
+        .unwrap_or_else(|| self.new_segment_buffer(buffer.get_generation() + 1))?;
 
       if let Err(failed) = self.buffer.compare_exchange(
         buffer_ptr,
-        Owned::init(LogBuffer::new(
-          self.page_pool.acquire(),
-          index,
-          pin,
-          segment,
-          written_count.clone(),
-          generation,
-        )),
+        Owned::init(replacement),
         Ordering::Release,
         Ordering::Acquire,
         guard,
@@ -303,6 +282,14 @@ impl WAL {
       self.wait_checkpoint.send(segment);
       backoff.reset();
     }
+  }
+
+  fn new_segment_buffer(&self, generation: usize) -> Result<LogBuffer> {
+    Ok(LogBuffer::init(
+      self.page_pool.acquire(),
+      self.preloader.load()?,
+      generation,
+    ))
   }
 
   pub fn current_log_id(&self) -> usize {
