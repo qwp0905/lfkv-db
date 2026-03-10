@@ -198,14 +198,11 @@ fn run_main(
         .as_leaf()?;
 
       index = leaf.get_next();
-      let mut found = false;
-
-      for r in check_c
+      let found = check_c
         .send_batch(leaf.get_entries().map(|(_, p)| *p))
         .wait()?
-      {
-        found = r? || found;
-      }
+        .into_iter()
+        .fold(Ok(false), |a, c| a.and_then(|a| c.map(|c| a || c)))?;
       if !found {
         continue;
       }

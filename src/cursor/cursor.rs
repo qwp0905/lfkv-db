@@ -315,8 +315,8 @@ impl Cursor {
   }
 
   fn insert_at(&self, entry_index: usize, data: RecordData) -> Result {
-    let mut latch = self.orchestrator.fetch(entry_index)?.for_write();
-    let mut entry: DataEntry = latch.as_ref().deserialize()?;
+    let mut slot = self.orchestrator.fetch(entry_index)?.for_write();
+    let mut entry: DataEntry = slot.as_ref().deserialize()?;
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
         return Err(Error::WriteConflict);
@@ -325,43 +325,23 @@ impl Cursor {
 
     let version = self.orchestrator.current_version();
     let record = VersionRecord::new(self.tx_id, version, data);
-    entry.append(record);
 
-    let mut latches = Vec::new();
-
-    loop {
-      let versions = match entry.split_if_full() {
-        Some(versions) => versions,
-        None => {
-          latch.as_mut().serialize_from(&entry)?;
-          latches.push(latch);
-          break;
-        }
-      };
-
-      let (next_latch, mut next_entry) = match entry.get_next() {
-        Some(i) => {
-          let next_latch = self.orchestrator.fetch(i)?.for_write();
-          let next_entry = next_latch.as_ref().deserialize::<DataEntry>()?;
-          (next_latch, next_entry)
-        }
-        None => {
-          let next_latch = self.orchestrator.alloc()?;
-          let next_entry = DataEntry::new();
-          entry.set_next(next_latch.get_index());
-          (next_latch, next_entry)
-        }
-      };
-      next_entry.apply_split(versions);
-      latch.as_mut().serialize_from(&entry)?;
-      latches.push(replace(&mut latch, next_latch));
-      entry = next_entry;
+    if entry.is_available(&record) {
+      entry.append(record);
+      slot.as_mut().serialize_from(&entry)?;
+      self.orchestrator.log(self.tx_id, &slot)?;
+      return Ok(());
     }
 
-    while let Some(latch) = latches.pop() {
-      self.orchestrator.log(self.tx_id, &latch)?;
-    }
+    let mut new_slot = self.orchestrator.alloc()?;
+    new_slot.as_mut().serialize_from(&entry)?;
+    self.orchestrator.log(self.tx_id, &new_slot)?;
 
+    let mut new_entry = DataEntry::init(record);
+    new_entry.set_next(new_slot.get_index());
+
+    slot.as_mut().serialize_from(&new_entry)?;
+    self.orchestrator.log(self.tx_id, &slot)?;
     Ok(())
   }
 

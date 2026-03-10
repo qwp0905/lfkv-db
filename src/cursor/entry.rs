@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, mem::replace};
+use std::{collections::VecDeque /*  mem::replace */};
 
 use crate::{
   cursor::Pointer,
@@ -41,6 +41,9 @@ impl VersionRecord {
       data,
     }
   }
+  fn byte_len(&self) -> usize {
+    24 + self.data.len() // owner 8byte + version 8byte + data lenth 8byte + data
+  }
 }
 
 #[derive(Debug)]
@@ -55,12 +58,6 @@ impl DataEntry {
     Self {
       next: None,
       versions,
-    }
-  }
-  pub fn new() -> Self {
-    Self {
-      next: None,
-      versions: Default::default(),
     }
   }
 
@@ -89,26 +86,13 @@ impl DataEntry {
     self.next = Some(index);
   }
 
-  pub fn apply_split(&mut self, versions: VecDeque<VersionRecord>) {
-    let exists = replace(&mut self.versions, versions);
-    self.versions.extend(exists);
-  }
-
   pub fn append(&mut self, record: VersionRecord) {
     self.versions.push_front(record);
   }
 
-  pub fn split_if_full(&mut self) -> Option<VecDeque<VersionRecord>> {
-    let mut byte_len = 8 + 8;
-
-    for i in 0..self.versions.len() {
-      byte_len += 8 * 3 + self.versions[i].data.len();
-      if byte_len >= SERIALIZABLE_BYTES {
-        return Some(self.versions.split_off(self.versions.len() >> 1));
-      }
-    }
-
-    None
+  pub fn is_available(&self, record: &VersionRecord) -> bool {
+    let byte_len = 8 + 8 + self.versions.iter().fold(0, |a, c| a + c.byte_len());
+    record.byte_len() + byte_len < SERIALIZABLE_BYTES
   }
 
   pub fn remove_until(&mut self, min_version: usize) -> bool {
@@ -185,97 +169,6 @@ impl Serializable for DataEntry {
   }
 }
 
-// #[cfg(test)]
-// mod tests {
-//   use crate::{disk::Page, serialize::SerializeFrom};
-
-//   use super::*;
-
-//   #[test]
-//   fn test_empty_entry_roundtrip() {
-//     let mut page = Page::new();
-//     let entry = DataEntry::new();
-//     page.serialize_from(&entry).expect("serialize error");
-
-//     let decoded: DataEntry = page.deserialize().expect("deserialize error");
-//     assert!(decoded.is_empty());
-//     assert_eq!(decoded.get_next(), None);
-//   }
-
-//   #[test]
-//   fn test_entry_with_data_roundtrip() {
-//     let mut page = Page::new();
-//     let mut entry = DataEntry::new();
-//     entry.append(VersionRecord::new(
-//       1,
-//       100,
-//       RecordData::Data(vec![10, 20, 30]),
-//     ));
-//     page.serialize_from(&entry).expect("serialize error");
-
-//     let decoded: DataEntry = page.deserialize().expect("deserialize error");
-//     assert!(!decoded.is_empty());
-//     assert_eq!(decoded.get_last_owner(), Some(1));
-
-//     let records: Vec<_> = decoded.get_versions().collect();
-//     assert_eq!(records.len(), 1);
-//     assert_eq!(records[0].owner, 1);
-//     assert_eq!(records[0].version, 100);
-//     match &records[0].data {
-//       RecordData::Data(d) => assert_eq!(d, &vec![10, 20, 30]),
-//       RecordData::Tombstone => panic!("expected Data"),
-//     }
-//   }
-
-//   #[test]
-//   fn test_entry_with_tombstone_roundtrip() {
-//     let mut page = Page::new();
-//     let mut entry = DataEntry::new();
-//     entry.append(VersionRecord::new(2, 200, RecordData::Tombstone));
-//     page.serialize_from(&entry).expect("serialize error");
-
-//     let decoded: DataEntry = page.deserialize().expect("deserialize error");
-//     assert!(!decoded.is_empty());
-//     assert_eq!(decoded.get_last_owner(), Some(2));
-
-//     let records: Vec<_> = decoded.get_versions().collect();
-//     assert_eq!(records.len(), 1);
-//     assert_eq!(records[0].owner, 2);
-//     match &records[0].data {
-//       RecordData::Data(_) => panic!("expected Tombstone"),
-//       RecordData::Tombstone => {}
-//     }
-//   }
-
-//   #[test]
-//   fn test_entry_with_next_roundtrip() {
-//     let mut page = Page::new();
-//     let mut entry = DataEntry::new();
-//     entry.set_next(42);
-//     entry.append(VersionRecord::new(1, 10, RecordData::Data(vec![1])));
-//     page.serialize_from(&entry).expect("serialize error");
-
-//     let decoded: DataEntry = page.deserialize().expect("deserialize error");
-//     assert_eq!(decoded.get_next(), Some(42));
-//   }
-
-//   #[test]
-//   fn test_entry_multiple_versions_roundtrip() {
-//     let mut page = Page::new();
-//     let mut entry = DataEntry::new();
-//     entry.append(VersionRecord::new(3, 300, RecordData::Data(vec![3])));
-//     entry.append(VersionRecord::new(2, 200, RecordData::Tombstone));
-//     entry.append(VersionRecord::new(1, 100, RecordData::Data(vec![1, 2])));
-//     page.serialize_from(&entry).expect("serialize error");
-
-//     let mut decoded: DataEntry = page.deserialize().expect("deserialize error");
-//     assert!(!decoded.is_empty());
-//     assert_eq!(decoded.get_last_owner(), Some(1));
-//     assert_eq!(decoded.get_next(), None);
-
-//     // verify all 3 versions survived by filtering none
-//     let removed = decoded.filter_aborted(|_| false);
-//     assert!(!removed);
-//     assert!(!decoded.is_empty());
-//   }
-// }
+#[cfg(test)]
+#[path = "tests/entry.rs"]
+mod tests;
