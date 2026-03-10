@@ -48,15 +48,6 @@ impl<const T: usize> From<[u8; T]> for Page<T> {
     Self(bytes)
   }
 }
-
-impl<const T: usize> From<Vec<u8>> for Page<T> {
-  fn from(value: Vec<u8>) -> Self {
-    let page = Self::new();
-    let len = value.len().min(T);
-    unsafe { copy_nonoverlapping(value.as_ptr(), page.as_ptr() as *mut u8, len) };
-    page
-  }
-}
 impl<const T: usize> From<&[u8]> for Page<T> {
   fn from(value: &[u8]) -> Self {
     let page = Self::new();
@@ -394,27 +385,6 @@ mod tests {
     let mut scanner = page.scanner();
     for &expected in data.iter() {
       assert_eq!(scanner.read().unwrap(), expected);
-    }
-  }
-
-  #[test]
-  fn test_from_vec() {
-    const SIZE: usize = 5;
-    let data = vec![1, 2, 3, 4, 5];
-    let page = Page::<SIZE>::from(data.clone());
-
-    let mut scanner = page.scanner();
-    for &expected in data.iter() {
-      assert_eq!(scanner.read().unwrap(), expected);
-    }
-
-    // Test with vec larger than page size
-    let large_data = vec![1, 2, 3, 4, 5, 6];
-    let page = Page::<SIZE>::from(large_data);
-
-    let mut scanner = page.scanner();
-    for i in 0..SIZE {
-      assert_eq!(scanner.read().unwrap(), (i + 1) as u8);
     }
   }
 
