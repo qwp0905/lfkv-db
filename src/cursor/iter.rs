@@ -1,3 +1,5 @@
+use std::mem::replace;
+
 use super::{CursorNode, DataEntry, Key, LeafNode};
 use crate::{
   error::{Error, Result},
@@ -49,15 +51,9 @@ impl<'a> CursorIterator<'a> {
           return Ok(None);
         }
 
-        let mut index = *ptr;
+        let mut slot = self.orchestrator.fetch(*ptr)?.for_read();
         loop {
-          let entry = self
-            .orchestrator
-            .fetch(index)?
-            .for_read()
-            .as_ref()
-            .deserialize::<DataEntry>()?;
-
+          let entry = slot.as_ref().deserialize::<DataEntry>()?;
           for record in entry.get_versions() {
             if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
               match record.data.cloned() {
@@ -71,7 +67,7 @@ impl<'a> CursorIterator<'a> {
           }
 
           match entry.get_next() {
-            Some(i) => index = i,
+            Some(i) => drop(replace(&mut slot, self.orchestrator.fetch(i)?.for_read())),
             None => continue 'leaf,
           }
         }

@@ -1,5 +1,5 @@
 use std::{
-  collections::HashSet,
+  collections::{HashSet, VecDeque},
   sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -7,7 +7,9 @@ use std::{
   time::Duration,
 };
 
-use super::{CursorNode, DataEntry, Pointer, TreeHeader, HEADER_INDEX};
+use super::{
+  CursorNode, DataEntry, Pointer, RecordData, TreeHeader, VersionRecord, HEADER_INDEX,
+};
 use crate::{
   buffer_pool::BufferPool,
   error::Result,
@@ -49,7 +51,7 @@ impl GarbageCollector {
       .name("gc release entry")
       .stack_size(2 << 20)
       .shared(config.thread_count)
-      .build_unchecked(run_release(buffer_pool.clone(), free_list.clone()))
+      .build_unchecked(run_release(free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
@@ -66,13 +68,7 @@ impl GarbageCollector {
       .name("gc check top entry")
       .stack_size(2 << 20)
       .shared(config.thread_count)
-      .build_unchecked(run_check(
-        buffer_pool.clone(),
-        version_visibility.clone(),
-        wal.clone(),
-        entry.clone(),
-        release.clone(),
-      ))
+      .build_unchecked(run_check(buffer_pool.clone()))
       .to_arc();
     let main = WorkBuilder::new()
       .name("gc main")
@@ -84,6 +80,7 @@ impl GarbageCollector {
           buffer_pool.clone(),
           version_visibility.clone(),
           wal.clone(),
+          entry.clone(),
           check.clone(),
           release.clone(),
           initialized.clone(),
@@ -125,7 +122,7 @@ impl GarbageCollector {
         .deserialize::<CursorNode>()?
       {
         CursorNode::Internal(internal) => node_stack.extend(internal.get_all_child()),
-        CursorNode::Leaf(leaf) => entry_stack.extend(leaf.get_entries().map(|(_, p)| *p)),
+        CursorNode::Leaf(leaf) => entry_stack.extend(leaf.get_entry_pointers()),
       };
     }
 
@@ -163,6 +160,7 @@ fn run_main(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
   wal: Arc<WAL>,
+  entry_c: Arc<SharedWorkThread<Pointer, Result>>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
   initialized: Arc<AtomicBool>,
@@ -190,39 +188,38 @@ fn run_main(
     let min_version = version_visibility.min_version();
     let mut index = Some(index);
     while let Some(i) = index.take() {
-      let leaf = buffer_pool
-        .read(i)?
-        .for_read()
-        .as_ref()
-        .deserialize::<CursorNode>()?
-        .as_leaf()?;
-
-      index = leaf.get_next();
-      let found = check_c
-        .send_batch(leaf.get_entries().map(|(_, p)| *p))
-        .wait()?
-        .into_iter()
-        .fold(Ok(false), |a, c| a.and_then(|a| c.map(|c| a || c)))?;
-      if !found {
-        continue;
+      {
+        let leaf = buffer_pool
+          .read(i)?
+          .for_read()
+          .as_ref()
+          .deserialize::<CursorNode>()?
+          .as_leaf()?;
+        entry_c
+          .send_batch(leaf.get_entry_pointers())
+          .wait()?
+          .into_iter()
+          .collect::<Result>()?;
       }
 
       let mut latch = buffer_pool.read(i)?.for_write();
       let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+      index = leaf.get_next();
+
       let prev_len = leaf.len();
       let mut new_entries = vec![];
-      for (key, ptr) in leaf.drain() {
-        if !buffer_pool
-          .read(ptr)?
-          .for_read()
-          .as_ref()
-          .deserialize::<DataEntry>()?
-          .is_empty()
-        {
+      let mut orphand = vec![];
+
+      let found = leaf
+        .drain()
+        .map(|(key, ptr)| (key, ptr, check_c.send(ptr)))
+        .collect::<Vec<_>>();
+      for (key, ptr, r) in found.into_iter() {
+        if r.wait_flatten()? {
+          orphand.push(ptr);
+        } else {
           new_entries.push((key, ptr));
-          continue;
-        };
-        release_c.send_no_wait(ptr);
+        }
       }
 
       if new_entries.len() == prev_len {
@@ -232,6 +229,9 @@ fn run_main(
       leaf.set_entries(new_entries);
       latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
       wal.append_insert(0, latch.get_index(), latch.as_ref())?;
+      drop(latch);
+
+      orphand.into_iter().for_each(|p| release_c.send_no_wait(p))
     }
 
     version_visibility.remove_aborted(&min_version);
@@ -239,26 +239,9 @@ fn run_main(
   }
 }
 
-fn run_release(
-  buffer_pool: Arc<BufferPool>,
-  free_list: Arc<FreeList>,
-) -> impl Fn(Pointer) -> Result {
-  let orchestrator = buffer_pool.clone();
+fn run_release(free_list: Arc<FreeList>) -> impl Fn(Pointer) -> Result {
   let free_list = free_list.clone();
-  move |pointer: Pointer| {
-    let mut p = Some(pointer);
-
-    while let Some(i) = p.take() {
-      p = orchestrator
-        .read(i)?
-        .for_read()
-        .as_ref()
-        .deserialize::<DataEntry>()?
-        .get_next();
-      free_list.dealloc(i)?;
-    }
-    Ok(())
-  }
+  move |pointer: Pointer| free_list.dealloc(pointer)
 }
 
 fn run_entry(
@@ -270,60 +253,90 @@ fn run_entry(
   let buffer_pool = buffer_pool.clone();
   let release_c = release_c.clone();
   let version_visibility = version_visibility.clone();
-  move |pointer: Pointer| {
-    let mut index = Some(pointer);
-    while let Some(i) = index.take() {
-      let mut latch = buffer_pool.read(i)?.for_write();
-      let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
-      let next = entry.get_next();
+  move |ptr: Pointer| {
+    let mut index = Some(ptr);
+    let mut max_found = false;
 
-      let expired = entry.remove_until(version_visibility.min_version());
-      let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
-      if expired || modified {
-        latch.as_mut().serialize_from(&entry)?;
-        wal.append_insert(0, latch.get_index(), latch.as_ref())?;
+    while let Some(i) = index.take() {
+      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut entry: DataEntry = slot.as_ref().deserialize()?;
+
+      let prev_len = entry.len();
+      let mut expired_max: Option<VersionRecord> = None;
+      let min_version = version_visibility.min_version();
+      let mut new_versions = VecDeque::new();
+      for record in entry.take_versions() {
+        if version_visibility.is_aborted(&record.owner) {
+          continue;
+        }
+        if record.version > min_version {
+          new_versions.push_back(record);
+          continue;
+        }
+        if max_found {
+          continue;
+        }
+
+        match expired_max.as_mut() {
+          Some(max) if max.version < record.version => *max = record,
+          None => expired_max = Some(record),
+          _ => {}
+        }
       }
-      if !expired {
-        index = next;
+
+      if !max_found {
+        if let Some(record) = expired_max.take() {
+          if let RecordData::Data(_) = &record.data {
+            new_versions.push_back(record);
+          }
+
+          max_found = true;
+        }
+      }
+
+      if new_versions.len() == prev_len {
+        index = entry.get_next();
         continue;
       }
-      if let Some(n) = next {
-        release_c.send_no_wait(n);
+
+      if new_versions.len() > 0 {
+        entry.set_versions(new_versions);
+        slot.as_mut().serialize_from(&entry)?;
+        wal.append_insert(0, slot.get_index(), slot.as_ref())?;
+        index = entry.get_next();
+        continue;
       }
-      break;
+
+      let next = match entry.get_next() {
+        Some(next) => next,
+        None => {
+          slot.as_mut().serialize_from(&entry)?;
+          return wal.append_insert(0, slot.get_index(), slot.as_ref());
+        }
+      };
+
+      let next_entry: DataEntry =
+        buffer_pool.read(next)?.for_read().as_ref().deserialize()?;
+      slot.as_mut().serialize_from(&next_entry)?;
+      wal.append_insert(0, slot.get_index(), slot.as_ref())?;
+      index = Some(i);
+
+      release_c.send_no_wait(next);
     }
     Ok(())
   }
 }
 
-fn run_check(
-  buffer_pool: Arc<BufferPool>,
-  version_visibility: Arc<VersionVisibility>,
-  wal: Arc<WAL>,
-  entry_c: Arc<SharedWorkThread<Pointer, Result>>,
-  release_c: Arc<SharedWorkThread<Pointer, Result>>,
-) -> impl Fn(Pointer) -> Result<bool> {
+fn run_check(buffer_pool: Arc<BufferPool>) -> impl Fn(Pointer) -> Result<bool> {
   let buffer_pool = buffer_pool.clone();
-  let version_visibility = version_visibility.clone();
-  let entry_c = entry_c.clone();
-  let release_c = release_c.clone();
   move |pointer: Pointer| {
-    let mut latch = buffer_pool.read(pointer)?.for_write();
-    let mut entry = latch.as_ref().deserialize::<DataEntry>()?;
-    let next = entry.get_next();
-
-    let expired = entry.remove_until(version_visibility.min_version());
-    let modified = entry.filter_aborted(|v| version_visibility.is_aborted(v));
-
-    let c = (!expired).then_some(&entry_c).unwrap_or(&release_c);
-    if modified || expired {
-      latch.as_mut().serialize_from(&entry)?;
-      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
-    }
-    if let Some(i) = next {
-      c.send_no_wait(i);
-    }
-
-    Ok(entry.is_empty())
+    Ok(
+      buffer_pool
+        .read(pointer)?
+        .for_read()
+        .as_ref()
+        .deserialize::<DataEntry>()?
+        .is_empty(),
+    )
   }
 }
