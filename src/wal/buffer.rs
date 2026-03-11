@@ -1,16 +1,13 @@
 use std::{
   ptr::copy_nonoverlapping,
-  sync::{
-    atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::PageRef,
   error::Result,
-  utils::{UnsafeBorrow, UnsafeTake},
+  utils::{ToRawPointer, UnsafeBorrow, UnsafeTake},
 };
 
 const U16_MASK: u32 = 0xFFFF;
@@ -47,7 +44,7 @@ pub struct LogBuffer {
   /**
    * rotated and written complete data block count for current segment
    */
-  written_count: Arc<AtomicUsize>,
+  written_count: *const AtomicUsize,
   /**
    * current generation for current segment
    */
@@ -61,12 +58,40 @@ impl LogBuffer {
    */
   const OFFSET_BYTE: u64 = 2;
 
-  pub fn new(
+  pub fn init_new(
+    entry: PageRef<WAL_BLOCK_SIZE>,
+    segment: WALSegment,
+    generation: usize,
+  ) -> Self {
+    Self::new(
+      entry,
+      0,
+      AtomicUsize::new(0).to_raw_ptr(),
+      segment.to_raw_ptr(),
+      AtomicUsize::new(0).to_raw_ptr(),
+      generation,
+    )
+  }
+  /**
+   * if segment is not full, then copy pointers and recreate buffer
+   */
+  pub fn init_next(&self, entry: PageRef<WAL_BLOCK_SIZE>) -> Self {
+    Self::new(
+      entry,
+      self.segment_index + 1,
+      self.segment_pin,
+      self.segment,
+      self.written_count,
+      self.generation,
+    )
+  }
+
+  fn new(
     entry: PageRef<WAL_BLOCK_SIZE>,
     segment_index: usize,
     segment_pin: *const AtomicUsize,
     segment: *const WALSegment,
-    written_count: Arc<AtomicUsize>,
+    written_count: *const AtomicUsize,
     generation: usize,
   ) -> Self {
     Self {
@@ -129,14 +154,7 @@ impl LogBuffer {
   pub fn get_index(&self) -> usize {
     self.segment_index
   }
-  /**
-   * if segment is not full, then copy pointers and recreate buffer
-   */
-  pub fn copy_segment(
-    &self,
-  ) -> (*const WALSegment, *const AtomicUsize, Arc<AtomicUsize>) {
-    (self.segment, self.segment_pin, self.written_count.clone())
-  }
+
   /**
    * to drop segment and pin
    * it should be call when nothing to refer this segment
@@ -151,13 +169,16 @@ impl LogBuffer {
     self.segment_pin.borrow_unsafe().load(Ordering::Acquire)
   }
   pub fn increase_written_count(&self) {
-    self.written_count.fetch_add(1, Ordering::Release);
+    self
+      .written_count
+      .borrow_unsafe()
+      .fetch_add(1, Ordering::Release);
   }
   /**
    * previous index blocks for current segment has been written to disk
    */
   pub fn is_ready_to_flush(&self) -> bool {
-    self.segment_index <= self.written_count.load(Ordering::Acquire) + 1
+    self.segment_index <= self.written_count.borrow_unsafe().load(Ordering::Acquire) + 1
   }
   pub fn get_generation(&self) -> usize {
     self.generation

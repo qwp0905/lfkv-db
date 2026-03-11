@@ -17,7 +17,7 @@ use crate::{
   disk::{Page, PagePool, PAGE_SIZE},
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToArc, ToRawPointer, UnsafeBorrow},
+  utils::{LogFilter, ToArc, UnsafeBorrow},
 };
 
 use super::{
@@ -127,14 +127,7 @@ impl WAL {
         move |_| checkpoint.send(()).wait().is_ok(),
       );
 
-    let buffer = LogBuffer::new(
-      page_pool.acquire(),
-      0,
-      AtomicUsize::new(0).to_raw_ptr(),
-      preloader.load()?.to_raw_ptr(),
-      AtomicUsize::new(0).to_arc(),
-      0,
-    );
+    let buffer = LogBuffer::init_new(page_pool.acquire(), preloader.load()?, 0);
 
     Ok((
       Self {
@@ -240,37 +233,31 @@ impl WAL {
         continue;
       }
 
-      let (mut segment, mut pin, mut written_count) = buffer.copy_segment();
-      let mut index = buffer.get_index() + 1;
-      let mut generation = buffer.get_generation();
-      if index >= self.max_index {
-        index = 0;
-        segment = self.preloader.load()?.to_raw_ptr();
-        pin = AtomicUsize::new(0).to_raw_ptr();
-        written_count = AtomicUsize::new(index).to_arc();
-        generation += 1;
-      }
+      let replacement = if buffer.get_index() + 1 >= self.max_index {
+        LogBuffer::init_new(
+          self.page_pool.acquire(),
+          self.preloader.load()?,
+          buffer.get_generation() + 1,
+        )
+      } else {
+        buffer.init_next(self.page_pool.acquire())
+      };
 
       if let Err(failed) = self.buffer.compare_exchange(
         buffer_ptr,
-        Owned::init(LogBuffer::new(
-          self.page_pool.acquire(),
-          index,
-          pin,
-          segment,
-          written_count.clone(),
-          generation,
-        )),
+        Owned::init(replacement),
         Ordering::Release,
         Ordering::Acquire,
         guard,
       ) {
-        if buffer.get_index() + 1 < self.max_index {
+        if failed.new.get_index() > 0 {
           failed.current.as_raw().borrow_unsafe().unpin_segment();
           backoff.snooze();
           continue;
         }
+
         let (segment, _) = failed.new.take_segement();
+        self.syned_count.fetch_add(1, Ordering::Release);
         self.preloader.reuse(segment);
         continue;
       }
