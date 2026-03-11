@@ -99,14 +99,9 @@ impl Cursor {
       }
     }
 
+    let mut slot = self.orchestrator.fetch(index)?.for_read();
     loop {
-      let entry: DataEntry = self
-        .orchestrator
-        .fetch(index)?
-        .for_read()
-        .as_ref()
-        .deserialize()?;
-
+      let entry: DataEntry = slot.as_ref().deserialize()?;
       for record in entry.get_versions() {
         if record.owner == self.tx_id {
           return Ok(record.data.cloned());
@@ -123,7 +118,7 @@ impl Cursor {
       }
 
       match entry.get_next() {
-        Some(i) => index = i,
+        Some(i) => drop(replace(&mut slot, self.orchestrator.fetch(i)?.for_read())),
         None => return Ok(None),
       }
     }
