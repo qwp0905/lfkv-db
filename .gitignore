@@ -17,3 +17,5 @@ target/
 
 coverage/
 *.profraw
+
+.tmp*
