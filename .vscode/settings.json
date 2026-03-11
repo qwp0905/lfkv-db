@@ -15,4 +15,10 @@
   "rust-analyzer.showUnlinkedFileNotification": false,
   "rust-analyzer.inlayHints.typeHints.enable": false,
   "rust-analyzer.inlayHints.parameterHints.enable": false,
+  "files.associations": {
+    "*.yml": "yaml"
+  },
+  "yaml.schemas": {
+    "https://json.schemastore.org/github-workflow.json": ".github/**/*.yml",
+  }
 }
