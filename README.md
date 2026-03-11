@@ -123,7 +123,7 @@ tx.commit()?;
 Background 4-stage pipeline, each stage running on a parallel work-stealing thread pool:
 
 1. **Leaf scan** - Traverses B-tree leaves to find entries with old versions
-2. **Expiry check** - Identifies versions no longer visible to any active transaction
+2. **Empty check** - Check if the entry is empty
 3. **Entry cleanup** - Removes obsolete version records from data entries
 4. **Page release** - Reclaims freed pages back to the free list
 
