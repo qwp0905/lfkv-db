@@ -62,8 +62,8 @@ tx.commit()?;
                     └────────┬─────────┘
                              │
                     ┌────────▼─────────┐
-                    │  TxOrchestrator   │
-                    │  (coordination)   │
+                    │  TxOrchestrator  │
+                    │  (coordination)  │
                     └──┬──┬──┬──┬──┬───┘
                        │  │  │  │  │
          ┌─────────────┘  │  │  │  └──────────────┐
