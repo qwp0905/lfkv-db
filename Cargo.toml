@@ -20,5 +20,10 @@ features = ["raw"]
 [dev-dependencies]
 tempfile = "3.10.1"
 rand = "0.8"
+criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [workspace]
+
+[[bench]]
+name = "throughput"
+harness = false
