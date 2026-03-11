@@ -47,9 +47,13 @@ pub trait DirectIO {
   fn direct_io(&mut self) -> &mut Self;
 }
 impl DirectIO for OpenOptions {
-  #[cfg(unix)]
+  #[cfg(target_os = "macos")]
   fn direct_io(&mut self) -> &mut Self {
     self.custom_flags(libc::F_NOCACHE)
+  }
+  #[cfg(all(unix, not(target_os = "macos")))]
+  fn direct_io(&mut self) -> &mut Self {
+    self.custom_flags(libc::O_DIRECT)
   }
   #[cfg(windows)]
   fn direct_io(&mut self) -> &mut Self {
