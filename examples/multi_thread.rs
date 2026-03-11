@@ -64,11 +64,14 @@ fn main() {
   }
 
   v.into_iter().for_each(|r| r.recv().unwrap());
+  let end = Instant::now();
+  println!(
+    "{} ms, {} tps",
+    (end - start).as_millis(),
+    count / ((end - start).as_secs() as usize)
+  );
   drop(tx);
-  println!("{} ms", (Instant::now() - start).as_millis());
-  for th in threads {
-    let _ = th.join();
-  }
+  threads.into_iter().for_each(|th| th.join().unwrap());
 
   let mut total = 0;
   let mut found_eq = 0;
