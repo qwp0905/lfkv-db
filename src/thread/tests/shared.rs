@@ -1,11 +1,10 @@
-
 use super::*;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-const DEFAULT_STACK_SIZE: usize = 4 << 10;
+const DEFAULT_STACK_SIZE: usize = 16 << 10;
 
 #[test]
 fn test_shared_work_thread_no_timeout() {
