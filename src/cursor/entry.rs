@@ -61,18 +61,18 @@ impl DataEntry {
     }
   }
 
-  pub fn get_versions(&self) -> impl Iterator<Item = &VersionRecord> {
-    self.versions.iter()
+  pub fn len(&self) -> usize {
+    self.versions.len()
+  }
+  pub fn take_versions<'a>(&'a mut self) -> impl Iterator<Item = VersionRecord> + 'a {
+    self.versions.drain(..)
+  }
+  pub fn set_versions(&mut self, new_versions: VecDeque<VersionRecord>) {
+    self.versions = new_versions;
   }
 
-  pub fn filter_aborted<F: Fn(&usize) -> bool>(&mut self, is_aborted: F) -> bool {
-    let len = self.versions.len();
-    self.versions = self
-      .versions
-      .drain(..)
-      .filter(|v| !is_aborted(&v.owner))
-      .collect();
-    self.versions.len() < len
+  pub fn get_versions(&self) -> impl Iterator<Item = &VersionRecord> {
+    self.versions.iter()
   }
 
   pub fn get_last_owner(&self) -> Option<usize> {
@@ -93,20 +93,6 @@ impl DataEntry {
   pub fn is_available(&self, record: &VersionRecord) -> bool {
     let byte_len = 8 + 8 + self.versions.iter().fold(0, |a, c| a + c.byte_len());
     record.byte_len() + byte_len < SERIALIZABLE_BYTES
-  }
-
-  pub fn remove_until(&mut self, min_version: usize) -> bool {
-    let i = self
-      .versions
-      .binary_search_by(|v| min_version.cmp(&v.version))
-      .unwrap_or_else(|i| i)
-      + 1;
-    if i >= self.versions.len() {
-      return false;
-    }
-    let _ = self.versions.split_off(i);
-    let _ = self.next.take();
-    true
   }
 
   pub fn is_empty(&self) -> bool {
