@@ -159,8 +159,10 @@ impl LogBuffer {
    * to drop segment and pin
    * it should be call when nothing to refer this segment
    */
-  pub fn take_segement(&self) -> (WALSegment, AtomicUsize) {
-    (self.segment.take_unsafe(), self.segment_pin.take_unsafe())
+  pub fn take_segement(&self) -> WALSegment {
+    let _ = self.written_count.take_unsafe();
+    let _ = self.segment_pin.take_unsafe();
+    self.segment.take_unsafe()
   }
   pub fn load_offset(&self) -> usize {
     (self.offset.load(Ordering::Acquire) & Self::MASK) as usize
