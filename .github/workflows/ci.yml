@@ -31,5 +31,8 @@ jobs:
         path: target/criterion
       continue-on-error: true
 
-    - name: Benchmark (PR vs main)
-      run: cargo bench -- --baseline-lenient main --quiet
+    - name: Throughput (PR vs main)
+      run: cargo bench --bench throughput -- --baseline-lenient main --quiet
+
+    - name: YCSB (PR vs main)
+      run: cargo bench --bench ycsb -- --baseline-lenient main --quiet
