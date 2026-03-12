@@ -1,21 +1,27 @@
-use std::{marker::PhantomData, ptr::copy_nonoverlapping, slice::from_raw_parts};
+use std::{
+  cell::UnsafeCell, marker::PhantomData, panic::RefUnwindSafe, ptr::copy_nonoverlapping,
+  slice::from_raw_parts,
+};
 
-use crate::error::{Error, Result};
+use crate::{
+  error::{Error, Result},
+  utils::UnsafeBorrow,
+};
 
 pub const PAGE_SIZE: usize = 4 << 10; // 4 kb
 
 #[derive(Debug)]
-pub struct Page<const T: usize = PAGE_SIZE>([u8; T]);
+pub struct Page<const T: usize = PAGE_SIZE>(UnsafeCell<[u8; T]>);
 
 impl<const T: usize> Page<T> {
   #[inline]
   pub fn new() -> Self {
-    Self([0; T])
+    Self(UnsafeCell::new([0; T]))
   }
 
   #[inline]
   pub fn as_ptr(&self) -> *const u8 {
-    self.0.as_ptr()
+    self.0.get() as *const u8
   }
 
   pub fn copy(&self) -> Self {
@@ -25,27 +31,27 @@ impl<const T: usize> Page<T> {
   }
 
   pub fn scanner(&self) -> PageScanner<'_, T> {
-    PageScanner::new(&self.0)
+    PageScanner::new(self.as_ptr())
   }
 
-  pub fn writer(&self) -> PageWriter<'_, T> {
-    PageWriter::new(&self)
+  pub fn writer(&mut self) -> PageWriter<'_, T> {
+    PageWriter::new(self.0.get() as *mut u8)
   }
 }
 
 impl<const T: usize> AsRef<[u8]> for Page<T> {
   fn as_ref(&self) -> &[u8] {
-    &self.0
+    self.0.get().borrow_unsafe()
   }
 }
 impl<const T: usize> AsMut<[u8]> for Page<T> {
   fn as_mut(&mut self) -> &mut [u8] {
-    &mut self.0
+    self.0.get_mut()
   }
 }
 impl<const T: usize> From<[u8; T]> for Page<T> {
   fn from(bytes: [u8; T]) -> Self {
-    Self(bytes)
+    Self(UnsafeCell::new(bytes))
   }
 }
 
@@ -65,6 +71,9 @@ impl<const T: usize> From<&[u8]> for Page<T> {
     page
   }
 }
+unsafe impl<const T: usize> Send for Page<T> {}
+unsafe impl<const T: usize> Sync for Page<T> {}
+impl<const T: usize> RefUnwindSafe for Page<T> {}
 
 pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
   inner: *const u8,
@@ -72,9 +81,9 @@ pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
   _marker: PhantomData<&'a Page<T>>,
 }
 impl<'a, const T: usize> PageScanner<'a, T> {
-  fn new(inner: &'a [u8; T]) -> Self {
+  fn new(inner: *const u8) -> Self {
     Self {
-      inner: inner.as_ptr(),
+      inner,
       offset: 0,
       _marker: Default::default(),
     }
@@ -137,9 +146,9 @@ pub struct PageWriter<'a, const T: usize = PAGE_SIZE> {
   marker: PhantomData<&'a Page<T>>,
 }
 impl<'a, const T: usize> PageWriter<'a, T> {
-  fn new(page: &'a Page<T>) -> Self {
+  fn new(inner: *mut u8) -> Self {
     Self {
-      inner: page.0.as_ptr() as *mut u8,
+      inner,
       offset: 0,
       marker: Default::default(),
     }

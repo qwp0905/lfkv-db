@@ -29,6 +29,12 @@ impl<'a, T: 'a> UnsafeBorrow<'a, T> for *const T {
     unsafe { &*self }
   }
 }
+impl<'a, T: 'a> UnsafeBorrow<'a, T> for *mut T {
+  #[inline(always)]
+  fn borrow_unsafe(self) -> &'a T {
+    unsafe { &*self }
+  }
+}
 impl<'a, T: 'a> UnsafeBorrow<'a, T> for NonNull<T> {
   #[inline(always)]
   fn borrow_unsafe(self) -> &'a T {
@@ -56,6 +62,7 @@ impl<T> UnsafeTake<T> for *const T {
   }
 }
 impl<T> UnsafeTake<T> for NonNull<T> {
+  #[inline(always)]
   fn take_unsafe(self) -> T {
     unsafe { *Box::from_raw(self.as_ptr()) }
   }
