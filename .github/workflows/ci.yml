@@ -32,4 +32,4 @@ jobs:
       continue-on-error: true
 
     - name: Benchmark (PR vs main)
-      run: cargo bench --bench throughput -- --baseline-lenient main --quiet
+      run: cargo bench -- --baseline-lenient main --quiet
