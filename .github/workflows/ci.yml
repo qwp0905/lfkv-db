@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install coverage tool
+      run: cargo install cargo-llvm-cov
+    - name: Run tests
+      run: cargo test:cov
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download main baseline
+      uses: dawidd6/action-download-artifact@v6
+      with:
+        workflow: benchmark.yml
+        branch: main
+        name: criterion-baseline
+        path: target/criterion
+      continue-on-error: true
+
+    - name: Benchmark (PR vs main)
+      run: cargo bench --bench throughput -- --baseline-lenient main --quiet
