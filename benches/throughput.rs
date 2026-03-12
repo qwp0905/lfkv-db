@@ -5,6 +5,27 @@ use crossbeam::channel::{unbounded, Sender};
 use lfkv_db::EngineBuilder;
 use tempfile::TempDir;
 
+const KEY_SIZE: usize = 16;
+const VALUE_SIZE: usize = 256;
+const DEFAULT_SAMPLE_SIZE: usize = 20;
+const SEQ_SIZE: usize = 1_000;
+const CONC_SIZE: usize = 10_000;
+const CONC_THREADS: usize = 128;
+
+fn make_key(i: usize) -> Vec<u8> {
+  format!("{i:0>width$}", width = KEY_SIZE)
+    .as_bytes()
+    .to_vec()
+}
+
+fn make_value(i: usize) -> Vec<u8> {
+  let mut v = format!("{i:0>width$}", width = KEY_SIZE)
+    .as_bytes()
+    .to_vec();
+  v.resize(VALUE_SIZE, b'x');
+  v
+}
+
 fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
   EngineBuilder::new(dir)
     .group_commit_count(512)
@@ -16,46 +37,36 @@ fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
     .io_thread_count(5)
 }
 
-const DEFAULT_SAMPLE_SIZE: usize = 20;
-
-fn pre_write_keys<
-  'a,
-  T: Iterator<Item = &'a Vec<u8>>,
-  P: AsRef<std::path::Path> + ?Sized,
->(
-  dir: &P,
-  keys: T,
-) {
+fn pre_write_keys<P: AsRef<std::path::Path> + ?Sized>(dir: &P, count: usize) {
   let engine = build(dir).build().unwrap();
   let mut tx = engine.new_transaction().unwrap();
-  keys.for_each(|k| tx.insert(k.clone(), k.clone()).unwrap());
+  (0..count)
+    .map(|i| (make_key(i), make_value(i)))
+    .for_each(|(k, v)| tx.insert(k, v).unwrap());
   tx.commit().unwrap();
 }
 
 fn bench_sequential_get(c: &mut Criterion) {
-  const SIZE: usize = 1_000;
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
-
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_write_keys(dir.path(), keys.iter());
+  pre_write_keys(dir.path(), SEQ_SIZE);
 
   let engine = build(dir.path())
     .group_commit_count(1)
     .build()
     .expect("bootstrap error");
 
+  let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
+
   let mut group = c.benchmark_group("sequential-get");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(30))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(15))
+    .throughput(Throughput::Elements(SEQ_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter(|| {
-        for i in 0..SIZE {
+        for i in 0..SEQ_SIZE {
           let mut tx = engine.new_transaction().expect("start error");
-          tx.get(&keys[i].clone()).expect("get error");
+          tx.get(&keys[i]).expect("get error");
           tx.commit().expect("commit error");
         }
       });
@@ -64,16 +75,14 @@ fn bench_sequential_get(c: &mut Criterion) {
 }
 
 fn bench_sequential_insert(c: &mut Criterion) {
-  const SIZE: usize = 1_000;
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
+  let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
+  let values: Vec<_> = (0..SEQ_SIZE).map(make_value).collect();
 
   let mut group = c.benchmark_group("sequential-insert");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(30))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(15))
+    .throughput(Throughput::Elements(SEQ_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter_batched_ref(
         || {
@@ -85,9 +94,9 @@ fn bench_sequential_insert(c: &mut Criterion) {
           (dir, engine)
         },
         |(_, engine)| {
-          for i in 0..SIZE {
+          for i in 0..SEQ_SIZE {
             let mut tx = engine.new_transaction().expect("start error");
-            tx.insert(keys[i].clone(), keys[i].clone())
+            tx.insert(keys[i].clone(), values[i].clone())
               .expect("insert error");
             tx.commit().expect("commit error");
           }
@@ -99,32 +108,29 @@ fn bench_sequential_insert(c: &mut Criterion) {
 }
 
 fn bench_sequential_update(c: &mut Criterion) {
-  const SIZE: usize = 1_000;
-
   let dir = TempDir::new_in(".").expect("dir failed.");
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
-
-  pre_write_keys(dir.path(), keys.iter());
+  pre_write_keys(dir.path(), SEQ_SIZE);
 
   let engine = build(dir.path())
     .group_commit_count(1)
     .build()
     .expect("bootstrap error");
 
+  let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
+  let values: Vec<_> = (0..SEQ_SIZE).map(make_value).collect();
+
   let mut group = c.benchmark_group("sequential-update");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(30))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(15))
+    .throughput(Throughput::Elements(SEQ_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter(|| {
-        for i in 0..SIZE {
-          let mut tx = engine.new_transaction().expect("start failed.");
-          tx.insert(keys[i].clone(), keys[i].clone())
-            .expect("update failed.");
-          tx.commit().expect("commit failed.");
+        for i in 0..SEQ_SIZE {
+          let mut tx = engine.new_transaction().expect("start error");
+          tx.insert(keys[i].clone(), values[i].clone())
+            .expect("update error");
+          tx.commit().expect("commit error");
         }
       });
     });
@@ -132,18 +138,13 @@ fn bench_sequential_update(c: &mut Criterion) {
 }
 
 fn bench_concurrent_get(c: &mut Criterion) {
-  const SIZE: usize = 100_000;
-  const THREADS_COUNT: usize = 1_000;
-
   let dir = TempDir::new_in(".").expect("dir failed.");
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
+  pre_write_keys(dir.path(), CONC_SIZE);
 
-  pre_write_keys(dir.path(), keys.iter());
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
+  let keys: Vec<_> = (0..CONC_SIZE).map(make_key).collect();
   let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
-  let threads = (0..THREADS_COUNT)
+  let threads: Vec<_> = (0..CONC_THREADS)
     .map(|_| {
       let rx = rx.clone();
       let e = engine.clone();
@@ -156,17 +157,17 @@ fn bench_concurrent_get(c: &mut Criterion) {
         }
       })
     })
-    .collect::<Vec<_>>();
+    .collect();
 
   let mut group = c.benchmark_group("concurrent-get");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(30))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(20))
+    .throughput(Throughput::Elements(CONC_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter(|| {
-        let mut waiting = Vec::with_capacity(SIZE);
-        for i in 0..SIZE {
+        let mut waiting = Vec::with_capacity(CONC_SIZE);
+        for i in 0..CONC_SIZE {
           let (t, r) = unbounded();
           tx.send((keys[i].clone(), t)).unwrap();
           waiting.push(r);
@@ -181,45 +182,41 @@ fn bench_concurrent_get(c: &mut Criterion) {
 }
 
 fn bench_concurrent_insert(c: &mut Criterion) {
-  const SIZE: usize = 100_000;
-  const THREADS_COUNT: usize = 1_000;
-
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
+  let keys: Vec<_> = (0..CONC_SIZE).map(make_key).collect();
+  let values: Vec<_> = (0..CONC_SIZE).map(make_value).collect();
 
   let mut group = c.benchmark_group("concurrent-insert");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(150))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(20))
+    .throughput(Throughput::Elements(CONC_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter_batched_ref(
         || {
           let dir = TempDir::new_in(".").expect("dir failed.");
           let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-          let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
-          let threads = (0..THREADS_COUNT)
+          let (tx, rx) = unbounded::<(Vec<u8>, Vec<u8>, Sender<()>)>();
+          let threads: Vec<_> = (0..CONC_THREADS)
             .map(|_| {
               let rx = rx.clone();
               let e = engine.clone();
               std::thread::spawn(move || {
-                while let Ok((k, done)) = rx.recv() {
+                while let Ok((k, v, done)) = rx.recv() {
                   let mut tx = e.new_transaction().expect("start error");
-                  tx.insert(k.clone(), k).expect("insert error");
+                  tx.insert(k, v).expect("insert error");
                   tx.commit().expect("commit error");
                   done.send(()).unwrap();
                 }
               })
             })
-            .collect::<Vec<_>>();
+            .collect();
           (dir, engine, tx, threads)
         },
         |(_, _, tx, _)| {
-          let mut waiting = Vec::with_capacity(SIZE);
-          for i in 0..SIZE {
+          let mut waiting = Vec::with_capacity(CONC_SIZE);
+          for i in 0..CONC_SIZE {
             let (t, r) = unbounded();
-            tx.send((keys[i].clone(), t)).unwrap();
+            tx.send((keys[i].clone(), values[i].clone(), t)).unwrap();
             waiting.push(r);
           }
           waiting.into_iter().for_each(|r| r.recv().unwrap());
@@ -231,100 +228,39 @@ fn bench_concurrent_insert(c: &mut Criterion) {
 }
 
 fn bench_concurrent_update(c: &mut Criterion) {
-  const SIZE: usize = 100_000;
-  const THREADS_COUNT: usize = 1_000;
-
   let dir = TempDir::new_in(".").expect("dir failed.");
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
+  pre_write_keys(dir.path(), CONC_SIZE);
 
-  pre_write_keys(dir.path(), keys.iter());
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, rx) = unbounded::<(Vec<u8>, Sender<()>)>();
-  let threads = (0..THREADS_COUNT)
+  let keys: Vec<_> = (0..CONC_SIZE).map(make_key).collect();
+  let values: Vec<_> = (0..CONC_SIZE).map(make_value).collect();
+  let (tx, rx) = unbounded::<(Vec<u8>, Vec<u8>, Sender<()>)>();
+  let threads: Vec<_> = (0..CONC_THREADS)
     .map(|_| {
       let rx = rx.clone();
       let e = engine.clone();
       std::thread::spawn(move || {
-        while let Ok((k, done)) = rx.recv() {
+        while let Ok((k, v, done)) = rx.recv() {
           let mut tx = e.new_transaction().expect("start error");
-          tx.insert(k.clone(), k).expect("insert error");
+          tx.insert(k, v).expect("update error");
           tx.commit().expect("commit error");
           done.send(()).unwrap();
         }
       })
     })
-    .collect::<Vec<_>>();
+    .collect();
 
   let mut group = c.benchmark_group("concurrent-update");
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(30))
-    .throughput(Throughput::Elements(SIZE as u64))
+    .measurement_time(Duration::from_secs(20))
+    .throughput(Throughput::Elements(CONC_SIZE as u64))
     .bench_function("bench", |b| {
       b.iter(|| {
-        let mut waiting = Vec::with_capacity(SIZE);
-        for i in 0..SIZE {
+        let mut waiting = Vec::with_capacity(CONC_SIZE);
+        for i in 0..CONC_SIZE {
           let (t, r) = unbounded();
-          tx.send((keys[i].clone(), t)).unwrap();
-          waiting.push(r);
-        }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
-      });
-    });
-  group.finish();
-
-  drop(tx);
-  threads.into_iter().for_each(|t| t.join().unwrap());
-}
-
-fn random_operations(c: &mut Criterion) {
-  use rand::{seq::SliceRandom, Rng};
-  const SIZE: usize = 100_000;
-  const THREADS_COUNT: usize = 1_000;
-
-  let keys = (0..SIZE)
-    .map(|i| format!("{i:06}").as_bytes().to_vec())
-    .collect::<Vec<_>>();
-
-  let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_write_keys(dir.path(), keys.iter().take(SIZE / 3));
-
-  let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, rx) = unbounded::<(Vec<u8>, u8, Sender<()>)>();
-  let threads = (0..THREADS_COUNT)
-    .map(|_| {
-      let rx = rx.clone();
-      let e = engine.clone();
-      std::thread::spawn(move || {
-        while let Ok((k, op, done)) = rx.recv() {
-          let mut tx = e.new_transaction().expect("start error");
-          match op {
-            0 => drop(tx.remove(&k).expect("remove error")),
-            1 => drop(tx.get(&k).expect("get error")),
-            _ => drop(tx.insert(k.clone(), k).expect("insert error")),
-          }
-          tx.commit().expect("commit error");
-          done.send(()).unwrap();
-        }
-      })
-    })
-    .collect::<Vec<_>>();
-  let mut rng = rand::thread_rng();
-
-  let mut group = c.benchmark_group("random-operations");
-  group
-    .sample_size(DEFAULT_SAMPLE_SIZE)
-    .measurement_time(Duration::from_secs(60))
-    .throughput(Throughput::Elements(SIZE as u64))
-    .bench_function("bench", |b| {
-      b.iter(|| {
-        let mut waiting = Vec::with_capacity(SIZE);
-
-        for key in keys.choose_multiple(&mut rng, SIZE) {
-          let (t, r) = unbounded();
-          tx.send((key.clone(), rng.gen_range(0..3), t)).unwrap();
+          tx.send((keys[i].clone(), values[i].clone(), t)).unwrap();
           waiting.push(r);
         }
         waiting.into_iter().for_each(|r| r.recv().unwrap());
@@ -338,12 +274,11 @@ fn random_operations(c: &mut Criterion) {
 
 criterion_group!(
   benches,
-  bench_sequential_insert,
-  bench_concurrent_insert,
-  bench_sequential_update,
-  bench_concurrent_update,
   bench_sequential_get,
+  bench_sequential_insert,
+  bench_sequential_update,
   bench_concurrent_get,
-  random_operations
+  bench_concurrent_insert,
+  bench_concurrent_update,
 );
 criterion_main!(benches);

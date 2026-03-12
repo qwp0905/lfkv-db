@@ -13,8 +13,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Run benchmark
+    - name: Run throughput benchmark
       run: cargo bench --bench throughput -- --save-baseline main --quiet
+
+    - name: Run ycsb benchmark
+      run: cargo bench --bench ycsb -- --save-baseline main --quiet
 
     - name: Upload baseline
       uses: actions/upload-artifact@v4
