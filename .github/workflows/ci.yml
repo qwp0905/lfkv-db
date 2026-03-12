@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install coverage tool
+      run: cargo install cargo-llvm-cov
+    - name: Run tests
+      run: cargo test:cov
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: main
+        path: main
+
+    - name: Benchmark (main baseline)
+      working-directory: main
+      run: cargo bench --bench throughput -- --save-baseline main --quiet
+
+    - uses: actions/checkout@v4
+      with:
+        path: pr
+
+    - name: Copy baseline to PR
+      run: cp -r main/target/criterion pr/target/criterion
+
+    - name: Benchmark (PR vs main)
+      working-directory: pr
+      run: cargo bench --bench throughput -- --baseline main

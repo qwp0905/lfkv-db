@@ -16,6 +16,8 @@ fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
     .io_thread_count(5)
 }
 
+const DEFAULT_SAMPLE_SIZE: usize = 20;
+
 fn pre_write_keys<
   'a,
   T: Iterator<Item = &'a Vec<u8>>,
@@ -26,9 +28,7 @@ fn pre_write_keys<
 ) {
   let engine = build(dir).build().unwrap();
   let mut tx = engine.new_transaction().unwrap();
-  for k in keys {
-    tx.insert(k.clone(), k.clone()).unwrap();
-  }
+  keys.for_each(|k| tx.insert(k.clone(), k.clone()).unwrap());
   tx.commit().unwrap();
 }
 
@@ -48,7 +48,7 @@ fn bench_sequential_get(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("sequential-get");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(30))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -71,7 +71,7 @@ fn bench_sequential_insert(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("sequential-insert");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(30))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -115,7 +115,7 @@ fn bench_sequential_update(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("sequential-update");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(30))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -160,7 +160,7 @@ fn bench_concurrent_get(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("concurrent-get");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(30))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -190,7 +190,7 @@ fn bench_concurrent_insert(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("concurrent-insert");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(150))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -259,7 +259,7 @@ fn bench_concurrent_update(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("concurrent-update");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(30))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
@@ -315,7 +315,7 @@ fn random_operations(c: &mut Criterion) {
 
   let mut group = c.benchmark_group("random-operations");
   group
-    .sample_size(10)
+    .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(60))
     .throughput(Throughput::Elements(SIZE as u64))
     .bench_function("bench", |b| {
