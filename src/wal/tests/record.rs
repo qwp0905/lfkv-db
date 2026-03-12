@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn assert_roundtrip(record: &LogRecord) -> LogRecord {
@@ -63,7 +62,7 @@ fn test_checkpoint_roundtrip() {
 
 #[test]
 fn test_entry_roundtrip() {
-  let page = Page::new();
+  let mut page = Page::new();
   let mut writer = page.writer();
 
   let _ = writer.write(&(3 as u16).to_le_bytes());

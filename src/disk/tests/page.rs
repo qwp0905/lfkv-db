@@ -1,23 +1,25 @@
-use crate::disk::{PAGE_SIZE, Page};
+use crate::disk::{Page, PAGE_SIZE};
 
 #[test]
 fn test_writer() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
   let mut wt = page.writer();
   wt.write(&[1, 2, 3, 5, 6]).unwrap();
 
-  assert_eq!(page.0[0], 1);
-  assert_eq!(page.0[1], 2);
-  assert_eq!(page.0[2], 3);
-  assert_eq!(page.0[3], 5);
-  assert_eq!(page.0[4], 6);
-  assert_eq!(page.0[5], 0);
-  assert_eq!(page.0[6], 0);
+  let mut scanner = page.scanner();
+
+  assert_eq!(scanner.read().unwrap(), 1);
+  assert_eq!(scanner.read().unwrap(), 2);
+  assert_eq!(scanner.read().unwrap(), 3);
+  assert_eq!(scanner.read().unwrap(), 5);
+  assert_eq!(scanner.read().unwrap(), 6);
+  assert_eq!(scanner.read().unwrap(), 0);
+  assert_eq!(scanner.read().unwrap(), 0);
 }
 
 #[test]
 fn test_read_write() {
-  let page = Page::<5>::new();
+  let mut page = Page::<5>::new();
   let test_data = [1, 2, 3, 4, 5];
 
   // Write test
@@ -35,7 +37,7 @@ fn test_read_write() {
 
 #[test]
 fn test_read_n() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
   let test_data = [1, 2, 3, 4, 5];
 
   // Write test
@@ -51,7 +53,7 @@ fn test_read_n() {
 #[test]
 fn test_write_overflow() {
   const SMALL_SIZE: usize = 5;
-  let page = Page::<SMALL_SIZE>::new();
+  let mut page = Page::<SMALL_SIZE>::new();
   let test_data = [1, 2, 3, 4, 5, 6]; // Data larger than SMALL_SIZE
 
   let mut writer = page.writer();
@@ -86,7 +88,7 @@ fn test_read_n_overflow() {
 
 #[test]
 fn test_sequential_operations() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
 
   // First write operation (starts from offset 0)
   {
@@ -111,7 +113,7 @@ fn test_sequential_operations() {
 
 #[test]
 fn test_writer_fresh_start() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
 
   // First write operation
   {
@@ -133,7 +135,7 @@ fn test_writer_fresh_start() {
 
 #[test]
 fn test_scanner_fresh_start() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
 
   // Write data
   {
@@ -157,7 +159,7 @@ fn test_scanner_fresh_start() {
 
 #[test]
 fn test_interleaved_operations() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
   let test_data = [1, 2, 3];
 
   // First write
@@ -189,7 +191,7 @@ fn test_interleaved_operations() {
 
 #[test]
 fn test_page_copy() {
-  let page = Page::<PAGE_SIZE>::new();
+  let mut page = Page::<PAGE_SIZE>::new();
   let test_data = [1, 2, 3, 4, 5];
 
   // Write data to original page
@@ -239,7 +241,7 @@ fn test_from_slice() {
 
 #[test]
 fn test_read_usize() {
-  let page = Page::<15>::new();
+  let mut page = Page::<15>::new();
   let test_value: usize = 42;
 
   // Write usize value
@@ -259,7 +261,7 @@ fn test_read_usize() {
 #[test]
 fn test_as_ref() {
   const SIZE: usize = 5;
-  let page = Page::<SIZE>::new();
+  let mut page = Page::<SIZE>::new();
   let test_data = [1, 2, 3, 4, 5];
 
   let mut writer = page.writer();
