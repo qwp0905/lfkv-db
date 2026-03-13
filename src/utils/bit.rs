@@ -16,10 +16,6 @@ impl Bitmap {
     Bitmap { bits }
   }
 
-  pub fn clear(&mut self) {
-    self.bits.fill_with(Default::default);
-  }
-
   pub fn insert(&self, n: usize) -> bool {
     let i = n >> SHIFT;
     if i >= self.bits.len() {

@@ -66,7 +66,7 @@ pub struct WAL {
    * queue for segment whick checkpoint failed.
    * it will be clear and move to preloader to reuse segment when checkpoint complete.
    */
-  not_flushed: Arc<SegQueue<WALSegment>>,
+  checkpoint_failed: Arc<SegQueue<WALSegment>>,
   /**
    * fsync operation result queue.
    * asynchronously called in segment rotation .
@@ -123,7 +123,7 @@ impl WAL {
       .buffering(
         config.segment_flush_delay,
         config.segment_flush_count,
-        handle_rotate(preloader.clone(), not_flushed.clone()),
+        waiting_checkpoint(preloader.clone(), not_flushed.clone()),
         move |_| checkpoint.send(()).wait().is_ok(),
       );
 
@@ -137,7 +137,7 @@ impl WAL {
         page_pool,
         max_index,
         wait_checkpoint,
-        not_flushed,
+        checkpoint_failed: not_flushed,
         fsync_queue: SegQueue::new(),
         syned_count: AtomicUsize::new(0),
       },
@@ -326,7 +326,7 @@ impl WAL {
       let _ = f.wait();
       self.syned_count.fetch_add(1, Ordering::Release);
     }
-    while let Some(seg) = self.not_flushed.pop() {
+    while let Some(seg) = self.checkpoint_failed.pop() {
       self.preloader.reuse(seg);
     }
 
@@ -360,19 +360,19 @@ impl WAL {
 unsafe impl Send for WAL {}
 unsafe impl Sync for WAL {}
 
-fn handle_rotate(
+fn waiting_checkpoint(
   preloader: Arc<SegmentPreload>,
-  not_flushed: Arc<SegQueue<WALSegment>>,
+  failed: Arc<SegQueue<WALSegment>>,
 ) -> impl Fn((WALSegment, bool)) -> Result {
   move |(segment, result)| {
     match result {
       true => {
-        while let Some(buffered) = not_flushed.pop() {
+        while let Some(buffered) = failed.pop() {
           preloader.reuse(buffered);
         }
         preloader.reuse(segment)
       }
-      false => not_flushed.push(segment),
+      false => failed.push(segment),
     }
     Ok(())
   }

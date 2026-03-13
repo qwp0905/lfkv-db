@@ -14,7 +14,7 @@ const OP_COUNT: usize = 10_000;
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
 const ZIPF_EXPONENT: f64 = 0.99;
-const DEFAULT_SAMPLE_SIZE: usize = 20;
+const DEFAULT_SAMPLE_SIZE: usize = 30;
 
 fn make_key(i: usize) -> Vec<u8> {
   format!("{i:0>width$}", width = KEY_SIZE)
@@ -43,14 +43,11 @@ fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
 
 fn pre_load(dir: &std::path::Path, count: usize) {
   let engine = build(dir).build().unwrap();
-  for chunk_start in (0..count).step_by(1000) {
-    let mut tx = engine.new_transaction().unwrap();
-    let chunk_end = (chunk_start + 1000).min(count);
-    for i in chunk_start..chunk_end {
-      tx.insert(make_key(i), make_value(i)).unwrap();
-    }
-    tx.commit().unwrap();
-  }
+  let mut tx = engine.new_transaction().unwrap();
+  (0..count)
+    .map(|i| (make_key(i), make_value(i)))
+    .for_each(|(k, v)| tx.insert(k, v).unwrap());
+  tx.commit().unwrap();
 }
 
 enum Op {

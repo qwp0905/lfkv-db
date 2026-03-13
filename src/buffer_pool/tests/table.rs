@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn guard_fn(_: usize) -> bool {
@@ -10,19 +9,16 @@ fn test_cache_miss_then_hit() {
   let table = LRUTable::new(1, 4);
 
   // first acquire: cache miss
-  let guard = match table.acquire(42, guard_fn) {
-    Ok(_) => panic!("should fail"),
-    Err(guard) => guard,
-  };
+  let guard = table.acquire(42, guard_fn);
+  assert!(!guard.is_succeeded());
   let frame_id = guard.get_frame_id();
   assert!(guard.get_evicted_index().is_none());
   drop(guard);
 
   // second acquire: cache hit, same frame_id
-  match table.acquire(42, guard_fn) {
-    Ok(id) => assert_eq!(id.get_frame_id(), frame_id),
-    Err(_) => panic!("expected cache hit"),
-  };
+  let guard = table.acquire(42, guard_fn);
+  assert!(guard.is_succeeded());
+  assert_eq!(guard.get_frame_id(), frame_id);
 }
 
 #[test]
@@ -32,10 +28,8 @@ fn test_multiple_misses_no_eviction() {
 
   let mut frame_ids = Vec::new();
   for i in 0..cap {
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail"),
-      Err(g) => g,
-    };
+    let guard = table.acquire(i, guard_fn);
+    assert!(!guard.is_succeeded());
     assert!(guard.get_evicted_index().is_none());
     frame_ids.push(guard.get_frame_id());
     drop(guard);
@@ -54,41 +48,19 @@ fn test_eviction_when_full() {
 
   // fill capacity
   for i in 0..cap {
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail."),
-      Err(g) => g,
-    };
+    let guard = table.acquire(i, guard_fn);
+    assert!(!guard.is_succeeded());
     assert!(guard.get_evicted_index().is_none());
     drop(guard);
   }
 
   // next acquire should trigger eviction
-  let guard = match table.acquire(100, guard_fn) {
-    Ok(_) => panic!("should fail."),
-    Err(g) => g,
-  };
+  let guard = table.acquire(100, guard_fn);
+  assert!(!guard.is_succeeded());
   let evicted = guard.get_evicted_index();
   assert!(evicted.is_some());
   // evicted index should be one of the original entries
   assert!(evicted.unwrap() < cap);
-  drop(guard);
-}
-
-#[test]
-fn test_get_index_reverse_mapping() {
-  let cap = 4;
-  let table = LRUTable::new(1, cap);
-
-  for i in 0..cap {
-    let guard = match table.acquire(i * 10, guard_fn) {
-      Ok(_) => panic!("should fail."),
-      Err(g) => g,
-    };
-    let frame_id = guard.get_frame_id();
-    drop(guard);
-
-    assert_eq!(table.get_index(frame_id), i * 10);
-  }
 }
 
 #[test]
@@ -98,21 +70,17 @@ fn test_sharded_cache_hit() {
 
   let mut entries = Vec::new();
   for i in 0..16 {
-    // let guard = table.acquire(i).unwrap_err();
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail."),
-      Err(g) => g,
-    };
+    let guard = table.acquire(i, guard_fn);
+    assert!(!guard.is_succeeded());
     entries.push((i, guard.get_frame_id()));
     drop(guard);
   }
 
   // all should be cache hits with correct frame_ids
   for (index, expected_frame_id) in &entries {
-    match table.acquire(*index, guard_fn) {
-      Ok(id) => assert_eq!(id.get_frame_id(), *expected_frame_id),
-      Err(_) => panic!("expected cache hit for index {}", index),
-    };
+    let guard = table.acquire(*index, guard_fn);
+    assert!(guard.is_succeeded());
+    assert_eq!(guard.get_frame_id(), *expected_frame_id);
   }
 }
 
@@ -122,10 +90,8 @@ fn test_sharded_frame_id_ranges() {
 
   let mut frame_ids = Vec::new();
   for i in 0..16 {
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail."),
-      Err(g) => g,
-    };
+    let guard = table.acquire(i, guard_fn);
+    assert!(!guard.is_succeeded());
     frame_ids.push(guard.get_frame_id());
     drop(guard);
   }
@@ -143,26 +109,6 @@ fn test_sharded_frame_id_ranges() {
 }
 
 #[test]
-fn test_sharded_get_index_reverse_mapping() {
-  let cap = 80;
-  let table = LRUTable::new(4, cap);
-
-  let mut pairs = Vec::new();
-  for i in 0..16 {
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail."),
-      Err(g) => g,
-    };
-    pairs.push((i, guard.get_frame_id()));
-    drop(guard);
-  }
-
-  for (index, frame_id) in &pairs {
-    assert_eq!(table.get_index(*frame_id), *index);
-  }
-}
-
-#[test]
 fn test_sharded_eviction() {
   // small capacity so eviction happens
   let table = LRUTable::new(4, 8); // 2 per shard
@@ -171,16 +117,15 @@ fn test_sharded_eviction() {
   let mut inserted = Vec::new();
   let mut eviction_happened = false;
   for i in 0..20 {
-    match table.acquire(i, guard_fn) {
-      Ok(_) => {} // cache hit from previous insert (shouldn't happen with unique keys)
-      Err(guard) => {
-        if guard.get_evicted_index().is_some() {
-          eviction_happened = true;
-        }
-        inserted.push((i, guard.get_frame_id()));
-        drop(guard);
-      }
-    };
+    let guard = table.acquire(i, guard_fn);
+    if guard.is_succeeded() {
+      continue;
+    }
+    if guard.get_evicted_index().is_some() {
+      eviction_happened = true;
+    }
+    inserted.push((i, guard.get_frame_id()));
+    drop(guard);
   }
 
   assert!(eviction_happened, "expected at least one eviction");
@@ -198,24 +143,57 @@ fn test_eviction_reuses_frame_id() {
 
   // fill capacity
   for i in 0..cap {
-    let guard = match table.acquire(i, guard_fn) {
-      Ok(_) => panic!("should fail"),
-      Err(g) => g,
-    };
+    let guard = table.acquire(i, guard_fn);
+    assert!(!guard.is_succeeded());
     drop(guard);
   }
 
   // evict and insert new
-  let guard = match table.acquire(100, guard_fn) {
-    Ok(_) => panic!("should fail"),
-    Err(g) => g,
-  };
+  let guard = table.acquire(100, guard_fn);
+  assert!(!guard.is_succeeded());
   let new_frame_id = guard.get_frame_id();
   drop(guard);
 
   // frame_id should be within original range (reused)
   assert!(new_frame_id < cap);
+}
 
-  // reverse mapping should point to new index
-  assert_eq!(table.get_index(new_frame_id), 100);
+#[test]
+fn test_eviction_guard_drop_rollback() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  // fill capacity
+  table.acquire(10, guard_fn);
+  table.acquire(20, guard_fn);
+
+  // evict but don't call take() — Drop should rollback
+  let guard = table.acquire(30, guard_fn);
+  assert!(!guard.is_succeeded());
+  let evicted = guard.get_evicted_index().unwrap();
+  drop(guard); // Drop inserts evicted back
+
+  // evicted index should still be accessible
+  let guard = table.acquire(evicted, guard_fn);
+  assert!(guard.is_succeeded());
+}
+
+#[test]
+fn test_eviction_guard_take_commits() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  // fill capacity
+  table.acquire(10, guard_fn);
+  table.acquire(20, guard_fn);
+
+  // evict and call take() — commit the new mapping
+  let mut guard = table.acquire(30, guard_fn);
+  assert!(!guard.is_succeeded());
+  let _evicted = guard.take(); // commits: Drop will insert new_index
+  drop(guard);
+
+  // new index should be cached
+  let guard = table.acquire(30, guard_fn);
+  assert!(guard.is_succeeded());
 }
