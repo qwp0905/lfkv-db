@@ -17,7 +17,7 @@ jobs:
     - name: Run tests
       run: cargo test:cov
 
-  benchmark:
+  benchmark_throughput:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -30,14 +30,27 @@ jobs:
     - name: Throughput baseline
       run: cargo bench --bench throughput -- --save-baseline main --quiet
 
-    - name: YCSB baseline
-      run: cargo bench --bench ycsb -- --save-baseline main --quiet
-
     - name: Switch to PR branch
       run: git switch ${{ github.head_ref }}
 
     - name: Throughput (PR vs main)
       run: cargo bench --bench throughput -- --baseline main
+
+  benchmark_ycsb:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Switch to main baseline
+      run: git switch main
+
+    - name: YCSB baseline
+      run: cargo bench --bench ycsb -- --save-baseline main --quiet
+
+    - name: Switch to PR branch
+      run: git switch ${{ github.head_ref }}
 
     - name: YCSB (PR vs main)
       run: cargo bench --bench ycsb -- --baseline main

@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 const KEY_SIZE: usize = 16;
 const VALUE_SIZE: usize = 256;
-const DEFAULT_SAMPLE_SIZE: usize = 20;
+const DEFAULT_SAMPLE_SIZE: usize = 30;
 const SEQ_SIZE: usize = 1_000;
 const CONC_SIZE: usize = 10_000;
 const CONC_THREADS: usize = 128;
