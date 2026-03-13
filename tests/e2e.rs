@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crossbeam::channel::{unbounded, Sender};
 use lfkv_db::{Engine, EngineBuilder, Error, LogLevel, Logger};
+use rand::{seq::IteratorRandom, thread_rng};
 use tempfile::{tempdir_in, TempDir};
 
 struct TestLogger;
@@ -408,8 +409,9 @@ fn test_btree_node_split_and_recovery() {
       }));
     }
 
-    let mut completions = Vec::new();
-    for i in 0..key_count {
+    let rng = &mut thread_rng();
+    let mut completions = Vec::with_capacity(key_count);
+    for i in (0..key_count).choose_multiple(rng, key_count) {
       let (done_tx, done_rx) = crossbeam::channel::unbounded();
       task_tx.send((i, done_tx)).unwrap();
       completions.push(done_rx);
@@ -509,6 +511,7 @@ fn crash_writer() {
     .group_commit_count(10)
     .build()
     .expect("engine bootstrap failed");
+  let rng = &mut thread_rng();
 
   let key_count: usize = 30_000;
   let thread_count = 1000;
@@ -536,7 +539,7 @@ fn crash_writer() {
   }
 
   let mut completions = Vec::new();
-  for i in 0..key_count {
+  for i in (0..key_count).choose_multiple(rng, key_count) {
     let (done_tx, done_rx) = crossbeam::channel::unbounded();
     task_tx.send((i, done_tx)).unwrap();
     completions.push(done_rx);
@@ -630,14 +633,14 @@ fn test_process_crash_recovery() {
 fn test_hard_workload() {
   let dir = tempdir_in(".").unwrap();
   let engine = Arc::new(build_engine(&dir));
+  let rng = &mut thread_rng();
 
   let key_count: usize = 100000;
   let thread_count: usize = 1000;
   let mut keys: Vec<Vec<u8>> = (0..key_count)
     .map(|i| format!("123{:06}", i))
     .map(|s| s.as_bytes().to_vec())
-    .collect();
-  keys.sort();
+    .choose_multiple(rng, key_count);
 
   let mut waiting = Vec::with_capacity(key_count);
   let mut threads = Vec::with_capacity(thread_count);
@@ -667,6 +670,7 @@ fn test_hard_workload() {
 
   threads.into_iter().for_each(|h| h.join().unwrap());
 
+  keys.sort();
   let mut count = 0;
   let mut t = engine.new_transaction().expect("tx start error");
 
