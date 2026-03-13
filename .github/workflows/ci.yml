@@ -32,7 +32,7 @@ jobs:
       continue-on-error: true
 
     - name: Throughput (PR vs main)
-      run: cargo bench --bench throughput -- --baseline-lenient main --quiet
+      run: cargo bench --bench throughput -- --baseline-lenient main
 
     - name: YCSB (PR vs main)
-      run: cargo bench --bench ycsb -- --baseline-lenient main --quiet
+      run: cargo bench --bench ycsb -- --baseline-lenient main
