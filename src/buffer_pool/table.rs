@@ -8,23 +8,35 @@ use crossbeam::utils::Backoff;
 use super::LRUShard;
 use crate::utils::ShortenedMutex;
 
-struct Shard {
-  lru: LRUShard<usize, usize>,
-  offset: usize,
-  reverse: Vec<usize>,
-}
+type Shard = LRUShard<usize, usize>;
 
 pub struct EvictionGuard<'a> {
   frame_id: usize,
-  evicted: Option<usize>,
-  _guard: MutexGuard<'a, Shard>,
+  succeed: bool,
+  evicted: Option<(usize, u64)>,
+  new_index: usize,
+  new_index_hash: u64,
+  hasher: &'a RandomState,
+  guard: MutexGuard<'a, Shard>,
 }
 impl<'a> EvictionGuard<'a> {
-  fn new(frame_id: usize, evicted: Option<usize>, _guard: MutexGuard<'a, Shard>) -> Self {
+  fn new(
+    frame_id: usize,
+    new_index: usize,
+    new_index_hash: u64,
+    evicted: Option<(usize, u64)>,
+    hasher: &'a RandomState,
+    guard: MutexGuard<'a, Shard>,
+    succeed: bool,
+  ) -> Self {
     Self {
       frame_id,
+      new_index,
+      new_index_hash,
       evicted,
-      _guard,
+      hasher,
+      guard,
+      succeed,
     }
   }
 
@@ -32,81 +44,94 @@ impl<'a> EvictionGuard<'a> {
     self.frame_id
   }
   pub fn get_evicted_index(&self) -> Option<usize> {
-    self.evicted
+    self.evicted.as_ref().map(|(i, _)| *i)
+  }
+
+  pub fn take(&mut self) -> Option<usize> {
+    self.evicted.take().map(|(index, _)| index)
+  }
+  pub fn is_succeeded(&self) -> bool {
+    self.succeed
+  }
+}
+impl<'a> Drop for EvictionGuard<'a> {
+  fn drop(&mut self) {
+    if self.succeed {
+      return;
+    }
+    let (index, hash) = self
+      .evicted
+      .take()
+      .unwrap_or_else(|| (self.new_index, self.new_index_hash));
+    self.guard.insert(index, self.frame_id, hash, self.hasher);
   }
 }
 
 pub struct LRUTable {
   shards: Vec<Mutex<Shard>>,
+  offset: Vec<usize>,
   hasher: RandomState,
-  capacity: usize,
 }
 impl LRUTable {
   pub fn new(shard_count: usize, capacity: usize) -> Self {
     let cap_per_shard = capacity / shard_count;
     let mut shards = Vec::with_capacity(shard_count);
+    let mut offset = Vec::with_capacity(shard_count);
     for i in 0..shard_count {
-      let shard = Shard {
-        reverse: vec![0; cap_per_shard],
-        offset: i * cap_per_shard,
-        lru: LRUShard::new(cap_per_shard),
-      };
-      shards.push(Mutex::new(shard))
+      shards.push(Mutex::new(LRUShard::new(cap_per_shard)));
+      offset.push(i * cap_per_shard);
     }
 
     Self {
       shards,
+      offset,
       hasher: Default::default(),
-      capacity: cap_per_shard,
     }
   }
-  fn get_shard(&self, key: usize) -> (u64, &Mutex<Shard>) {
+  fn get_shard(&self, key: usize) -> (u64, &Mutex<Shard>, usize) {
     let h = self.hasher.hash_one(key);
-    let shard = &self.shards[h as usize % self.shards.len()];
-    (h, shard)
+    let i = h as usize % self.shards.len();
+    let shard = &self.shards[i];
+    let offset = self.offset[i];
+    (h, shard, offset)
   }
 
-  pub fn acquire<T>(
-    &self,
-    index: usize,
-    guard_fn: T,
-  ) -> std::result::Result<EvictionGuard<'_>, EvictionGuard<'_>>
+  pub fn acquire<F>(&self, index: usize, guard_fn: F) -> EvictionGuard<'_>
   where
-    T: Fn(usize) -> bool,
+    F: Fn(usize) -> bool,
   {
     let backoff = Backoff::new();
-    let (h, s) = self.get_shard(index);
-    let mut shard = s.l();
-    if let Some(&id) = shard.lru.get(&index, h, &self.hasher) {
-      return Ok(EvictionGuard::new(id, None, shard));
-    }
-
-    let offset = shard.offset;
-    if !shard.lru.is_full() {
-      let i = shard.lru.len();
-      shard.reverse[i] = index;
-      let id = i + offset;
-      shard.lru.insert(index, id, h, &self.hasher);
-      return Err(EvictionGuard::new(id, None, shard));
-    };
-
+    let (h, s, offset) = self.get_shard(index);
     loop {
-      let ((evicted, id), evicted_hash) = shard.lru.evict(&self.hasher).unwrap();
-      if !guard_fn(id) {
-        shard.lru.insert(evicted, id, evicted_hash, &self.hasher);
-        backoff.snooze();
-        continue;
+      let mut shard = s.l();
+      if let Some(&id) = shard.get(&index, h, &self.hasher) {
+        return EvictionGuard::new(id, 0, 0, None, &self.hasher, shard, true);
       }
 
-      shard.lru.insert(index, id, h, &self.hasher);
-      shard.reverse[id - offset] = index;
-      return Err(EvictionGuard::new(id, Some(evicted), shard));
-    }
-  }
+      if !shard.is_full() {
+        let i = shard.len();
+        let id = i + offset;
+        return EvictionGuard::new(id, index, h, None, &self.hasher, shard, false);
+      };
 
-  pub fn get_index(&self, frame_id: usize) -> usize {
-    let shard = &self.shards[frame_id / self.capacity].l();
-    shard.reverse[frame_id - shard.offset]
+      let ((evicted, id), evicted_hash) = shard.evict(&self.hasher).unwrap();
+      if guard_fn(id) {
+        return EvictionGuard::new(
+          id,
+          index,
+          h,
+          Some((evicted, evicted_hash)),
+          &self.hasher,
+          shard,
+          false,
+        );
+      }
+
+      shard.insert(evicted, id, evicted_hash, &self.hasher);
+      drop(shard);
+
+      backoff.snooze();
+    }
   }
 }
 

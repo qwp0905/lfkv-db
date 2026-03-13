@@ -1,5 +1,4 @@
 use std::{
-  mem::replace,
   path::PathBuf,
   sync::{
     atomic::{AtomicUsize, Ordering},
@@ -7,9 +6,9 @@ use std::{
   },
 };
 
-use super::{LRUTable, PageSlot};
+use super::{Frame, LRUTable, PageSlot};
 use crate::{
-  disk::{DiskController, DiskControllerConfig, PagePool, PageRef, PAGE_SIZE},
+  disk::{DiskController, DiskControllerConfig, PagePool, PAGE_SIZE},
   error::Result,
   utils::{Bitmap, LogFilter, ShortenedRwLock, ToArc},
 };
@@ -23,7 +22,7 @@ pub struct BufferPoolConfig {
 
 pub struct BufferPool {
   table: LRUTable,
-  frame: Vec<RwLock<PageRef<PAGE_SIZE>>>,
+  frame: Vec<RwLock<Frame>>,
   pins: Vec<AtomicUsize>,
   dirty: Bitmap,
   disk: Arc<DiskController<PAGE_SIZE>>,
@@ -40,7 +39,8 @@ impl BufferPool {
 
     let frame_cap = (config.capacity * 9) / 10; // 90% of page pool capacity 10% buffer for disk io
     let mut frame = Vec::with_capacity(frame_cap);
-    frame.resize_with(frame_cap, || RwLock::new(page_pool.acquire()));
+    frame.resize_with(frame_cap, || RwLock::new(Frame::empty(page_pool.acquire())));
+
     let mut pins = Vec::with_capacity(frame_cap);
     pins.resize_with(frame_cap, Default::default);
 
@@ -60,41 +60,46 @@ impl BufferPool {
       .is_ok()
   }
 
-  fn swap_frame_from_disk(
-    &self,
-    frame_id: usize,
-    index: usize,
-  ) -> Result<PageRef<PAGE_SIZE>> {
-    let mut slot = self.frame[frame_id].wl();
-    let replacement = self.disk.read(index)?;
-    Ok(replace(&mut slot as &mut PageRef<PAGE_SIZE>, replacement))
-  }
-
   pub fn read(&self, index: usize) -> Result<PageSlot<'_>> {
-    let evicted = match self.table.acquire(index, |id| self.frame_available(id)) {
-      Ok(guard) => {
-        let id = guard.get_frame_id();
-        let pin = &self.pins[id];
-        pin.fetch_add(1, Ordering::Release);
-        return Ok(PageSlot::new(&self.frame[id], id, &self.dirty, index, pin));
-      }
-      Err(evicted) => evicted,
-    };
-
-    let id = evicted.get_frame_id();
-    let prev = self.swap_frame_from_disk(id, index)?;
-
-    let pin = &self.pins[id];
-    let cached = PageSlot::new(&self.frame[id], id, &self.dirty, index, pin);
-    if let Some(evicted_index) = evicted.get_evicted_index() {
-      if self.dirty.remove(id) {
-        self.disk.write(evicted_index, &prev)?;
-      }
-      return Ok(cached);
+    let mut guard = self.table.acquire(index, |id| self.frame_available(id));
+    if guard.is_succeeded() {
+      let id = guard.get_frame_id();
+      let pin = &self.pins[id];
+      pin.fetch_add(1, Ordering::Release);
+      return Ok(PageSlot::new(&self.frame[id], id, &self.dirty, pin));
     }
 
-    pin.fetch_add(1, Ordering::Release);
-    Ok(cached)
+    let id = guard.get_frame_id();
+    let frame = &self.frame[id];
+    let pin = &self.pins[id];
+    let slot = PageSlot::new(frame, id, &self.dirty, pin);
+
+    let evicted = match guard.get_evicted_index() {
+      Some(i) => i,
+      None => {
+        frame.wl().replace(index, self.disk.read(index)?);
+        pin.fetch_add(1, Ordering::Release);
+        return Ok(slot);
+      }
+    };
+
+    if let Err(err) = self
+      .disk
+      .read(index)
+      .map(|page| frame.wl().replace(index, page))
+      .and_then(|prev| {
+        guard.take();
+        if !self.dirty.remove(id) {
+          return Ok(());
+        }
+        self.disk.write(evicted, &prev)
+      })
+    {
+      pin.fetch_sub(1, Ordering::Release);
+      return Err(err);
+    }
+
+    Ok(slot)
   }
 
   pub fn flush(&self) -> Result {
@@ -102,16 +107,16 @@ impl BufferPool {
     let mut waits = Vec::new();
     for id in self.dirty.iter() {
       self.pins[id].fetch_add(1, Ordering::Release);
-      let index = self.table.get_index(id);
-      let page = self.frame[id].rl();
+      let frame = self.frame[id].rl();
       self.dirty.remove(id);
-      waits.push(self.disk.write_async(index, &page));
+      waits.push(self.disk.write_async(frame.get_index(), frame.page_ref()));
       self.pins[id].fetch_sub(1, Ordering::Release);
     }
 
-    for done in waits {
-      done.wait()?;
-    }
+    waits
+      .into_iter()
+      .map(|w| w.wait())
+      .fold(Ok(()), |a, c| a.and_then(|_| c))?;
     self.logger.debug("buffer pool flushed all pages.");
 
     self.disk.fsync()?;
