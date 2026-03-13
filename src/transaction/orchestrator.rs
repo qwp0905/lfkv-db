@@ -147,14 +147,6 @@ impl TxOrchestrator {
     self.version_visibility.current_version()
   }
 
-  pub fn remove_aborted(&self, version: &usize) {
-    self.version_visibility.remove_aborted(version);
-  }
-
-  pub fn is_aborted(&self, tx_id: &usize) -> bool {
-    self.version_visibility.is_aborted(tx_id)
-  }
-
   pub fn close(&self) -> Result {
     let wal_close = self.wal.twostep_close();
     self.checkpoint.close();
