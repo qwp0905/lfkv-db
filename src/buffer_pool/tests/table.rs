@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
 use super::*;
 
 fn miss(table: &LRUTable, index: usize) -> EvictionGuard<'_> {
@@ -233,4 +237,87 @@ fn test_pinned_entry_not_evicted() {
   // eviction should evict 20 (pin=0), not 10 (pin=2)
   let guard = miss(&table, 30);
   assert_eq!(guard.get_evicted_index().unwrap(), 20);
+}
+
+#[test]
+fn test_concurrent_acquire_waits_for_eviction() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  // evict without commit — keeps pin=Eviction
+  let mut guard = miss(&table, 30);
+  let frame_id = guard.get_frame_id();
+
+  let done = AtomicBool::new(false);
+
+  thread::scope(|s| {
+    s.spawn(|| {
+      // acquire same index 30 — found in LRU but pin=Eviction, must wait
+      let state = hit(&table, 30);
+      done.store(true, Ordering::Release);
+      state.unpin();
+    });
+
+    // give the thread time to enter backoff loop
+    thread::sleep(Duration::from_millis(50));
+    assert!(!done.load(Ordering::Acquire), "thread should be waiting");
+
+    // commit + drop -> pin=Fetched(1) -> thread's try_pin succeeds
+    guard.commit();
+    drop(guard);
+  });
+
+  assert!(done.load(Ordering::Acquire), "thread should have completed");
+  assert_eq!(hit(&table, 30).get_frame_id(), frame_id);
+}
+
+#[test]
+fn test_concurrent_acquire_waits_for_evicted_index() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  // evict without commit — index 10 is in eviction set
+  let guard = miss(&table, 30);
+  let evicted = guard.get_evicted_index().unwrap();
+
+  let done = AtomicBool::new(false);
+
+  thread::scope(|s| {
+    s.spawn(|| {
+      // acquire the evicted index — should block on eviction set check
+      let state = hit(&table, evicted);
+      done.store(true, Ordering::Release);
+      state.unpin();
+    });
+
+    // give the thread time to enter backoff loop
+    thread::sleep(Duration::from_millis(50));
+    assert!(!done.load(Ordering::Acquire), "thread should be waiting");
+
+    // drop without commit -> rollback restores evicted index
+    drop(guard);
+  });
+
+  assert!(done.load(Ordering::Acquire), "thread should have completed");
+  // evicted index should be accessible after rollback
+  let state = hit(&table, evicted);
+  state.unpin();
 }
