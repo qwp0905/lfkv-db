@@ -1,6 +1,6 @@
 use crossbeam::{atomic::AtomicCell, utils::Backoff};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq)]
 enum Pin {
   Fetched(usize),
   Eviction,
@@ -14,7 +14,6 @@ impl PartialEq for Pin {
     }
   }
 }
-impl Eq for Pin {}
 
 pub struct FrameState {
   pin: AtomicCell<Pin>,
