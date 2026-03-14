@@ -4,7 +4,7 @@ use std::{
   sync::Arc,
 };
 
-use super::{DirectIO, Page, PagePool, PageRef, Pread, Pwrite};
+use super::{DirectIO, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
   thread::{SharedWorkThread, WorkBuilder, WorkResult},
@@ -13,7 +13,7 @@ use crate::{
 
 enum DiskOperation<const N: usize> {
   Read(u64, PageRef<N>),
-  Write(u64, Page<N>),
+  Write(u64, PageRef<N>),
   Flush,
   Metadata,
 }
@@ -77,7 +77,7 @@ impl<const N: usize> DiskController<N> {
             .pread(page.as_mut().as_mut(), offset)
             .map(|_| OperationResult::Read(page)),
           DiskOperation::Write(offset, page) => fd
-            .pwrite(page.as_ref(), offset)
+            .pwrite(page.as_ref().as_ref(), offset)
             .map(|_| OperationResult::Write),
           DiskOperation::Flush => fd.sync_all().map(|_| OperationResult::Flush),
           DiskOperation::Metadata => Ok(OperationResult::Metadata(fd.metadata()?)),
@@ -109,10 +109,11 @@ impl<const N: usize> DiskController<N> {
     self.write_async(index, page).wait()
   }
   pub fn write_async<'a>(&self, index: usize, page: &'a PageRef<N>) -> WriteAsync<N> {
-    let o = self.background.send(DiskOperation::Write(
-      (index * N) as u64,
-      page.as_ref().copy(),
-    ));
+    let mut pooled = self.page_pool.acquire();
+    pooled.as_mut().copy_from(page.as_ref());
+    let o = self
+      .background
+      .send(DiskOperation::Write((index * N) as u64, pooled));
     WriteAsync(o)
   }
 

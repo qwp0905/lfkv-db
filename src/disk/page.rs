@@ -18,44 +18,53 @@ impl<const T: usize> Page<T> {
   pub fn new() -> Self {
     Self(UnsafeCell::new([0; T]))
   }
-
   #[inline]
   pub fn as_ptr(&self) -> *const u8 {
     self.0.get() as *const u8
   }
-
+  #[inline]
   pub fn copy(&self) -> Self {
     let p = Self::new();
     unsafe { copy_nonoverlapping(self.as_ptr(), p.as_ptr() as *mut u8, T) };
     p
   }
-
+  #[inline]
+  pub fn copy_from<V: AsRef<[u8]>>(&mut self, data: V) {
+    let data = data.as_ref();
+    let len = data.len().min(T);
+    unsafe { copy_nonoverlapping(data.as_ptr(), self.as_ptr() as *mut u8, len) };
+  }
+  #[inline]
   pub fn scanner(&self) -> PageScanner<'_, T> {
     PageScanner::new(self.as_ptr())
   }
-
+  #[inline]
   pub fn writer(&mut self) -> PageWriter<'_, T> {
     PageWriter::new(self.0.get() as *mut u8)
   }
 }
 
 impl<const T: usize> AsRef<[u8]> for Page<T> {
+  #[inline]
   fn as_ref(&self) -> &[u8] {
     self.0.get().borrow_unsafe()
   }
 }
 impl<const T: usize> AsMut<[u8]> for Page<T> {
+  #[inline]
   fn as_mut(&mut self) -> &mut [u8] {
     self.0.get_mut()
   }
 }
 impl<const T: usize> From<[u8; T]> for Page<T> {
+  #[inline]
   fn from(bytes: [u8; T]) -> Self {
     Self(UnsafeCell::new(bytes))
   }
 }
 
 impl<const T: usize> From<Vec<u8>> for Page<T> {
+  #[inline]
   fn from(value: Vec<u8>) -> Self {
     let page = Self::new();
     let len = value.len().min(T);
@@ -64,6 +73,7 @@ impl<const T: usize> From<Vec<u8>> for Page<T> {
   }
 }
 impl<const T: usize> From<&[u8]> for Page<T> {
+  #[inline]
   fn from(value: &[u8]) -> Self {
     let page = Self::new();
     let len = value.len().min(T);
@@ -81,6 +91,7 @@ pub struct PageScanner<'a, const T: usize = PAGE_SIZE> {
   _marker: PhantomData<&'a Page<T>>,
 }
 impl<'a, const T: usize> PageScanner<'a, T> {
+  #[inline]
   fn new(inner: *const u8) -> Self {
     Self {
       inner,
@@ -89,6 +100,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     }
   }
 
+  #[inline]
   pub fn read(&mut self) -> Result<u8> {
     if self.offset >= T {
       return Err(Error::EOF);
@@ -98,6 +110,7 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     Ok(v)
   }
 
+  #[inline]
   pub fn read_n(&mut self, n: usize) -> Result<&[u8]> {
     let end = self.offset + n;
     if end > T {
@@ -108,33 +121,32 @@ impl<'a, const T: usize> PageScanner<'a, T> {
     Ok(b)
   }
 
+  #[inline]
+  fn read_const_n<const N: usize>(&mut self) -> Result<[u8; N]> {
+    if self.offset + N > T {
+      return Err(Error::EOF);
+    }
+    let v = unsafe { (self.inner.add(self.offset) as *const [u8; N]).read() };
+    self.offset += N;
+    Ok(v)
+  }
+
+  #[inline]
   pub fn read_usize(&mut self) -> Result<usize> {
-    if self.offset + 8 > T {
-      return Err(Error::EOF);
-    }
-    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 8]).read() };
-    self.offset += 8;
-    Ok(usize::from_le_bytes(v))
+    self.read_const_n::<8>().map(usize::from_le_bytes)
   }
 
+  #[inline]
   pub fn read_u16(&mut self) -> Result<u16> {
-    if self.offset + 2 > T {
-      return Err(Error::EOF);
-    }
-    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 2]).read() };
-    self.offset += 2;
-    Ok(u16::from_le_bytes(v))
+    self.read_const_n::<2>().map(u16::from_le_bytes)
   }
 
+  #[inline]
   pub fn read_u32(&mut self) -> Result<u32> {
-    if self.offset + 4 > T {
-      return Err(Error::EOF);
-    }
-    let v = unsafe { (self.inner.add(self.offset) as *const [u8; 4]).read() };
-    self.offset += 4;
-    Ok(u32::from_le_bytes(v))
+    self.read_const_n::<4>().map(u32::from_le_bytes)
   }
 
+  #[inline]
   pub fn is_eof(&self) -> bool {
     T <= self.offset
   }
