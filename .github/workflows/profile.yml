@@ -14,6 +14,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_BENCH_DEBUG: true
 
 jobs:
   flamegraph:
@@ -24,7 +25,7 @@ jobs:
     - name: Install perf and flamegraph
       run: |
         sudo apt-get update
-        sudo apt-get install -y linux-tools-common linux-tools-generic linux-tools-$(uname -r) || true
+        sudo apt-get install -y linux-tools-common linux-tools-generic linux-tools-$(uname -r) linux-tools-azure linux-cloud-tools-azure || true
         cargo install flamegraph
 
     - name: Allow perf for unprivileged users
