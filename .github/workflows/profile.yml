@@ -26,27 +26,23 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt install -y linux-tools-common linux-tools-generic linux-tools-`uname -r` || true
-        if [ ! -f /usr/lib/linux-tools/`uname -r`/perf ]; then
-          FROM_KERNEL=$(ls /usr/lib/linux-tools/ | head -1)
-          sudo mkdir -p /usr/lib/linux-tools/`uname -r`
-          sudo ln -s /usr/lib/linux-tools/$FROM_KERNEL/perf /usr/lib/linux-tools/`uname -r`/perf
-        fi
-        cargo install flamegraph
+        ls -l /usr/lib/linux-tools/
+        # cargo install flamegraph
 
-    - name: Allow perf for unprivileged users
-      run: echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid
+    # - name: Allow perf for unprivileged users
+    #   run: echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 
-    - name: Run flamegraph
-      run: |
-        FILTER="${{ github.event.inputs.filter }}"
-        if [ -n "$FILTER" ]; then
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- --bench "$FILTER"
-        else
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg
-        fi
+    # - name: Run flamegraph
+    #   run: |
+    #     FILTER="${{ github.event.inputs.filter }}"
+    #     if [ -n "$FILTER" ]; then
+    #       cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- --bench "$FILTER"
+    #     else
+    #       cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg
+    #     fi
 
-    - name: Upload flamegraph
-      uses: actions/upload-artifact@v4
-      with:
-        name: flamegraph
-        path: flamegraph.svg
+    # - name: Upload flamegraph
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: flamegraph
+    #     path: flamegraph.svg
