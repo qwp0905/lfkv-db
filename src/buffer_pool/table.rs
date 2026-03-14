@@ -4,81 +4,10 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use crossbeam::{atomic::AtomicCell, utils::Backoff};
+use crossbeam::utils::Backoff;
 
-use super::LRUShard;
+use super::{FrameState, LRUShard};
 use crate::utils::{ShortenedMutex, ToArc};
-
-#[derive(Clone, Copy)]
-enum Pin {
-  Fetched(usize),
-  Eviction,
-}
-impl PartialEq for Pin {
-  fn eq(&self, other: &Self) -> bool {
-    match (self, other) {
-      (Pin::Fetched(i), Pin::Fetched(j)) => i == j,
-      (Pin::Eviction, Pin::Eviction) => true,
-      _ => false,
-    }
-  }
-}
-impl Eq for Pin {}
-
-pub struct FrameState {
-  pin: AtomicCell<Pin>,
-  frame_id: usize,
-}
-impl FrameState {
-  fn try_evict(&self) -> bool {
-    self
-      .pin
-      .compare_exchange(Pin::Fetched(0), Pin::Eviction)
-      .is_ok()
-  }
-  fn try_pin(&self) -> bool {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        Pin::Eviction => return false,
-        Pin::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(Pin::Fetched(i), Pin::Fetched(i + 1))
-            .is_ok()
-          {
-            return true;
-          }
-
-          backoff.spin()
-        }
-      }
-    }
-  }
-
-  pub fn get_frame_id(&self) -> usize {
-    self.frame_id
-  }
-  pub fn unpin(&self) {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        Pin::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(Pin::Fetched(i), Pin::Fetched(i - 1))
-            .is_ok()
-          {
-            return;
-          }
-        }
-        _ => {}
-      }
-
-      backoff.spin()
-    }
-  }
-}
 
 struct Shard {
   lru: LRUShard<usize, Arc<FrameState>>,
@@ -116,7 +45,7 @@ impl<'a> EvictionGuard<'a> {
   }
 
   pub fn get_frame_id(&self) -> usize {
-    self.state.frame_id
+    self.state.get_frame_id()
   }
   pub fn get_state(&self) -> Arc<FrameState> {
     self.state.clone()
@@ -135,7 +64,7 @@ impl<'a> Drop for EvictionGuard<'a> {
         let mut shard = self.guard.l();
         shard.eviction.remove(&i);
       }
-      self.state.pin.store(Pin::Fetched(1));
+      self.state.completion_evict(1);
       return;
     }
 
@@ -148,7 +77,7 @@ impl<'a> Drop for EvictionGuard<'a> {
     shard
       .lru
       .remove(&self.new_index, self.new_index_hash, self.hasher);
-    self.state.pin.store(Pin::Fetched(0));
+    self.state.completion_evict(0);
   }
 }
 
@@ -213,11 +142,7 @@ impl LRUTable {
 
       if !shard.lru.is_full() {
         let frame_id = shard.lru.len() + offset;
-        let state = FrameState {
-          frame_id,
-          pin: AtomicCell::new(Pin::Eviction),
-        }
-        .to_arc();
+        let state = FrameState::new(frame_id).to_arc();
         shard.lru.insert(index, state.clone(), hash, hasher);
         return Err(EvictionGuard::new(None, state, &s, hasher, index, hash));
       }
