@@ -1,24 +1,36 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
 use super::*;
 
-fn guard_fn(_: usize) -> bool {
-  true
+fn miss(table: &LRUTable, index: usize) -> EvictionGuard<'_> {
+  match table.acquire(index) {
+    Err(guard) => guard,
+    Ok(_) => panic!("expected miss for index {}", index),
+  }
+}
+
+fn hit(table: &LRUTable, index: usize) -> Arc<FrameState> {
+  match table.acquire(index) {
+    Ok(state) => state,
+    Err(_) => panic!("expected hit for index {}", index),
+  }
 }
 
 #[test]
 fn test_cache_miss_then_hit() {
   let table = LRUTable::new(1, 4);
 
-  // first acquire: cache miss
-  let guard = table.acquire(42, guard_fn);
-  assert!(!guard.is_succeeded());
+  let mut guard = miss(&table, 42);
   let frame_id = guard.get_frame_id();
   assert!(guard.get_evicted_index().is_none());
+  guard.commit();
   drop(guard);
 
-  // second acquire: cache hit, same frame_id
-  let guard = table.acquire(42, guard_fn);
-  assert!(guard.is_succeeded());
-  assert_eq!(guard.get_frame_id(), frame_id);
+  let state = hit(&table, 42);
+  assert_eq!(state.get_frame_id(), frame_id);
+  state.unpin();
 }
 
 #[test]
@@ -28,14 +40,12 @@ fn test_multiple_misses_no_eviction() {
 
   let mut frame_ids = Vec::new();
   for i in 0..cap {
-    let guard = table.acquire(i, guard_fn);
-    assert!(!guard.is_succeeded());
+    let mut guard = miss(&table, i);
     assert!(guard.get_evicted_index().is_none());
     frame_ids.push(guard.get_frame_id());
-    drop(guard);
+    guard.commit();
   }
 
-  // all frame_ids should be unique
   frame_ids.sort();
   frame_ids.dedup();
   assert_eq!(frame_ids.len(), cap);
@@ -46,41 +56,41 @@ fn test_eviction_when_full() {
   let cap = 4;
   let table = LRUTable::new(1, cap);
 
-  // fill capacity
   for i in 0..cap {
-    let guard = table.acquire(i, guard_fn);
-    assert!(!guard.is_succeeded());
+    let mut guard = miss(&table, i);
     assert!(guard.get_evicted_index().is_none());
-    drop(guard);
+    guard.commit();
   }
 
-  // next acquire should trigger eviction
-  let guard = table.acquire(100, guard_fn);
-  assert!(!guard.is_succeeded());
+  // unpin all so eviction can happen
+  for i in 0..cap {
+    let state = hit(&table, i);
+    state.unpin(); // pin=1 from commit
+    state.unpin(); // pin=0
+  }
+
+  let mut guard = miss(&table, 100);
   let evicted = guard.get_evicted_index();
   assert!(evicted.is_some());
-  // evicted index should be one of the original entries
   assert!(evicted.unwrap() < cap);
+  guard.commit();
 }
 
 #[test]
 fn test_sharded_cache_hit() {
-  // large capacity to avoid eviction from uneven hash distribution
-  let table = LRUTable::new(4, 80); // 20 per shard
+  let table = LRUTable::new(4, 80);
 
   let mut entries = Vec::new();
   for i in 0..16 {
-    let guard = table.acquire(i, guard_fn);
-    assert!(!guard.is_succeeded());
+    let mut guard = miss(&table, i);
     entries.push((i, guard.get_frame_id()));
-    drop(guard);
+    guard.commit();
   }
 
-  // all should be cache hits with correct frame_ids
   for (index, expected_frame_id) in &entries {
-    let guard = table.acquire(*index, guard_fn);
-    assert!(guard.is_succeeded());
-    assert_eq!(guard.get_frame_id(), *expected_frame_id);
+    let state = hit(&table, *index);
+    assert_eq!(state.get_frame_id(), *expected_frame_id);
+    state.unpin();
   }
 }
 
@@ -90,19 +100,16 @@ fn test_sharded_frame_id_ranges() {
 
   let mut frame_ids = Vec::new();
   for i in 0..16 {
-    let guard = table.acquire(i, guard_fn);
-    assert!(!guard.is_succeeded());
+    let mut guard = miss(&table, i);
     frame_ids.push(guard.get_frame_id());
-    drop(guard);
+    guard.commit();
   }
 
-  // all frame_ids unique
   let mut sorted = frame_ids.clone();
   sorted.sort();
   sorted.dedup();
   assert_eq!(sorted.len(), frame_ids.len());
 
-  // all frame_ids within total capacity range [0, 80)
   for id in &frame_ids {
     assert!(*id < 80, "frame_id {} out of range", id);
   }
@@ -110,27 +117,32 @@ fn test_sharded_frame_id_ranges() {
 
 #[test]
 fn test_sharded_eviction() {
-  // small capacity so eviction happens
-  let table = LRUTable::new(4, 8); // 2 per shard
+  let table = LRUTable::new(4, 8);
 
-  // insert enough keys to guarantee at least one shard overflows
   let mut inserted = Vec::new();
   let mut eviction_happened = false;
   for i in 0..20 {
-    let guard = table.acquire(i, guard_fn);
-    if guard.is_succeeded() {
-      continue;
+    match table.acquire(i) {
+      Ok(state) => {
+        state.unpin();
+        continue;
+      }
+      Err(mut guard) => {
+        if guard.get_evicted_index().is_some() {
+          eviction_happened = true;
+        }
+        inserted.push((i, guard.get_frame_id()));
+        guard.commit();
+      }
     }
-    if guard.get_evicted_index().is_some() {
-      eviction_happened = true;
-    }
-    inserted.push((i, guard.get_frame_id()));
-    drop(guard);
+    // unpin so future evictions can proceed
+    let state = hit(&table, i);
+    state.unpin(); // from commit
+    state.unpin(); // from this acquire
   }
 
   assert!(eviction_happened, "expected at least one eviction");
 
-  // frame_ids should all be within [0, 8)
   for (_, frame_id) in &inserted {
     assert!(*frame_id < 8, "frame_id {} out of range", frame_id);
   }
@@ -141,20 +153,20 @@ fn test_eviction_reuses_frame_id() {
   let cap = 4;
   let table = LRUTable::new(1, cap);
 
-  // fill capacity
   for i in 0..cap {
-    let guard = table.acquire(i, guard_fn);
-    assert!(!guard.is_succeeded());
-    drop(guard);
+    miss(&table, i).commit();
   }
 
-  // evict and insert new
-  let guard = table.acquire(100, guard_fn);
-  assert!(!guard.is_succeeded());
-  let new_frame_id = guard.get_frame_id();
-  drop(guard);
+  for i in 0..cap {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
 
-  // frame_id should be within original range (reused)
+  let mut guard = miss(&table, 100);
+  let new_frame_id = guard.get_frame_id();
+  guard.commit();
+
   assert!(new_frame_id < cap);
 }
 
@@ -163,37 +175,149 @@ fn test_eviction_guard_drop_rollback() {
   let cap = 2;
   let table = LRUTable::new(1, cap);
 
-  // fill capacity
-  table.acquire(10, guard_fn);
-  table.acquire(20, guard_fn);
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
 
-  // evict but don't call take() — Drop should rollback
-  let guard = table.acquire(30, guard_fn);
-  assert!(!guard.is_succeeded());
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  // evict but don't commit — Drop should rollback
+  let guard = miss(&table, 30);
   let evicted = guard.get_evicted_index().unwrap();
-  drop(guard); // Drop inserts evicted back
+  drop(guard);
 
-  // evicted index should still be accessible
-  let guard = table.acquire(evicted, guard_fn);
-  assert!(guard.is_succeeded());
+  // evicted index should still be accessible (restored by rollback)
+  let state = hit(&table, evicted);
+  state.unpin();
 }
 
 #[test]
-fn test_eviction_guard_take_commits() {
+fn test_eviction_guard_commit_persists() {
   let cap = 2;
   let table = LRUTable::new(1, cap);
 
-  // fill capacity
-  table.acquire(10, guard_fn);
-  table.acquire(20, guard_fn);
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
 
-  // evict and call take() — commit the new mapping
-  let mut guard = table.acquire(30, guard_fn);
-  assert!(!guard.is_succeeded());
-  let _evicted = guard.take(); // commits: Drop will insert new_index
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  let mut guard = miss(&table, 30);
+  assert!(guard.get_evicted_index().is_some());
+  guard.commit();
   drop(guard);
 
-  // new index should be cached
-  let guard = table.acquire(30, guard_fn);
-  assert!(guard.is_succeeded());
+  let state = hit(&table, 30);
+  state.unpin();
+}
+
+#[test]
+fn test_pinned_entry_not_evicted() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
+
+  // keep index 10 pinned (pin=2 from commit+acquire), unpin 20
+  let _pinned = hit(&table, 10); // pin=2
+  let state20 = hit(&table, 20);
+  state20.unpin(); // pin=1
+  state20.unpin(); // pin=0
+
+  // eviction should evict 20 (pin=0), not 10 (pin=2)
+  let guard = miss(&table, 30);
+  assert_eq!(guard.get_evicted_index().unwrap(), 20);
+}
+
+#[test]
+fn test_concurrent_acquire_waits_for_eviction() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  // evict without commit — keeps pin=Eviction
+  let mut guard = miss(&table, 30);
+  let frame_id = guard.get_frame_id();
+
+  let done = AtomicBool::new(false);
+
+  thread::scope(|s| {
+    s.spawn(|| {
+      // acquire same index 30 — found in LRU but pin=Eviction, must wait
+      let state = hit(&table, 30);
+      done.store(true, Ordering::Release);
+      state.unpin();
+    });
+
+    // give the thread time to enter backoff loop
+    thread::sleep(Duration::from_millis(50));
+    assert!(!done.load(Ordering::Acquire), "thread should be waiting");
+
+    // commit + drop -> pin=Fetched(1) -> thread's try_pin succeeds
+    guard.commit();
+    drop(guard);
+  });
+
+  assert!(done.load(Ordering::Acquire), "thread should have completed");
+  assert_eq!(hit(&table, 30).get_frame_id(), frame_id);
+}
+
+#[test]
+fn test_concurrent_acquire_waits_for_evicted_index() {
+  let cap = 2;
+  let table = LRUTable::new(1, cap);
+
+  for i in [10, 20] {
+    miss(&table, i).commit();
+  }
+  for i in [10, 20] {
+    let state = hit(&table, i);
+    state.unpin();
+    state.unpin();
+  }
+
+  // evict without commit — index 10 is in eviction set
+  let guard = miss(&table, 30);
+  let evicted = guard.get_evicted_index().unwrap();
+
+  let done = AtomicBool::new(false);
+
+  thread::scope(|s| {
+    s.spawn(|| {
+      // acquire the evicted index — should block on eviction set check
+      let state = hit(&table, evicted);
+      done.store(true, Ordering::Release);
+      state.unpin();
+    });
+
+    // give the thread time to enter backoff loop
+    thread::sleep(Duration::from_millis(50));
+    assert!(!done.load(Ordering::Acquire), "thread should be waiting");
+
+    // drop without commit -> rollback restores evicted index
+    drop(guard);
+  });
+
+  assert!(done.load(Ordering::Acquire), "thread should have completed");
+  // evicted index should be accessible after rollback
+  let state = hit(&table, evicted);
+  state.unpin();
 }

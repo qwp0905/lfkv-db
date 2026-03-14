@@ -1,9 +1,6 @@
 use std::{
   path::PathBuf,
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, RwLock,
-  },
+  sync::{Arc, RwLock},
 };
 
 use super::{Frame, LRUTable, PageSlot};
@@ -23,7 +20,6 @@ pub struct BufferPoolConfig {
 pub struct BufferPool {
   table: LRUTable,
   frame: Vec<RwLock<Frame>>,
-  pins: Vec<AtomicUsize>,
   dirty: Bitmap,
   disk: Arc<DiskController<PAGE_SIZE>>,
   logger: LogFilter,
@@ -41,12 +37,8 @@ impl BufferPool {
     let mut frame = Vec::with_capacity(frame_cap);
     frame.resize_with(frame_cap, || RwLock::new(Frame::empty(page_pool.acquire())));
 
-    let mut pins = Vec::with_capacity(frame_cap);
-    pins.resize_with(frame_cap, Default::default);
-
     Ok(Self {
       frame,
-      pins,
       disk,
       table: LRUTable::new(config.shard_count, frame_cap),
       dirty: Bitmap::new(config.capacity),
@@ -54,51 +46,32 @@ impl BufferPool {
     })
   }
 
-  fn frame_available(&self, frame_id: usize) -> bool {
-    self.pins[frame_id]
-      .compare_exchange(0, 1, Ordering::Release, Ordering::Acquire)
-      .is_ok()
-  }
-
   pub fn read(&self, index: usize) -> Result<PageSlot<'_>> {
-    let mut guard = self.table.acquire(index, |id| self.frame_available(id));
-    if guard.is_succeeded() {
-      let id = guard.get_frame_id();
-      let pin = &self.pins[id];
-      pin.fetch_add(1, Ordering::Release);
-      return Ok(PageSlot::new(&self.frame[id], id, &self.dirty, pin));
-    }
+    let mut guard = match self.table.acquire(index) {
+      Ok(state) => {
+        let id = state.get_frame_id();
+        let slot = PageSlot::new(&self.frame[id], &self.dirty, state);
+        return Ok(slot);
+      }
+      Err(guard) => guard,
+    };
 
     let id = guard.get_frame_id();
     let frame = &self.frame[id];
-    let pin = &self.pins[id];
-    let slot = PageSlot::new(frame, id, &self.dirty, pin);
+    let slot = PageSlot::new(frame, &self.dirty, guard.get_state());
 
-    let evicted = match guard.get_evicted_index() {
-      Some(i) => i,
-      None => {
-        frame.wl().replace(index, self.disk.read(index)?);
-        pin.fetch_add(1, Ordering::Release);
-        return Ok(slot);
-      }
-    };
-
-    if let Err(err) = self
-      .disk
-      .read(index)
-      .map(|page| frame.wl().replace(index, page))
-      .and_then(|prev| {
-        guard.take();
-        if !self.dirty.remove(id) {
-          return Ok(());
-        }
-        self.disk.write(evicted, &prev)
-      })
     {
-      pin.fetch_sub(1, Ordering::Release);
-      return Err(err);
+      let mut page = frame.wl();
+      let old = page.replace(index, self.disk.read(index)?);
+
+      guard
+        .get_evicted_index()
+        .and_then(|i| self.dirty.remove(id).then(|| i))
+        .map(|evicted| self.disk.write(evicted, &old))
+        .unwrap_or(Ok(()))?;
     }
 
+    guard.commit();
     Ok(slot)
   }
 
@@ -106,11 +79,9 @@ impl BufferPool {
     self.logger.debug("buffer pool flush triggered.");
     let mut waits = Vec::new();
     for id in self.dirty.iter() {
-      self.pins[id].fetch_add(1, Ordering::Release);
       let frame = self.frame[id].rl();
       self.dirty.remove(id);
       waits.push(self.disk.write_async(frame.get_index(), frame.page_ref()));
-      self.pins[id].fetch_sub(1, Ordering::Release);
     }
 
     waits

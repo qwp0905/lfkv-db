@@ -1,69 +1,83 @@
 use std::{
+  collections::BTreeSet,
   hash::{BuildHasher, RandomState},
-  sync::{Mutex, MutexGuard},
+  sync::{Arc, Mutex},
 };
 
 use crossbeam::utils::Backoff;
 
-use super::LRUShard;
-use crate::utils::ShortenedMutex;
+use super::{FrameState, LRUShard};
+use crate::utils::{ShortenedMutex, ToArc};
 
-type Shard = LRUShard<usize, usize>;
+struct Shard {
+  lru: LRUShard<usize, Arc<FrameState>>,
+  eviction: BTreeSet<usize>, // evicting indexes
+}
 
 pub struct EvictionGuard<'a> {
-  frame_id: usize,
-  succeed: bool,
   evicted: Option<(usize, u64)>,
+  state: Arc<FrameState>,
+  guard: &'a Mutex<Shard>,
+  hasher: &'a RandomState,
   new_index: usize,
   new_index_hash: u64,
-  hasher: &'a RandomState,
-  guard: MutexGuard<'a, Shard>,
+  committed: bool,
 }
+
 impl<'a> EvictionGuard<'a> {
   fn new(
-    frame_id: usize,
+    evicted: Option<(usize, u64)>,
+    state: Arc<FrameState>,
+    guard: &'a Mutex<Shard>,
+    hasher: &'a RandomState,
     new_index: usize,
     new_index_hash: u64,
-    evicted: Option<(usize, u64)>,
-    hasher: &'a RandomState,
-    guard: MutexGuard<'a, Shard>,
-    succeed: bool,
   ) -> Self {
     Self {
-      frame_id,
+      evicted,
+      state,
+      guard,
+      hasher,
       new_index,
       new_index_hash,
-      evicted,
-      hasher,
-      guard,
-      succeed,
+      committed: false,
     }
   }
 
   pub fn get_frame_id(&self) -> usize {
-    self.frame_id
+    self.state.get_frame_id()
+  }
+  pub fn get_state(&self) -> Arc<FrameState> {
+    self.state.clone()
   }
   pub fn get_evicted_index(&self) -> Option<usize> {
     self.evicted.as_ref().map(|(i, _)| *i)
   }
-
-  pub fn take(&mut self) -> Option<usize> {
-    self.evicted.take().map(|(index, _)| index)
-  }
-  pub fn is_succeeded(&self) -> bool {
-    self.succeed
+  pub fn commit(&mut self) {
+    self.committed = true;
   }
 }
 impl<'a> Drop for EvictionGuard<'a> {
   fn drop(&mut self) {
-    if self.succeed {
+    if self.committed {
+      if let Some((i, _)) = self.evicted {
+        let mut shard = self.guard.l();
+        shard.eviction.remove(&i);
+      }
+      self.state.completion_evict(1);
       return;
     }
-    let (index, hash) = self
-      .evicted
-      .take()
-      .unwrap_or_else(|| (self.new_index, self.new_index_hash));
-    self.guard.insert(index, self.frame_id, hash, self.hasher);
+
+    // rollback
+    let mut shard = self.guard.l();
+    if let Some((i, h)) = self.evicted {
+      shard.eviction.remove(&i);
+      shard.lru.insert(i, self.state.clone(), h, self.hasher);
+    }
+    shard
+      .lru
+      .remove(&self.new_index, self.new_index_hash, self.hasher);
+    self.state.completion_evict(0);
   }
 }
 
@@ -78,7 +92,11 @@ impl LRUTable {
     let mut shards = Vec::with_capacity(shard_count);
     let mut offset = Vec::with_capacity(shard_count);
     for i in 0..shard_count {
-      shards.push(Mutex::new(LRUShard::new(cap_per_shard)));
+      let shard = Shard {
+        lru: LRUShard::new(cap_per_shard),
+        eviction: BTreeSet::new(),
+      };
+      shards.push(Mutex::new(shard));
       offset.push(i * cap_per_shard);
     }
 
@@ -96,41 +114,57 @@ impl LRUTable {
     (h, shard, offset)
   }
 
-  pub fn acquire<F>(&self, index: usize, guard_fn: F) -> EvictionGuard<'_>
-  where
-    F: Fn(usize) -> bool,
-  {
+  pub fn acquire<'a>(
+    &'a self,
+    index: usize,
+  ) -> std::result::Result<Arc<FrameState>, EvictionGuard<'a>> {
+    let (hash, s, offset) = self.get_shard(index);
+    let hasher = &self.hasher;
     let backoff = Backoff::new();
-    let (h, s, offset) = self.get_shard(index);
+
     loop {
       let mut shard = s.l();
-      if let Some(&id) = shard.get(&index, h, &self.hasher) {
-        return EvictionGuard::new(id, 0, 0, None, &self.hasher, shard, true);
+      if shard.eviction.contains(&index) {
+        drop(shard);
+        backoff.snooze();
+        continue;
       }
 
-      if !shard.is_full() {
-        let i = shard.len();
-        let id = i + offset;
-        return EvictionGuard::new(id, index, h, None, &self.hasher, shard, false);
-      };
+      if let Some(state) = shard.lru.get(&index, hash, hasher) {
+        if state.try_pin() {
+          return Ok(state.clone());
+        }
 
-      let ((evicted, id), evicted_hash) = shard.evict(&self.hasher).unwrap();
-      if guard_fn(id) {
-        return EvictionGuard::new(
-          id,
-          index,
-          h,
-          Some((evicted, evicted_hash)),
-          &self.hasher,
-          shard,
-          false,
-        );
+        drop(shard);
+        backoff.snooze();
+        continue;
       }
 
-      shard.insert(evicted, id, evicted_hash, &self.hasher);
-      drop(shard);
+      if !shard.lru.is_full() {
+        let frame_id = shard.lru.len() + offset;
+        let state = FrameState::new(frame_id).to_arc();
+        shard.lru.insert(index, state.clone(), hash, hasher);
+        return Err(EvictionGuard::new(None, state, &s, hasher, index, hash));
+      }
 
-      backoff.snooze();
+      let ((evicted, state), evicted_hash) = shard.lru.evict(&self.hasher).unwrap();
+      if !state.try_evict() {
+        shard.lru.insert(evicted, state, evicted_hash, hasher);
+        drop(shard);
+        backoff.snooze();
+        continue;
+      }
+
+      shard.eviction.insert(evicted);
+      shard.lru.insert(index, state.clone(), hash, hasher);
+      return Err(EvictionGuard::new(
+        Some((evicted, evicted_hash)),
+        state,
+        &s,
+        hasher,
+        index,
+        hash,
+      ));
     }
   }
 }

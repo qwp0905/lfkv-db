@@ -1,11 +1,9 @@
 use std::{
   mem::replace,
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    RwLock, RwLockReadGuard, RwLockWriteGuard,
-  },
+  sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use super::FrameState;
 use crate::{
   disk::{Page, PageRef, PAGE_SIZE},
   utils::{Bitmap, ShortenedRwLock},
@@ -41,22 +39,19 @@ impl Frame {
 
 pub struct PageSlot<'a> {
   frame: &'a RwLock<Frame>,
-  frame_id: usize,
   dirty: &'a Bitmap,
-  pin: &'a AtomicUsize,
+  state: Arc<FrameState>,
 }
 impl<'a> PageSlot<'a> {
   pub fn new(
     frame: &'a RwLock<Frame>,
-    frame_id: usize,
     dirty: &'a Bitmap,
-    pin: &'a AtomicUsize,
+    state: Arc<FrameState>,
   ) -> Self {
     Self {
       frame,
-      frame_id,
       dirty,
-      pin,
+      state,
     }
   }
 
@@ -66,7 +61,7 @@ impl<'a> PageSlot<'a> {
   {
     PageSlotRead {
       guard: self.frame.rl(),
-      pin: self.pin,
+      state: self.state,
     }
   }
   pub fn for_write<'b>(self) -> PageSlotWrite<'b>
@@ -76,16 +71,14 @@ impl<'a> PageSlot<'a> {
     PageSlotWrite {
       guard: self.frame.wl(),
       dirty: self.dirty,
-      frame_id: self.frame_id,
-      pin: self.pin,
+      state: self.state,
     }
   }
 }
 pub struct PageSlotWrite<'a> {
   guard: RwLockWriteGuard<'a, Frame>,
   dirty: &'a Bitmap,
-  frame_id: usize,
-  pin: &'a AtomicUsize,
+  state: Arc<FrameState>,
 }
 impl<'a> PageSlotWrite<'a> {
   pub fn get_index(&self) -> usize {
@@ -104,13 +97,13 @@ impl<'a> AsRef<Page<PAGE_SIZE>> for PageSlotWrite<'a> {
 }
 impl<'a> Drop for PageSlotWrite<'a> {
   fn drop(&mut self) {
-    self.dirty.insert(self.frame_id);
-    self.pin.fetch_sub(1, Ordering::Release);
+    self.dirty.insert(self.state.get_frame_id());
+    self.state.unpin();
   }
 }
 pub struct PageSlotRead<'a> {
   guard: RwLockReadGuard<'a, Frame>,
-  pin: &'a AtomicUsize,
+  state: Arc<FrameState>,
 }
 impl<'a> AsRef<Page<PAGE_SIZE>> for PageSlotRead<'a> {
   fn as_ref(&self) -> &Page<PAGE_SIZE> {
@@ -119,6 +112,6 @@ impl<'a> AsRef<Page<PAGE_SIZE>> for PageSlotRead<'a> {
 }
 impl<'a> Drop for PageSlotRead<'a> {
   fn drop(&mut self) {
-    self.pin.fetch_sub(1, Ordering::Release);
+    self.state.unpin();
   }
 }

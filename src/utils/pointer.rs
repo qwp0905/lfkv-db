@@ -51,6 +51,12 @@ impl<'a, T: 'a> UnsafeBorrowMut<'a, T> for NonNull<T> {
     unsafe { self.as_mut() }
   }
 }
+impl<'a, T: 'a> UnsafeBorrowMut<'a, T> for *mut T {
+  #[inline(always)]
+  fn borrow_mut_unsafe(self) -> &'a mut T {
+    unsafe { &mut *self }
+  }
+}
 
 pub trait UnsafeTake<T> {
   fn take_unsafe(self) -> T;
