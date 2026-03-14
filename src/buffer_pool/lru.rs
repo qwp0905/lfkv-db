@@ -174,27 +174,28 @@ where
     None
   }
 
-  // pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>
-  // where
-  //   K: Borrow<Q>,
-  //   Q: Hash + Eq,
-  //   S: BuildHasher,
-  // {
-  //   if let Some(mut bucket) = self.new_entries.remove_entry(hash, equivalent(key)) {
-  //     self.new_sub_list.remove(&mut bucket);
-  //     let taken = unsafe { Box::from_raw(bucket.as_ptr()) };
-  //     return Some(taken.take_value());
-  //   }
+  pub fn remove<Q, S>(&mut self, key: &Q, hash: u64, hasher: &S) -> Option<V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+    S: BuildHasher,
+  {
+    if let Some(mut bucket) = self.new_entries.remove_entry(hash, equivalent(key)) {
+      self.new_sub_list.remove(&mut bucket);
+      let (_, value) = bucket.take_unsafe().take();
+      return Some(value);
+    }
 
-  //   let mut bucket = match self.old_entries.remove_entry(hash, equivalent(key)) {
-  //     Some(bucket) => bucket,
-  //     None => return None,
-  //   };
-  //   self.old_sub_list.remove(&mut bucket);
-  //   self.rebalance(hasher);
-  //   let bucket = unsafe { Box::from_raw(bucket.as_ptr()) };
-  //   Some(bucket.take_value())
-  // }
+    let mut bucket = match self.old_entries.remove_entry(hash, equivalent(key)) {
+      Some(bucket) => bucket,
+      None => return None,
+    };
+
+    self.old_sub_list.remove(&mut bucket);
+    self.rebalance(hasher);
+    let (_, value) = bucket.take_unsafe().take();
+    Some(value)
+  }
 
   // pub fn has<Q: ?Sized>(&self, key: &Q, hash: u64) -> bool
   // where
@@ -215,6 +216,17 @@ where
 }
 unsafe impl<K, V> Sync for LRUShard<K, V> {}
 unsafe impl<K, V> Send for LRUShard<K, V> {}
+
+impl<K, V> Drop for LRUShard<K, V> {
+  fn drop(&mut self) {
+    while let Some(ptr) = self.old_sub_list.pop_tail() {
+      let _ = ptr.take_unsafe().take();
+    }
+    while let Some(ptr) = self.new_sub_list.pop_tail() {
+      let _ = ptr.take_unsafe().take();
+    }
+  }
+}
 
 #[cfg(test)]
 #[path = "tests/lru.rs"]
