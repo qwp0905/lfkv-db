@@ -25,7 +25,12 @@ jobs:
     - name: Install perf and flamegraph
       run: |
         sudo apt-get update
-        sudo apt-get install -y linux-tools-common linux-tools-generic linux-tools-$(uname -r) linux-tools-azure linux-cloud-tools-azure || true
+        sudo apt install -y linux-tools-common linux-tools-generic linux-tools-`uname -r` || true
+        if [ ! -f /usr/lib/linux-tools/`uname -r`/perf ]; then
+          FROM_KERNEL=$(ls /usr/lib/linux-tools/ | head -1)
+          sudo mkdir -p /usr/lib/linux-tools/`uname -r`
+          sudo ln -s /usr/lib/linux-tools/$FROM_KERNEL/perf /usr/lib/linux-tools/`uname -r`/perf
+        fi
         cargo install flamegraph
 
     - name: Allow perf for unprivileged users
