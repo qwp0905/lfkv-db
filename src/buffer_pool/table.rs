@@ -205,6 +205,10 @@ impl LRUTable {
         if state.try_pin() {
           return Ok(state.clone());
         }
+
+        drop(shard);
+        backoff.snooze();
+        continue;
       }
 
       if !shard.lru.is_full() {
