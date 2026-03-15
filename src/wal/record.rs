@@ -1,17 +1,14 @@
 use std::{ptr::copy_nonoverlapping, slice::from_raw_parts};
 
-use crate::{
-  disk::{Page, PAGE_SIZE},
-  Error,
-};
+use crate::{disk::Page, Error};
 
 pub const WAL_BLOCK_SIZE: usize = 16 << 10; // 16kb
 
 #[derive(Debug)]
 pub enum Operation {
   Insert(
-    usize, // index of the page
-    Page,  // data
+    usize,   // index of the page
+    Vec<u8>, // data
   ),
   Start,
   Commit,
@@ -32,12 +29,11 @@ impl Operation {
     }
   }
 
-  const INSERT_LEN: u16 = 1 + 8 + (PAGE_SIZE as u16);
   const CHECKPOINT_LEN: u16 = 1 + 8 + 8;
   const OTHER_LEN: u16 = 1;
   fn byte_len(&self) -> u16 {
     match self {
-      Operation::Insert(_, _) => Self::INSERT_LEN,
+      Operation::Insert(_, data) => 1 + 8 + data.len() as u16,
       Operation::Checkpoint(_, _) => Self::CHECKPOINT_LEN,
       _ => Self::OTHER_LEN,
     }
@@ -59,7 +55,12 @@ impl LogRecord {
       log_id,
     }
   }
-  pub fn new_insert(log_id: usize, tx_id: usize, page_index: usize, data: Page) -> Self {
+  pub fn new_insert(
+    log_id: usize,
+    tx_id: usize,
+    page_index: usize,
+    data: Vec<u8>,
+  ) -> Self {
     LogRecord::new(log_id, tx_id, Operation::Insert(page_index, data))
   }
 
@@ -90,11 +91,12 @@ impl LogRecord {
     *ptr.add(offset) = self.operation.type_byte();
     offset += 1;
     match &self.operation {
-      Operation::Insert(index, page) => {
+      Operation::Insert(index, data) => {
         copy_nonoverlapping(index.to_le_bytes().as_ptr(), ptr.add(offset), 8);
         offset += 8;
-        copy_nonoverlapping(page.as_ptr(), ptr.add(offset), PAGE_SIZE);
-        offset += PAGE_SIZE;
+        let data_len = data.len();
+        copy_nonoverlapping(data.as_ptr(), ptr.add(offset), data_len);
+        offset += data_len;
       }
       Operation::Checkpoint(log_id, min_active) => {
         copy_nonoverlapping(log_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
@@ -154,15 +156,12 @@ impl TryFrom<&[u8]> for LogRecord {
     let tx_id = usize::from_le_bytes(unsafe { (ptr.add(12) as *const [u8; 8]).read() });
     let operation = match unsafe { *ptr.add(20) } {
       1 => {
-        if len != PAGE_SIZE + 29 {
-          return Err(Error::InvalidFormat("invalid len for insert log."));
-        }
         let index =
           usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
 
-        let data = [0; PAGE_SIZE];
-        unsafe { copy_nonoverlapping(ptr.add(29), data.as_ptr() as *mut u8, PAGE_SIZE) };
-        Operation::Insert(index, Page::from(data))
+        let mut data = vec![0; len - 29];
+        unsafe { copy_nonoverlapping(ptr.add(29), data.as_mut_ptr(), len - 29) };
+        Operation::Insert(index, data)
       }
       2 => {
         if len != 21 {
