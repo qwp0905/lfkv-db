@@ -15,8 +15,8 @@ use tempfile::TempDir;
 
 const KEY_SIZE: usize = 16;
 const VALUE_SIZE: usize = 256;
-const RECORD_COUNT: usize = 1_000_000;
-const OP_COUNT: usize = 100_000;
+const RECORD_COUNT: usize = 500_000;
+const OP_COUNT: usize = 50_000;
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
 const ZIPF_EXPONENT: f64 = 0.99;
