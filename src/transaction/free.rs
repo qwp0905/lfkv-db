@@ -3,13 +3,13 @@ use std::{
   sync::{Arc, Mutex},
 };
 
+use super::PageRecorder;
 use crate::{
   buffer_pool::{BufferPool, PageSlotWrite},
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   error::Result,
-  serialize::{Serializable, SerializeFrom, SerializeType},
+  serialize::{Serializable, SerializeType},
   utils::ShortenedMutex,
-  wal::WAL,
 };
 
 const MAX_COUNT: usize = PAGE_SIZE / 8 - 4;
@@ -72,12 +72,13 @@ struct FreeState {
 pub struct FreeList {
   state: Mutex<FreeState>,
   buffer_pool: Arc<BufferPool>,
-  wal: Arc<WAL>,
+  // wal: Arc<WAL>,
+  recorder: Arc<PageRecorder>,
 }
 impl FreeList {
   pub fn replay(
     buffer_pool: Arc<BufferPool>,
-    wal: Arc<WAL>,
+    recorder: Arc<PageRecorder>,
     file_end: usize,
   ) -> Result<Self> {
     if file_end == 0 {
@@ -88,13 +89,12 @@ impl FreeList {
       };
       {
         let mut slot = buffer_pool.read(FREE_LIST_HEAD)?.for_write();
-        slot.as_mut().serialize_from(&state.block)?;
-        wal.append_insert(0, FREE_LIST_HEAD, slot.as_ref())?;
+        recorder.serialize_and_log(0, &mut slot, &state.block)?;
       }
       return Ok(Self {
         state: Mutex::new(state),
         buffer_pool,
-        wal,
+        recorder,
       });
     }
 
@@ -118,7 +118,7 @@ impl FreeList {
     Ok(Self {
       state: Mutex::new(state),
       buffer_pool,
-      wal,
+      recorder,
     })
   }
 
@@ -144,8 +144,9 @@ impl FreeList {
     let mut state = self.state.l();
     if let Some(index) = state.block.list.pop() {
       let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
-      free_slot.as_mut().serialize_from(&state.block)?;
-      self.wal.append_insert(0, state.index, free_slot.as_ref())?;
+      self
+        .recorder
+        .serialize_and_log(0, &mut free_slot, &state.block)?;
       return Ok(self.buffer_pool.read(index)?.for_write());
     }
 
@@ -158,8 +159,9 @@ impl FreeList {
       state.block = prev_block;
       state.index = prev;
 
-      prev_slot.as_mut().serialize_from(&state.block)?;
-      self.wal.append_insert(0, state.index, prev_slot.as_ref())?;
+      self
+        .recorder
+        .serialize_and_log(0, &mut prev_slot, &state.block)?;
 
       return Ok(self.buffer_pool.read(empty_index)?.for_write());
     }
@@ -173,21 +175,24 @@ impl FreeList {
     let mut state = self.state.l();
     if !state.block.is_available() {
       state.block.list.push(index);
+
       let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
-      free_slot.as_mut().serialize_from(&state.block)?;
-      self.wal.append_insert(0, state.index, free_slot.as_ref())?;
-      return Ok(());
+      return self
+        .recorder
+        .serialize_and_log(0, &mut free_slot, &state.block);
     }
 
     let mut new_slot = self.buffer_pool.read(index)?.for_write();
     let new_free = FreeBlock::new(Some(state.index));
-    new_slot.as_mut().serialize_from(&new_free)?;
-    self.wal.append_insert(0, index, new_slot.as_ref())?;
+    self
+      .recorder
+      .serialize_and_log(0, &mut new_slot, &new_free)?;
 
     state.block.next = Some(index);
     let mut free_slot = self.buffer_pool.read(state.index)?.for_write();
-    free_slot.as_mut().serialize_from(&state.block)?;
-    self.wal.append_insert(0, state.index, free_slot.as_ref())?;
+    self
+      .recorder
+      .serialize_and_log(0, &mut free_slot, &state.block)?;
 
     state.block = new_free;
     state.index = index;

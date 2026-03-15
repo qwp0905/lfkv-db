@@ -6,3 +6,6 @@ pub use free::*;
 
 mod version;
 pub use version::*;
+
+mod recorder;
+pub use recorder::*;
