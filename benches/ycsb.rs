@@ -16,11 +16,11 @@ use tempfile::TempDir;
 const KEY_SIZE: usize = 16;
 const VALUE_SIZE: usize = 256;
 const RECORD_COUNT: usize = 500_000;
-const OP_COUNT: usize = 50_000;
+const OP_COUNT: usize = 150_000;
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
 const ZIPF_EXPONENT: f64 = 0.99;
-const DEFAULT_SAMPLE_SIZE: usize = 30;
+const DEFAULT_SAMPLE_SIZE: usize = 10;
 
 fn make_key(i: usize) -> Vec<u8> {
   format!("{i:0>width$}", width = KEY_SIZE)
