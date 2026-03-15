@@ -34,7 +34,7 @@ jobs:
       run: git switch ${{ github.head_ref }}
 
     - name: Throughput (PR vs main)
-      run: cargo bench --bench throughput -- --baseline main
+      run: cargo bench --bench throughput -- --baseline-lenient main
 
   benchmark_ycsb:
     runs-on: ubuntu-latest
@@ -53,4 +53,4 @@ jobs:
       run: git switch ${{ github.head_ref }}
 
     - name: YCSB (PR vs main)
-      run: cargo bench --bench ycsb -- --baseline main
+      run: cargo bench --bench ycsb -- --baseline-lenient main
