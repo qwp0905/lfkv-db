@@ -54,6 +54,7 @@ enum Op {
   Get(Vec<u8>),
   Insert(Vec<u8>, Vec<u8>),
   Scan(Vec<u8>, Vec<u8>),
+  ReadModifyWrite(Vec<u8>, Vec<u8>),
 }
 
 fn spawn_workers(
@@ -83,6 +84,14 @@ fn spawn_workers(
                 let mut iter = tx.scan(start, end).expect("scan error");
                 while let Ok(Some(_)) = iter.try_next() {}
                 false
+              }
+              Op::ReadModifyWrite(k, v) => {
+                tx.get(k).expect("rmw read error");
+                match tx.insert(k.clone(), v.clone()) {
+                  Ok(_) => false,
+                  Err(lfkv_db::Error::WriteConflict) => true,
+                  Err(e) => panic!("rmw write error: {e}"),
+                }
               }
             };
             if conflict {
@@ -182,6 +191,46 @@ fn bench_ycsb_b(c: &mut Criterion) {
   threads.into_iter().for_each(|t| t.join().unwrap());
 }
 
+/// Workload D: 95% read, 5% insert (read latest, timeline/feed)
+fn bench_ycsb_d(c: &mut Criterion) {
+  let dir = TempDir::new_in(".").expect("dir failed.");
+  pre_load(dir.path(), RECORD_COUNT);
+
+  let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
+  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let insert_counter = std::sync::atomic::AtomicUsize::new(RECORD_COUNT);
+
+  let mut group = c.benchmark_group("ycsb-d");
+  group
+    .sample_size(DEFAULT_SAMPLE_SIZE)
+    .measurement_time(Duration::from_secs(20))
+    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .bench_function("95read-5insert-latest", |b| {
+      b.iter(|| {
+        let mut rng = rand::thread_rng();
+        let mut waiting = Vec::with_capacity(OP_COUNT);
+        let latest = insert_counter.load(std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..OP_COUNT {
+          let op = if rng.gen_bool(0.95) {
+            let idx = latest.saturating_sub(rng.gen_range(0..latest.min(1000)));
+            Op::Get(make_key(idx))
+          } else {
+            let idx = insert_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Op::Insert(make_key(idx), make_value(idx))
+          };
+          let (t, r) = unbounded();
+          tx.send((op, t)).unwrap();
+          waiting.push(r);
+        }
+        waiting.into_iter().for_each(|r| r.recv().unwrap());
+      });
+    });
+  group.finish();
+
+  drop(tx);
+  threads.into_iter().for_each(|t| t.join().unwrap());
+}
+
 /// Workload E: 95% scan, 5% insert (range query heavy, analytics)
 fn bench_ycsb_e(c: &mut Criterion) {
   let dir = TempDir::new_in(".").expect("dir failed.");
@@ -224,5 +273,44 @@ fn bench_ycsb_e(c: &mut Criterion) {
   threads.into_iter().for_each(|t| t.join().unwrap());
 }
 
-criterion_group!(ycsb, bench_ycsb_a, bench_ycsb_b, bench_ycsb_e);
+/// Workload F: 50% read, 50% read-modify-write (transactional, account balance)
+fn bench_ycsb_f(c: &mut Criterion) {
+  let dir = TempDir::new_in(".").expect("dir failed.");
+  pre_load(dir.path(), RECORD_COUNT);
+
+  let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
+  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+
+  let mut group = c.benchmark_group("ycsb-f");
+  group
+    .sample_size(DEFAULT_SAMPLE_SIZE)
+    .measurement_time(Duration::from_secs(20))
+    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .bench_function("50read-50rmw", |b| {
+      b.iter(|| {
+        let mut rng = rand::thread_rng();
+        let mut waiting = Vec::with_capacity(OP_COUNT);
+        for _ in 0..OP_COUNT {
+          let idx = zipfian_index(&mut rng, &zipf);
+          let key = make_key(idx);
+          let op = if rng.gen_bool(0.50) {
+            Op::Get(key)
+          } else {
+            Op::ReadModifyWrite(key, make_value(idx))
+          };
+          let (t, r) = unbounded();
+          tx.send((op, t)).unwrap();
+          waiting.push(r);
+        }
+        waiting.into_iter().for_each(|r| r.recv().unwrap());
+      });
+    });
+  group.finish();
+
+  drop(tx);
+  threads.into_iter().for_each(|t| t.join().unwrap());
+}
+
+criterion_group!(ycsb, bench_ycsb_a, bench_ycsb_b, bench_ycsb_d, bench_ycsb_e, bench_ycsb_f);
 criterion_main!(ycsb);
