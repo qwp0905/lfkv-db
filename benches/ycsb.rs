@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 const KEY_SIZE: usize = 16;
 const VALUE_SIZE: usize = 256;
-const RECORD_COUNT: usize = 100_000;
-const OP_COUNT: usize = 10_000;
+const RECORD_COUNT: usize = 1_000_000;
+const OP_COUNT: usize = 100_000;
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
 const ZIPF_EXPONENT: f64 = 0.99;
@@ -312,5 +312,12 @@ fn bench_ycsb_f(c: &mut Criterion) {
   threads.into_iter().for_each(|t| t.join().unwrap());
 }
 
-criterion_group!(ycsb, bench_ycsb_a, bench_ycsb_b, bench_ycsb_d, bench_ycsb_e, bench_ycsb_f);
+criterion_group!(
+  ycsb,
+  bench_ycsb_a,
+  bench_ycsb_b,
+  bench_ycsb_d,
+  bench_ycsb_e,
+  bench_ycsb_f
+);
 criterion_main!(ycsb);
