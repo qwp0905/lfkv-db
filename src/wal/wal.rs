@@ -14,7 +14,7 @@ use crossbeam::{
 };
 
 use crate::{
-  disk::{Page, PagePool, PAGE_SIZE},
+  disk::PagePool,
   error::Result,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
   utils::{LogFilter, ToArc, UnsafeBorrow},
@@ -181,7 +181,7 @@ impl WAL {
    */
   fn append<F>(&self, create_record: F, flush: bool) -> Result
   where
-    F: Fn(usize) -> LogRecord,
+    F: FnOnce(usize) -> LogRecord,
   {
     let log_id = self.last_log_id.fetch_add(1, Ordering::Release);
     let record = create_record(log_id).to_bytes_with_len();
@@ -292,25 +292,21 @@ impl WAL {
     self.last_log_id.load(Ordering::Acquire)
   }
 
-  pub fn append_insert(
-    &self,
-    tx_id: usize,
-    index: usize,
-    page: &Page<PAGE_SIZE>,
-  ) -> Result {
+  pub fn append_insert(&self, tx_id: usize, index: usize, data: Vec<u8>) -> Result {
     self.append(
-      move |log_id| LogRecord::new_insert(log_id, tx_id, index, page.copy()),
+      |log_id| LogRecord::new_insert(log_id, tx_id, index, data),
       false,
     )
   }
+
   pub fn checkpoint_and_flush(&self, last_log_id: usize, min_active: usize) -> Result {
     self.append(
-      move |log_id| LogRecord::new_checkpoint(log_id, last_log_id, min_active),
+      |log_id| LogRecord::new_checkpoint(log_id, last_log_id, min_active),
       true,
     )
   }
   pub fn append_start(&self, tx_id: usize) -> Result {
-    self.append(move |log_id| LogRecord::new_start(log_id, tx_id), false)
+    self.append(|log_id| LogRecord::new_start(log_id, tx_id), false)
   }
   pub fn commit_and_flush(&self, tx_id: usize) -> Result {
     self.append(|log_id| LogRecord::new_commit(log_id, tx_id), true)
