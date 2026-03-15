@@ -31,17 +31,17 @@ fn test_abort_roundtrip() {
 
 #[test]
 fn test_insert_roundtrip() {
-  let mut page = Page::new();
-  page.as_mut()[0] = 0xAB;
-  page.as_mut()[PAGE_SIZE - 1] = 0xCD;
+  let mut page = vec![0; 100];
+  page[0] = 0xAB;
+  page[99] = 0xCD;
 
   let r = LogRecord::new_insert(4, 42, 99, page);
   let parsed = assert_roundtrip(&r);
   match parsed.operation {
     Operation::Insert(index, data) => {
       assert_eq!(index, 99);
-      assert_eq!(data.as_ref()[0], 0xAB);
-      assert_eq!(data.as_ref()[PAGE_SIZE - 1], 0xCD);
+      assert_eq!(data[0], 0xAB);
+      assert_eq!(data[99], 0xCD);
     }
     _ => panic!("expected Insert"),
   }
@@ -67,7 +67,7 @@ fn test_entry_roundtrip() {
 
   let _ = writer.write(&(3 as u16).to_le_bytes());
   let r1 = LogRecord::new_start(1, 1);
-  let r2 = LogRecord::new_insert(2, 1, 10, Page::new());
+  let r2 = LogRecord::new_insert(2, 1, 10, vec![]);
   let r3 = LogRecord::new_commit(3, 1);
   let _ = writer.write(&r1.to_bytes_with_len());
   let _ = writer.write(&r2.to_bytes_with_len());

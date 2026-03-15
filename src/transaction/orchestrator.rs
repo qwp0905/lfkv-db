@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use super::VersionVisibility;
+use super::{FreeList, PageRecorder, VersionVisibility};
 
 use crate::{
   buffer_pool::{BufferPool, BufferPoolConfig, PageSlot, PageSlotWrite},
   cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
+  serialize::Serializable,
   thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  transaction::FreeList,
   utils::{LogFilter, ToArc},
   wal::{WALConfig, WAL},
 };
@@ -19,6 +19,7 @@ pub struct TxOrchestrator {
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
+  recorder: Arc<PageRecorder>,
   logger: LogFilter,
 }
 impl TxOrchestrator {
@@ -34,19 +35,20 @@ impl TxOrchestrator {
 
     let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy(), logger.clone())?;
     let wal = wal.to_arc();
-    for (_, i, page) in replay.redo {
+    let recorder = PageRecorder::new(wal.clone()).to_arc();
+    for (_, i, data) in replay.redo {
       buffer_pool
         .read(i)?
         .for_write()
         .as_mut()
         .writer()
-        .write(page.as_ref())?;
+        .write(data.as_ref())?;
     }
 
     buffer_pool.flush()?;
     let disk_len = buffer_pool.disk_len()?;
     let free_list =
-      FreeList::replay(buffer_pool.clone(), wal.clone(), disk_len)?.to_arc();
+      FreeList::replay(buffer_pool.clone(), recorder.clone(), disk_len)?.to_arc();
 
     let version_visibility =
       VersionVisibility::new(replay.aborted, replay.last_tx_id).to_arc();
@@ -55,7 +57,7 @@ impl TxOrchestrator {
       buffer_pool.clone(),
       version_visibility.clone(),
       free_list.clone(),
-      wal.clone(),
+      recorder.clone(),
       gc_config,
     )
     .to_arc();
@@ -68,10 +70,7 @@ impl TxOrchestrator {
       gc.run()?;
       buffer_pool.flush()?;
       wal.checkpoint_and_flush(log_id, version_visibility.min_version())?;
-
-      for seg in replay.segments {
-        wal.reuse(seg);
-      }
+      replay.segments.into_iter().for_each(|seg| wal.reuse(seg));
     }
 
     let checkpoint = WorkBuilder::new()
@@ -98,6 +97,7 @@ impl TxOrchestrator {
         buffer_pool,
         version_visibility,
         gc,
+        recorder,
         logger,
       },
       replay.is_new,
@@ -107,10 +107,16 @@ impl TxOrchestrator {
     self.buffer_pool.read(index)
   }
 
-  pub fn log(&self, tx_id: usize, page: &PageSlotWrite<'_>) -> Result {
-    let index = page.get_index();
-    self.wal.append_insert(tx_id, index, page.as_ref())?;
-    Ok(())
+  pub fn serialize_and_log<T>(
+    &self,
+    tx_id: usize,
+    slot: &mut PageSlotWrite<'_>,
+    data: &T,
+  ) -> Result
+  where
+    T: Serializable,
+  {
+    self.recorder.serialize_and_log(tx_id, slot, data)
   }
 
   pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {

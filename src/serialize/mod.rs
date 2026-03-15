@@ -25,11 +25,11 @@ pub const SERIALIZABLE_BYTES: usize = PAGE_SIZE - 1;
 
 pub trait Serializable: Sized {
   fn get_type() -> SerializeType;
-  fn serialize_at(&self, page: &mut Page<PAGE_SIZE>) -> Result {
+  fn serialize_at(&self, page: &mut Page<PAGE_SIZE>) -> Result<usize> {
     let mut writer = page.writer();
     writer.write(&[u8::from(Self::get_type())])?;
     self.write_at(&mut writer)?;
-    Ok(())
+    Ok(writer.finalize())
   }
   fn write_at(&self, writer: &mut PageWriter) -> Result;
   fn read_from(reader: &mut PageScanner) -> Result<Self>;
@@ -52,10 +52,10 @@ impl Page<PAGE_SIZE> {
 }
 
 pub trait SerializeFrom<T: Serializable> {
-  fn serialize_from(&mut self, target: &T) -> Result;
+  fn serialize_from(&mut self, target: &T) -> Result<usize>;
 }
 impl<T: Serializable> SerializeFrom<T> for Page<PAGE_SIZE> {
-  fn serialize_from(&mut self, target: &T) -> Result {
+  fn serialize_from(&mut self, target: &T) -> Result<usize> {
     target.serialize_at(self)
   }
 }

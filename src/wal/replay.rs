@@ -6,7 +6,7 @@ use std::{
 
 use super::{Operation, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
-  disk::{Page, PagePool},
+  disk::PagePool,
   error::{Error, Result},
 };
 
@@ -14,7 +14,7 @@ pub struct ReplayResult {
   pub last_log_id: usize,
   pub last_tx_id: usize,
   pub aborted: BTreeSet<usize>,
-  pub redo: Vec<(usize, usize, Page)>,
+  pub redo: Vec<(usize, usize, Vec<u8>)>,
   pub segments: Vec<WALSegment>,
   pub generation: usize,
   pub is_new: bool,
@@ -60,7 +60,7 @@ pub fn replay(
 
   let mut tx_id = 0;
   let mut log_id = 0;
-  let mut redo = BTreeMap::<usize, (usize, Page)>::new();
+  let mut redo = BTreeMap::<usize, (usize, Vec<u8>)>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
   let mut started = BTreeSet::<usize>::new();
   let mut closed = HashSet::<usize>::new();
@@ -126,10 +126,10 @@ pub fn replay(
 
     segments.push(wal);
   }
-  let mut redo: Vec<(usize, usize, Page)> = redo
+  let mut redo = redo
     .into_iter()
     .map(|(id, (index, data))| (id, index, data))
-    .collect();
+    .collect::<Vec<_>>();
   redo.sort_by_key(|(id, _, _)| *id);
 
   Ok(ReplayResult {

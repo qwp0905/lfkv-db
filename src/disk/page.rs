@@ -23,16 +23,16 @@ impl<const T: usize> Page<T> {
     self.0.get() as *const u8
   }
   #[inline]
-  pub fn copy(&self) -> Self {
-    let p = Self::new();
-    unsafe { copy_nonoverlapping(self.as_ptr(), p.as_ptr() as *mut u8, T) };
-    p
-  }
-  #[inline]
   pub fn copy_from<V: AsRef<[u8]>>(&mut self, data: V) {
     let data = data.as_ref();
     let len = data.len().min(T);
     unsafe { copy_nonoverlapping(data.as_ptr(), self.as_ptr() as *mut u8, len) };
+  }
+  #[inline]
+  pub fn copy_n(&mut self, byte_len: usize) -> Vec<u8> {
+    let mut data = vec![0; byte_len];
+    unsafe { copy_nonoverlapping(self.as_ptr(), data.as_mut_ptr(), byte_len) };
+    data
   }
   #[inline]
   pub fn scanner(&self) -> PageScanner<'_, T> {
@@ -182,6 +182,10 @@ impl<'a, const T: usize> PageWriter<'a, T> {
   }
   pub fn write_u32(&mut self, value: u32) -> Result {
     self.write(&value.to_le_bytes())
+  }
+
+  pub fn finalize(self) -> usize {
+    self.offset
   }
 
   pub fn is_eof(&self) -> bool {

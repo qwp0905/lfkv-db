@@ -13,11 +13,9 @@ use super::{
 use crate::{
   buffer_pool::BufferPool,
   error::Result,
-  serialize::SerializeFrom,
   thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
-  transaction::{FreeList, VersionVisibility},
+  transaction::{FreeList, PageRecorder, VersionVisibility},
   utils::ToArc,
-  wal::WAL,
 };
 
 pub struct GarbageCollectionConfig {
@@ -43,7 +41,7 @@ impl GarbageCollector {
     buffer_pool: Arc<BufferPool>,
     version_visibility: Arc<VersionVisibility>,
     free_list: Arc<FreeList>,
-    wal: Arc<WAL>,
+    recorder: Arc<PageRecorder>,
     config: GarbageCollectionConfig,
   ) -> Self {
     let initialized = AtomicBool::new(false).to_arc();
@@ -60,7 +58,7 @@ impl GarbageCollector {
       .build_unchecked(run_entry(
         buffer_pool.clone(),
         version_visibility.clone(),
-        wal.clone(),
+        recorder.clone(),
         release.clone(),
       ))
       .to_arc();
@@ -79,7 +77,7 @@ impl GarbageCollector {
         run_main(
           buffer_pool.clone(),
           version_visibility.clone(),
-          wal.clone(),
+          recorder.clone(),
           entry.clone(),
           check.clone(),
           release.clone(),
@@ -159,7 +157,7 @@ impl GarbageCollector {
 fn run_main(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
-  wal: Arc<WAL>,
+  recorder: Arc<PageRecorder>,
   entry_c: Arc<SharedWorkThread<Pointer, Result>>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
@@ -202,8 +200,8 @@ fn run_main(
           .collect::<Result>()?;
       }
 
-      let mut latch = buffer_pool.read(i)?.for_write();
-      let mut leaf = latch.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
       index = leaf.get_next();
 
       let prev_len = leaf.len();
@@ -227,9 +225,8 @@ fn run_main(
       }
 
       leaf.set_entries(new_entries);
-      latch.as_mut().serialize_from(&CursorNode::Leaf(leaf))?;
-      wal.append_insert(0, latch.get_index(), latch.as_ref())?;
-      drop(latch);
+      recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
+      drop(slot);
 
       orphand.into_iter().for_each(|p| release_c.send_no_wait(p))
     }
@@ -247,7 +244,7 @@ fn run_release(free_list: Arc<FreeList>) -> impl Fn(Pointer) -> Result {
 fn run_entry(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
-  wal: Arc<WAL>,
+  recorder: Arc<PageRecorder>,
   release_c: Arc<SharedWorkThread<Pointer, Result>>,
 ) -> impl Fn(Pointer) -> Result {
   let buffer_pool = buffer_pool.clone();
@@ -301,24 +298,19 @@ fn run_entry(
 
       if new_versions.len() > 0 {
         entry.set_versions(new_versions);
-        slot.as_mut().serialize_from(&entry)?;
-        wal.append_insert(0, slot.get_index(), slot.as_ref())?;
+        recorder.serialize_and_log(0, &mut slot, &entry)?;
         index = entry.get_next();
         continue;
       }
 
       let next = match entry.get_next() {
         Some(next) => next,
-        None => {
-          slot.as_mut().serialize_from(&entry)?;
-          return wal.append_insert(0, slot.get_index(), slot.as_ref());
-        }
+        None => return recorder.serialize_and_log(0, &mut slot, &entry),
       };
 
       let next_entry: DataEntry =
         buffer_pool.read(next)?.for_read().as_ref().deserialize()?;
-      slot.as_mut().serialize_from(&next_entry)?;
-      wal.append_insert(0, slot.get_index(), slot.as_ref())?;
+      recorder.serialize_and_log(0, &mut slot, &next_entry)?;
       index = Some(i);
 
       release_c.send_no_wait(next);
