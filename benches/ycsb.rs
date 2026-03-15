@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+  sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+  },
+  time::Duration,
+};
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use crossbeam::channel::{unbounded, Sender};
@@ -60,14 +66,22 @@ enum Op {
 fn spawn_workers(
   engine: Arc<lfkv_db::Engine>,
   count: usize,
-) -> (Sender<(Op, Sender<()>)>, Vec<std::thread::JoinHandle<()>>) {
-  let (tx, rx) = unbounded::<(Op, Sender<()>)>();
+  done: &Sender<()>,
+) -> (
+  Sender<Op>,
+  Arc<AtomicUsize>,
+  Vec<std::thread::JoinHandle<()>>,
+) {
+  let (tx, rx) = unbounded::<Op>();
+  let c = Arc::new(AtomicUsize::new(0));
   let threads = (0..count)
     .map(|_| {
       let rx = rx.clone();
       let e = engine.clone();
+      let done = done.clone();
+      let c = c.clone();
       std::thread::spawn(move || {
-        while let Ok((op, done)) = rx.recv() {
+        while let Ok(op) = rx.recv() {
           loop {
             let mut tx = e.new_transaction().expect("start error");
             let conflict = match &op {
@@ -100,12 +114,14 @@ fn spawn_workers(
             tx.commit().expect("commit error");
             break;
           }
-          done.send(()).unwrap();
+          if c.fetch_sub(1, Ordering::Release) == 1 {
+            done.send(()).unwrap();
+          }
         }
       })
     })
     .collect();
-  (tx, threads)
+  (tx, c, threads)
 }
 
 fn zipfian_index(rng: &mut impl Rng, zipf: &Zipf<f64>) -> usize {
@@ -119,8 +135,10 @@ fn bench_ycsb_a(c: &mut Criterion) {
   pre_load(dir.path(), RECORD_COUNT);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let (t, r) = unbounded();
+  let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
   let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-a");
   group
@@ -129,21 +147,18 @@ fn bench_ycsb_a(c: &mut Criterion) {
     .throughput(Throughput::Elements(OP_COUNT as u64))
     .bench_function("50read-50update", |b| {
       b.iter(|| {
-        let mut rng = rand::thread_rng();
-        let mut waiting = Vec::with_capacity(OP_COUNT);
+        counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(&mut rng, &zipf);
+          let idx = zipfian_index(rng, &zipf);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
             Op::Get(key)
           } else {
             Op::Insert(key, make_value(idx))
           };
-          let (t, r) = unbounded();
-          tx.send((op, t)).unwrap();
-          waiting.push(r);
+          tx.send(op).unwrap();
         }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
+        r.recv().unwrap();
       });
     });
   group.finish();
@@ -158,8 +173,10 @@ fn bench_ycsb_b(c: &mut Criterion) {
   pre_load(dir.path(), RECORD_COUNT);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let (t, r) = unbounded();
+  let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
   let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-b");
   group
@@ -168,21 +185,18 @@ fn bench_ycsb_b(c: &mut Criterion) {
     .throughput(Throughput::Elements(OP_COUNT as u64))
     .bench_function("95read-5update", |b| {
       b.iter(|| {
-        let mut rng = rand::thread_rng();
-        let mut waiting = Vec::with_capacity(OP_COUNT);
+        counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(&mut rng, &zipf);
+          let idx = zipfian_index(rng, &zipf);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.95) {
             Op::Get(key)
           } else {
             Op::Insert(key, make_value(idx))
           };
-          let (t, r) = unbounded();
-          tx.send((op, t)).unwrap();
-          waiting.push(r);
+          tx.send(op).unwrap();
         }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
+        r.recv().unwrap();
       });
     });
   group.finish();
@@ -197,8 +211,10 @@ fn bench_ycsb_d(c: &mut Criterion) {
   pre_load(dir.path(), RECORD_COUNT);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
-  let insert_counter = std::sync::atomic::AtomicUsize::new(RECORD_COUNT);
+  let (t, r) = unbounded();
+  let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
+  let insert_counter = AtomicUsize::new(RECORD_COUNT);
+  let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-d");
   group
@@ -207,22 +223,19 @@ fn bench_ycsb_d(c: &mut Criterion) {
     .throughput(Throughput::Elements(OP_COUNT as u64))
     .bench_function("95read-5insert-latest", |b| {
       b.iter(|| {
-        let mut rng = rand::thread_rng();
-        let mut waiting = Vec::with_capacity(OP_COUNT);
-        let latest = insert_counter.load(std::sync::atomic::Ordering::Relaxed);
+        counter.store(OP_COUNT, Ordering::Release);
+        let latest = insert_counter.load(Ordering::Relaxed);
         for _ in 0..OP_COUNT {
           let op = if rng.gen_bool(0.95) {
             let idx = latest.saturating_sub(rng.gen_range(0..latest.min(1000)));
             Op::Get(make_key(idx))
           } else {
-            let idx = insert_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let idx = insert_counter.fetch_add(1, Ordering::Relaxed);
             Op::Insert(make_key(idx), make_value(idx))
           };
-          let (t, r) = unbounded();
-          tx.send((op, t)).unwrap();
-          waiting.push(r);
+          tx.send(op).unwrap();
         }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
+        r.recv().unwrap();
       });
     });
   group.finish();
@@ -237,9 +250,11 @@ fn bench_ycsb_e(c: &mut Criterion) {
   pre_load(dir.path(), RECORD_COUNT);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let (t, r) = unbounded();
+  let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
   let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
-  let insert_counter = std::sync::atomic::AtomicUsize::new(RECORD_COUNT);
+  let insert_counter = AtomicUsize::new(RECORD_COUNT);
+  let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-e");
   group
@@ -248,23 +263,20 @@ fn bench_ycsb_e(c: &mut Criterion) {
     .throughput(Throughput::Elements(OP_COUNT as u64))
     .bench_function("95scan-5insert", |b| {
       b.iter(|| {
-        let mut rng = rand::thread_rng();
-        let mut waiting = Vec::with_capacity(OP_COUNT);
+        counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
           let op = if rng.gen_bool(0.95) {
-            let idx = zipfian_index(&mut rng, &zipf);
+            let idx = zipfian_index(rng, &zipf);
             let start = make_key(idx);
             let end = make_key((idx + SCAN_LENGTH).min(RECORD_COUNT - 1));
             Op::Scan(start, end)
           } else {
-            let idx = insert_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let idx = insert_counter.fetch_add(1, Ordering::Relaxed);
             Op::Insert(make_key(idx), make_value(idx))
           };
-          let (t, r) = unbounded();
-          tx.send((op, t)).unwrap();
-          waiting.push(r);
+          tx.send(op).unwrap();
         }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
+        r.recv().unwrap();
       });
     });
   group.finish();
@@ -279,8 +291,10 @@ fn bench_ycsb_f(c: &mut Criterion) {
   pre_load(dir.path(), RECORD_COUNT);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
-  let (tx, threads) = spawn_workers(engine.clone(), THREADS);
+  let (t, r) = unbounded();
+  let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
   let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-f");
   group
@@ -289,21 +303,18 @@ fn bench_ycsb_f(c: &mut Criterion) {
     .throughput(Throughput::Elements(OP_COUNT as u64))
     .bench_function("50read-50rmw", |b| {
       b.iter(|| {
-        let mut rng = rand::thread_rng();
-        let mut waiting = Vec::with_capacity(OP_COUNT);
+        counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(&mut rng, &zipf);
+          let idx = zipfian_index(rng, &zipf);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
             Op::Get(key)
           } else {
             Op::ReadModifyWrite(key, make_value(idx))
           };
-          let (t, r) = unbounded();
-          tx.send((op, t)).unwrap();
-          waiting.push(r);
+          tx.send(op).unwrap();
         }
-        waiting.into_iter().for_each(|r| r.recv().unwrap());
+        r.recv().unwrap();
       });
     });
   group.finish();
