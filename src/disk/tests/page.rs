@@ -6,6 +6,8 @@ fn test_writer() {
   let mut wt = page.writer();
   wt.write(&[1, 2, 3, 5, 6]).unwrap();
 
+  assert_eq!(wt.finalize(), 5);
+
   let mut scanner = page.scanner();
 
   assert_eq!(scanner.read().unwrap(), 1);
@@ -27,6 +29,7 @@ fn test_read_write() {
   assert!(!writer.is_eof());
   writer.write(&test_data).unwrap();
   assert!(writer.is_eof());
+  assert_eq!(writer.finalize(), 5);
 
   // Read test
   let mut scanner = page.scanner();
@@ -199,19 +202,17 @@ fn test_page_copy() {
   writer.write(&test_data).unwrap();
 
   // Create copy and verify data
-  let copied = page.copy();
-  let mut scanner = copied.scanner();
-  for &expected in test_data.iter() {
-    assert_eq!(scanner.read().unwrap(), expected);
+  let copied = page.copy_n(5);
+  for (i, e) in copied.iter().enumerate() {
+    assert_eq!(e, &test_data[i]);
   }
 
   // Modify original, verify copy remains unchanged
   let mut writer = page.writer();
   writer.write(&[9, 9]).unwrap();
 
-  let mut scanner = copied.scanner();
-  for &expected in test_data.iter() {
-    assert_eq!(scanner.read().unwrap(), expected);
+  for (i, e) in copied.iter().enumerate() {
+    assert_eq!(e, &test_data[i]);
   }
 }
 
