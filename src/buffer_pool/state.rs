@@ -3,6 +3,8 @@ use std::sync::{
   RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 
+use crossbeam::utils::Backoff;
+
 use crate::{
   disk::{PageRef, PAGE_SIZE},
   utils::ShortenedRwLock,
@@ -28,11 +30,22 @@ impl FrameState {
       .is_ok()
   }
   pub fn try_pin(&self) -> bool {
-    if EVICTION_BIT & self.pin.fetch_add(1, Ordering::Release) == 0 {
-      return true;
-    };
-    self.pin.fetch_sub(1, Ordering::Release);
-    false
+    let backoff = Backoff::new();
+    loop {
+      let current = self.pin.load(Ordering::Acquire);
+      if current & EVICTION_BIT != 0 {
+        return false;
+      }
+
+      if self
+        .pin
+        .compare_exchange(current, current + 1, Ordering::Release, Ordering::Acquire)
+        .is_ok()
+      {
+        return true;
+      }
+      backoff.snooze();
+    }
   }
 
   pub fn completion_evict(&self, pin: u32) {
@@ -83,11 +96,22 @@ impl TempFrameState {
   }
 
   pub fn try_pin(&self) -> bool {
-    if EVICTION_BIT & self.pin.fetch_add(1, Ordering::Release) == 0 {
-      return true;
-    };
-    self.pin.fetch_sub(1, Ordering::Release);
-    false
+    let backoff = Backoff::new();
+    loop {
+      let current = self.pin.load(Ordering::Acquire);
+      if current & EVICTION_BIT != 0 {
+        return false;
+      }
+
+      if self
+        .pin
+        .compare_exchange(current, current + 1, Ordering::Release, Ordering::Acquire)
+        .is_ok()
+      {
+        return true;
+      }
+      backoff.snooze();
+    }
   }
 
   pub fn completion_evict(&self, pin: u32) {
