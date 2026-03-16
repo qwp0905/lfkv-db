@@ -44,7 +44,7 @@ impl FrameState {
       {
         return true;
       }
-      backoff.snooze();
+      backoff.spin();
     }
   }
 
@@ -110,7 +110,7 @@ impl TempFrameState {
       {
         return true;
       }
-      backoff.snooze();
+      backoff.spin();
     }
   }
 
