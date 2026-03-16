@@ -19,6 +19,10 @@ on:
         description: "YCSB record count for pre-loading"
         required: false
         default: ""
+      op_count:
+        description: "YCSB operation count per iteration"
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -62,6 +66,7 @@ jobs:
     - name: Run flamegraph
       env:
         YCSB_RECORD_COUNT: ${{ github.event.inputs.record_count }}
+        YCSB_OP_COUNT: ${{ github.event.inputs.op_count }}
       run: |
         FILTER="${{ github.event.inputs.filter }}"
         SAMPLE="${{ github.event.inputs.sample_size }}"

@@ -23,7 +23,14 @@ fn record_count() -> usize {
     .and_then(|v| v.parse().ok())
     .unwrap_or(DEFAULT_RECORD_COUNT)
 }
-const OP_COUNT: usize = 150_000;
+const DEFAULT_OP_COUNT: usize = 150_000;
+
+fn op_count() -> usize {
+  std::env::var("YCSB_OP_COUNT")
+    .ok()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(DEFAULT_OP_COUNT)
+}
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
 const ZIPF_EXPONENT: f64 = 0.99;
@@ -139,6 +146,7 @@ fn zipfian_index(rng: &mut impl Rng, zipf: &Zipf<f64>, record_count: usize) -> u
 /// Workload A: 50% read, 50% update (write-heavy, session store)
 fn bench_ycsb_a(c: &mut Criterion) {
   let record_count = record_count();
+  let op_count = op_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_load(dir.path(), record_count);
 
@@ -152,11 +160,11 @@ fn bench_ycsb_a(c: &mut Criterion) {
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(20))
-    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .throughput(Throughput::Elements(op_count as u64))
     .bench_function("50read-50update", |b| {
       b.iter(|| {
-        counter.store(OP_COUNT, Ordering::Release);
-        for _ in 0..OP_COUNT {
+        counter.store(op_count, Ordering::Release);
+        for _ in 0..op_count {
           let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
@@ -178,6 +186,7 @@ fn bench_ycsb_a(c: &mut Criterion) {
 /// Workload B: 95% read, 5% update (read-heavy, typical web app)
 fn bench_ycsb_b(c: &mut Criterion) {
   let record_count = record_count();
+  let op_count = op_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_load(dir.path(), record_count);
 
@@ -191,11 +200,11 @@ fn bench_ycsb_b(c: &mut Criterion) {
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(20))
-    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .throughput(Throughput::Elements(op_count as u64))
     .bench_function("95read-5update", |b| {
       b.iter(|| {
-        counter.store(OP_COUNT, Ordering::Release);
-        for _ in 0..OP_COUNT {
+        counter.store(op_count, Ordering::Release);
+        for _ in 0..op_count {
           let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.95) {
@@ -217,6 +226,7 @@ fn bench_ycsb_b(c: &mut Criterion) {
 /// Workload D: 95% read, 5% insert (read latest, timeline/feed)
 fn bench_ycsb_d(c: &mut Criterion) {
   let record_count = record_count();
+  let op_count = op_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_load(dir.path(), record_count);
 
@@ -230,12 +240,12 @@ fn bench_ycsb_d(c: &mut Criterion) {
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(20))
-    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .throughput(Throughput::Elements(op_count as u64))
     .bench_function("95read-5insert-latest", |b| {
       b.iter(|| {
-        counter.store(OP_COUNT, Ordering::Release);
+        counter.store(op_count, Ordering::Release);
         let latest = insert_counter.load(Ordering::Relaxed);
-        for _ in 0..OP_COUNT {
+        for _ in 0..op_count {
           let op = if rng.gen_bool(0.95) {
             let idx = latest.saturating_sub(rng.gen_range(0..latest.min(1000)));
             Op::Get(make_key(idx))
@@ -257,13 +267,13 @@ fn bench_ycsb_d(c: &mut Criterion) {
 /// Workload E: 95% scan, 5% insert (range query heavy, analytics)
 fn bench_ycsb_e(c: &mut Criterion) {
   let record_count = record_count();
+  let op_count = op_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let zipf = Zipf::new(record_count as u64, ZIPF_EXPONENT).unwrap();
   let insert_counter = AtomicUsize::new(record_count);
   let rng = &mut rand::thread_rng();
 
@@ -271,15 +281,17 @@ fn bench_ycsb_e(c: &mut Criterion) {
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(20))
-    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .throughput(Throughput::Elements(op_count as u64))
     .bench_function("95scan-5insert", |b| {
       b.iter(|| {
-        counter.store(OP_COUNT, Ordering::Release);
-        for _ in 0..OP_COUNT {
+        let current = insert_counter.load(Ordering::Relaxed);
+        let zipf = Zipf::new(current as u64, ZIPF_EXPONENT).unwrap();
+        counter.store(op_count, Ordering::Release);
+        for _ in 0..op_count {
           let op = if rng.gen_bool(0.95) {
-            let idx = zipfian_index(rng, &zipf, record_count);
+            let idx = zipfian_index(rng, &zipf, current);
             let start = make_key(idx);
-            let end = make_key((idx + SCAN_LENGTH).min(record_count - 1));
+            let end = make_key((idx + SCAN_LENGTH).min(current - 1));
             Op::Scan(start, end)
           } else {
             let idx = insert_counter.fetch_add(1, Ordering::Relaxed);
@@ -299,6 +311,7 @@ fn bench_ycsb_e(c: &mut Criterion) {
 /// Workload F: 50% read, 50% read-modify-write (transactional, account balance)
 fn bench_ycsb_f(c: &mut Criterion) {
   let record_count = record_count();
+  let op_count = op_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_load(dir.path(), record_count);
 
@@ -312,11 +325,11 @@ fn bench_ycsb_f(c: &mut Criterion) {
   group
     .sample_size(DEFAULT_SAMPLE_SIZE)
     .measurement_time(Duration::from_secs(20))
-    .throughput(Throughput::Elements(OP_COUNT as u64))
+    .throughput(Throughput::Elements(op_count as u64))
     .bench_function("50read-50rmw", |b| {
       b.iter(|| {
-        counter.store(OP_COUNT, Ordering::Release);
-        for _ in 0..OP_COUNT {
+        counter.store(op_count, Ordering::Release);
+        for _ in 0..op_count {
           let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
