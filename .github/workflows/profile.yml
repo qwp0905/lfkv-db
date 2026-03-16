@@ -11,6 +11,10 @@ on:
         description: "Benchmark filter (e.g. ycsb-a)"
         required: false
         default: ""
+      sample_size:
+        description: "Criterion sample size"
+        required: false
+        default: "10"
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,11 +58,12 @@ jobs:
     - name: Run flamegraph
       run: |
         FILTER="${{ github.event.inputs.filter }}"
+        SAMPLE="${{ github.event.inputs.sample_size }}"
+        ARGS="--sample-size $SAMPLE"
         if [ -n "$FILTER" ]; then
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- --bench "$FILTER"
-        else
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg
+          ARGS="$ARGS --bench $FILTER"
         fi
+        cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- $ARGS
 
     - name: Upload flamegraph
       uses: actions/upload-artifact@v4
