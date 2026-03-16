@@ -629,6 +629,9 @@ fn test_process_crash_recovery() {
   );
 }
 
+// ============================================================
+// 14. Hard Workload (concurrent insert + scan)
+// ============================================================
 #[test]
 fn test_hard_workload() {
   let dir = tempdir_in(".").unwrap();
@@ -684,6 +687,96 @@ fn test_hard_workload() {
   t.commit().expect("commit error");
 }
 
+// ============================================================
+// 15. Heavy GC with concurrent reads (temp page coverage)
+// ============================================================
+#[test]
+fn test_heavy_gc_single_key() {
+  let dir = tempdir_in(".").unwrap();
+  let engine = Arc::new(
+    EngineBuilder::new(dir.path())
+      .buffer_pool_memory_capacity(32 << 20)
+      .buffer_pool_shard_count(1 << 2)
+      .group_commit_delay(Duration::from_millis(1))
+      .group_commit_count(10)
+      .gc_trigger_interval(Duration::from_millis(50))
+      .logger(TestLogger)
+      .log_level(LogLevel::Trace)
+      .build()
+      .expect("engine bootstrap failed"),
+  );
+
+  let key = b"hot-key".to_vec();
+  let iterations = 500;
+  let stop = Arc::new(AtomicBool::new(false));
+
+  // writer: single key, sequential values
+  let writer_engine = engine.clone();
+  let writer_key = key.clone();
+  let writer_stop = stop.clone();
+  let last_value = Arc::new(Mutex::new(0u32));
+  let last_val_writer = last_value.clone();
+
+  let writer = thread::spawn(move || {
+    for i in 0..iterations {
+      if writer_stop.load(Ordering::Acquire) {
+        break;
+      }
+      let mut tx = writer_engine.new_transaction().unwrap();
+      let value = (i as u32).to_le_bytes().to_vec();
+      tx.insert(writer_key.clone(), value).unwrap();
+      tx.commit().unwrap();
+      *last_val_writer.lock().unwrap() = i as u32;
+    }
+  });
+
+  // reader: continuously read the same key
+  let reader_engine = engine.clone();
+  let reader_key = key.clone();
+  let reader_stop = stop.clone();
+  let reader = thread::spawn(move || {
+    let mut read_count = 0u64;
+    while !reader_stop.load(Ordering::Acquire) {
+      let tx = reader_engine.new_transaction().unwrap();
+      let _ = tx.get(&reader_key);
+      read_count += 1;
+    }
+    read_count
+  });
+
+  writer.join().unwrap();
+  stop.store(true, Ordering::Release);
+  let read_count = reader.join().unwrap();
+
+  // phase 1: verify final value
+  let final_val = *last_value.lock().unwrap();
+  let tx = engine.new_transaction().unwrap();
+  let val = tx.get(&key).unwrap();
+  assert!(val.is_some(), "key should exist after heavy writes");
+  let bytes = val.unwrap();
+  let stored = u32::from_le_bytes(bytes.try_into().unwrap());
+  assert_eq!(stored, final_val, "final value mismatch");
+  drop(tx);
+
+  eprintln!(
+    "heavy gc: {} writes, {} reads, final value = {}",
+    iterations, read_count, final_val
+  );
+
+  // phase 2: restart and verify persistence
+  drop(engine);
+  let engine = build_engine(&dir);
+  let tx = engine.new_transaction().unwrap();
+  let val = tx.get(&key).unwrap();
+  assert!(val.is_some(), "key should survive restart");
+  let bytes = val.unwrap();
+  let stored = u32::from_le_bytes(bytes.try_into().unwrap());
+  assert_eq!(stored, final_val, "value mismatch after restart");
+}
+
+// ============================================================
+// 16. Insert, Remove, and GC
+// ============================================================
 #[test]
 fn insert_and_remove_and_gc() {
   let dir = tempdir_in(".").unwrap();

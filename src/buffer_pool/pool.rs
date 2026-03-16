@@ -3,11 +3,11 @@ use std::{
   sync::{Arc, RwLock},
 };
 
-use super::{Frame, LRUTable, PageSlot};
+use super::{Acquired, Frame, LRUTable, Slot};
 use crate::{
   disk::{DiskController, DiskControllerConfig, PagePool, PAGE_SIZE},
   error::Result,
-  utils::{Bitmap, LogFilter, ShortenedRwLock, ToArc},
+  utils::{Bitmap, LogFilter, ShortenedMutex, ShortenedRwLock, ToArc},
 };
 
 pub struct BufferPoolConfig {
@@ -40,25 +40,48 @@ impl BufferPool {
     Ok(Self {
       frame,
       disk,
-      table: LRUTable::new(config.shard_count, frame_cap),
+      table: LRUTable::new(page_pool, config.shard_count, frame_cap),
       dirty: Bitmap::new(config.capacity),
       logger,
     })
   }
 
-  pub fn read(&self, index: usize) -> Result<PageSlot<'_>> {
-    let mut guard = match self.table.acquire(index) {
+  pub fn peek(&self, index: usize) -> Result<Slot<'_>> {
+    let (state, shard) = match self.table.peek_or_temp(index) {
       Ok(state) => {
         let id = state.get_frame_id();
-        let slot = PageSlot::new(&self.frame[id], &self.dirty, state);
-        return Ok(slot);
+        return Ok(Slot::page(&self.frame[id], &self.dirty, state));
       }
-      Err(guard) => guard,
+      Err(temp) => temp.take(),
+    };
+    let page = match self.disk.read(index) {
+      Ok(p) => p,
+      Err(err) => {
+        shard.l().remove_temp(index);
+        return Err(err);
+      }
+    };
+    state.for_write().as_mut().copy_from(page.as_ref());
+    state.completion_evict(1);
+    Ok(Slot::temp(state, index, &self.disk, shard, true))
+  }
+
+  pub fn read(&self, index: usize) -> Result<Slot<'_>> {
+    let mut guard = match self.table.acquire(index) {
+      Acquired::Temp(temp) => {
+        let (state, shard) = temp.take();
+        return Ok(Slot::temp(state, index, &self.disk, shard, false));
+      }
+      Acquired::Hit(state) => {
+        let id = state.get_frame_id();
+        return Ok(Slot::page(&self.frame[id], &self.dirty, state));
+      }
+      Acquired::Evicted(guard) => guard,
     };
 
     let id = guard.get_frame_id();
     let frame = &self.frame[id];
-    let slot = PageSlot::new(frame, &self.dirty, guard.get_state());
+    let slot = Slot::page(frame, &self.dirty, guard.get_state());
 
     {
       let mut page = frame.wl();

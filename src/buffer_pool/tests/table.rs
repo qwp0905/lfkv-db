@@ -4,23 +4,28 @@ use std::time::Duration;
 
 use super::*;
 
+fn make_table(shard_count: usize, capacity: usize) -> LRUTable {
+  let page_pool = Arc::new(PagePool::new(100));
+  LRUTable::new(page_pool, shard_count, capacity)
+}
+
 fn miss(table: &LRUTable, index: usize) -> EvictionGuard<'_> {
   match table.acquire(index) {
-    Err(guard) => guard,
-    Ok(_) => panic!("expected miss for index {}", index),
+    Acquired::Evicted(guard) => guard,
+    _ => panic!("expected miss for index {}", index),
   }
 }
 
 fn hit(table: &LRUTable, index: usize) -> Arc<FrameState> {
   match table.acquire(index) {
-    Ok(state) => state,
-    Err(_) => panic!("expected hit for index {}", index),
+    Acquired::Hit(state) => state,
+    _ => panic!("expected hit for index {}", index),
   }
 }
 
 #[test]
 fn test_cache_miss_then_hit() {
-  let table = LRUTable::new(1, 4);
+  let table = make_table(1, 4);
 
   let mut guard = miss(&table, 42);
   let frame_id = guard.get_frame_id();
@@ -36,7 +41,7 @@ fn test_cache_miss_then_hit() {
 #[test]
 fn test_multiple_misses_no_eviction() {
   let cap = 4;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   let mut frame_ids = Vec::new();
   for i in 0..cap {
@@ -54,7 +59,7 @@ fn test_multiple_misses_no_eviction() {
 #[test]
 fn test_eviction_when_full() {
   let cap = 4;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in 0..cap {
     let mut guard = miss(&table, i);
@@ -78,7 +83,7 @@ fn test_eviction_when_full() {
 
 #[test]
 fn test_sharded_cache_hit() {
-  let table = LRUTable::new(4, 80);
+  let table = make_table(4, 80);
 
   let mut entries = Vec::new();
   for i in 0..16 {
@@ -96,7 +101,7 @@ fn test_sharded_cache_hit() {
 
 #[test]
 fn test_sharded_frame_id_ranges() {
-  let table = LRUTable::new(4, 80);
+  let table = make_table(4, 80);
 
   let mut frame_ids = Vec::new();
   for i in 0..16 {
@@ -117,22 +122,25 @@ fn test_sharded_frame_id_ranges() {
 
 #[test]
 fn test_sharded_eviction() {
-  let table = LRUTable::new(4, 8);
+  let table = make_table(4, 8);
 
   let mut inserted = Vec::new();
   let mut eviction_happened = false;
   for i in 0..20 {
     match table.acquire(i) {
-      Ok(state) => {
+      Acquired::Hit(state) => {
         state.unpin();
         continue;
       }
-      Err(mut guard) => {
+      Acquired::Evicted(mut guard) => {
         if guard.get_evicted_index().is_some() {
           eviction_happened = true;
         }
         inserted.push((i, guard.get_frame_id()));
         guard.commit();
+      }
+      Acquired::Temp(_) => {
+        panic!("unexpected temp for index {}", i);
       }
     }
     // unpin so future evictions can proceed
@@ -151,7 +159,7 @@ fn test_sharded_eviction() {
 #[test]
 fn test_eviction_reuses_frame_id() {
   let cap = 4;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in 0..cap {
     miss(&table, i).commit();
@@ -173,7 +181,7 @@ fn test_eviction_reuses_frame_id() {
 #[test]
 fn test_eviction_guard_drop_rollback() {
   let cap = 2;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in [10, 20] {
     miss(&table, i).commit();
@@ -198,7 +206,7 @@ fn test_eviction_guard_drop_rollback() {
 #[test]
 fn test_eviction_guard_commit_persists() {
   let cap = 2;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in [10, 20] {
     miss(&table, i).commit();
@@ -222,7 +230,7 @@ fn test_eviction_guard_commit_persists() {
 #[test]
 fn test_pinned_entry_not_evicted() {
   let cap = 2;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in [10, 20] {
     miss(&table, i).commit();
@@ -242,7 +250,7 @@ fn test_pinned_entry_not_evicted() {
 #[test]
 fn test_concurrent_acquire_waits_for_eviction() {
   let cap = 2;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in [10, 20] {
     miss(&table, i).commit();
@@ -283,7 +291,7 @@ fn test_concurrent_acquire_waits_for_eviction() {
 #[test]
 fn test_concurrent_acquire_waits_for_evicted_index() {
   let cap = 2;
-  let table = LRUTable::new(1, cap);
+  let table = make_table(1, cap);
 
   for i in [10, 20] {
     miss(&table, i).commit();
@@ -320,4 +328,83 @@ fn test_concurrent_acquire_waits_for_evicted_index() {
   // evicted index should be accessible after rollback
   let state = hit(&table, evicted);
   state.unpin();
+}
+
+#[test]
+fn test_peek_or_temp_creates_temp_when_not_in_lru() {
+  let table = make_table(1, 4);
+
+  match table.peek_or_temp(42) {
+    Ok(_) => panic!("should return TempGuard"),
+    Err(guard) => {
+      let (state, shard) = guard.take();
+      state.completion_evict(1);
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+  }
+}
+
+#[test]
+fn test_peek_or_temp_returns_lru_entry_without_promotion() {
+  let table = make_table(1, 4);
+
+  miss(&table, 10).commit();
+  let state = hit(&table, 10);
+  state.unpin();
+  state.unpin();
+
+  match table.peek_or_temp(10) {
+    Ok(state) => state.unpin(),
+    Err(_) => panic!("should return FrameState from LRU"),
+  }
+}
+
+#[test]
+fn test_acquire_hits_temp_page() {
+  let table = make_table(1, 4);
+
+  // create temp page via peek_or_temp
+  let guard = match table.peek_or_temp(42) {
+    Err(g) => g,
+    Ok(_) => panic!("should create temp"),
+  };
+  let (state, _) = guard.take();
+  state.completion_evict(1);
+
+  // acquire same index — should hit temp
+  match table.acquire(42) {
+    Acquired::Temp(temp) => {
+      let (state, shard) = temp.take();
+      state.unpin();
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+    _ => panic!("expected Acquired::Temp for index 42"),
+  };
+}
+
+#[test]
+fn test_remove_temp_then_peek_creates_new_temp() {
+  let table = make_table(1, 4);
+
+  // create and remove temp
+  let (state, shard) = match table.peek_or_temp(42) {
+    Err(g) => g.take(),
+    Ok(_) => panic!("should create temp"),
+  };
+  state.completion_evict(1);
+  state.unpin();
+  shard.l().remove_temp(42);
+
+  // peek again — should create new temp
+  match table.peek_or_temp(42) {
+    Err(guard) => {
+      let (state, shard) = guard.take();
+      state.completion_evict(1);
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+    Ok(_) => panic!("should create new TempGuard"),
+  }
 }

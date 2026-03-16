@@ -18,3 +18,6 @@ pub use slot::*;
 
 mod state;
 use state::*;
+
+mod frame;
+use frame::*;

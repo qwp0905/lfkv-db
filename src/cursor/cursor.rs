@@ -5,8 +5,8 @@ use super::{
   TreeHeader, VersionRecord, HEADER_INDEX,
 };
 use crate::{
-  buffer_pool::PageSlotWrite, serialize::Serializable, transaction::TxOrchestrator,
-  Error, Result,
+  buffer_pool::WritableSlot, serialize::Serializable, transaction::TxOrchestrator, Error,
+  Result,
 };
 
 pub struct Cursor {
@@ -25,7 +25,7 @@ impl Cursor {
   #[inline]
   fn serialize_and_log<T: Serializable>(
     &self,
-    slot: &mut PageSlotWrite<'_>,
+    slot: &mut WritableSlot<'_>,
     data: &T,
   ) -> Result {
     self.orchestrator.serialize_and_log(self.tx_id, slot, data)
