@@ -1,97 +1,54 @@
 use std::sync::{
-  atomic::{AtomicBool, Ordering},
+  atomic::{AtomicBool, AtomicU32, Ordering},
   RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
-
-use crossbeam::{atomic::AtomicCell, utils::Backoff};
 
 use crate::{
   disk::{PageRef, PAGE_SIZE},
   utils::ShortenedRwLock,
 };
 
-#[derive(Clone, Copy, Eq)]
-pub enum PinCount {
-  Fetched(usize),
-  Eviction,
-}
-impl PartialEq for PinCount {
-  fn eq(&self, other: &Self) -> bool {
-    match (self, other) {
-      (PinCount::Fetched(i), PinCount::Fetched(j)) => i == j,
-      (PinCount::Eviction, PinCount::Eviction) => true,
-      _ => false,
-    }
-  }
-}
+const EVICTION_BIT: u32 = 1 << 31;
 
 pub struct FrameState {
-  pin: AtomicCell<PinCount>,
+  pin: AtomicU32,
   frame_id: usize,
 }
 impl FrameState {
   pub fn new(frame_id: usize) -> Self {
     Self {
-      pin: AtomicCell::new(PinCount::Eviction),
+      pin: AtomicU32::new(EVICTION_BIT),
       frame_id,
     }
   }
   pub fn try_evict(&self) -> bool {
     self
       .pin
-      .compare_exchange(PinCount::Fetched(0), PinCount::Eviction)
+      .compare_exchange(0, EVICTION_BIT, Ordering::Release, Ordering::Acquire)
       .is_ok()
   }
   pub fn try_pin(&self) -> bool {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        PinCount::Eviction => return false,
-        PinCount::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(PinCount::Fetched(i), PinCount::Fetched(i + 1))
-            .is_ok()
-          {
-            return true;
-          }
-
-          backoff.spin()
-        }
-      }
-    }
+    if EVICTION_BIT & self.pin.fetch_add(1, Ordering::Release) == 0 {
+      return true;
+    };
+    self.pin.fetch_sub(1, Ordering::Release);
+    false
   }
 
-  pub fn completion_evict(&self, pin: usize) {
-    self.pin.store(PinCount::Fetched(pin))
+  pub fn completion_evict(&self, pin: u32) {
+    self.pin.store(pin, Ordering::Release);
   }
 
   pub fn get_frame_id(&self) -> usize {
     self.frame_id
   }
   pub fn unpin(&self) {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        PinCount::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(PinCount::Fetched(i), PinCount::Fetched(i - 1))
-            .is_ok()
-          {
-            return;
-          }
-        }
-        _ => {}
-      }
-
-      backoff.spin()
-    }
+    self.pin.fetch_sub(1, Ordering::Release);
   }
 }
 
 pub struct TempFrameState {
-  pin: AtomicCell<PinCount>,
+  pin: AtomicU32,
   page: RwLock<PageRef<PAGE_SIZE>>,
   dirty: AtomicBool,
 }
@@ -99,7 +56,7 @@ pub struct TempFrameState {
 impl TempFrameState {
   pub fn new(page: PageRef<PAGE_SIZE>) -> Self {
     Self {
-      pin: AtomicCell::new(PinCount::Eviction),
+      pin: AtomicU32::new(EVICTION_BIT),
       page: RwLock::new(page),
       dirty: AtomicBool::new(false),
     }
@@ -108,7 +65,7 @@ impl TempFrameState {
   pub fn try_evict(&self) -> bool {
     self
       .pin
-      .compare_exchange(PinCount::Fetched(1), PinCount::Eviction)
+      .compare_exchange(1, EVICTION_BIT, Ordering::Release, Ordering::Acquire)
       .is_ok()
   }
 
@@ -126,46 +83,18 @@ impl TempFrameState {
   }
 
   pub fn try_pin(&self) -> bool {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        PinCount::Eviction => return false,
-        PinCount::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(PinCount::Fetched(i), PinCount::Fetched(i + 1))
-            .is_ok()
-          {
-            return true;
-          }
-
-          backoff.spin()
-        }
-      }
-    }
+    if EVICTION_BIT & self.pin.fetch_add(1, Ordering::Release) == 0 {
+      return true;
+    };
+    self.pin.fetch_sub(1, Ordering::Release);
+    false
   }
 
-  pub fn completion_evict(&self, pin: usize) {
-    self.pin.store(PinCount::Fetched(pin))
+  pub fn completion_evict(&self, pin: u32) {
+    self.pin.store(pin, Ordering::Release);
   }
 
   pub fn unpin(&self) {
-    let backoff = Backoff::new();
-    loop {
-      match self.pin.load() {
-        PinCount::Fetched(i) => {
-          if self
-            .pin
-            .compare_exchange(PinCount::Fetched(i), PinCount::Fetched(i - 1))
-            .is_ok()
-          {
-            return;
-          }
-        }
-        _ => {}
-      }
-
-      backoff.spin()
-    }
+    self.pin.fetch_sub(1, Ordering::Release);
   }
 }

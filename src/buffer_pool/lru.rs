@@ -147,21 +147,8 @@ where
   where
     S: BuildHasher,
   {
-    if let Some(bucket) = self.new_entries.get_mut(hash, equivalent(&key)) {
-      let prev = bucket.borrow_mut_unsafe().set_value(value);
-      self.new_sub_list.move_to_head(bucket);
-      return Some(prev);
-    }
-
-    if let Some(mut bucket) = self.old_entries.remove_entry(hash, equivalent(&key)) {
-      self.old_sub_list.remove(&mut bucket);
-      let prev = bucket.borrow_mut_unsafe().set_value(value);
-
-      self.new_sub_list.push_head(&mut bucket);
-      self.new_entries.insert(hash, bucket, make_hasher(hasher));
-      self.rebalance(hasher);
-
-      return Some(prev);
+    if let Some(bucket) = self.get_bucket(&key, hash, hasher) {
+      return Some(bucket.set_value(value));
     }
 
     let mut bucket = Bucket::new_ptr(key, value);
