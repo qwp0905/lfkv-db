@@ -54,7 +54,7 @@ jobs:
           sudo mkdir -p /usr/lib/linux-tools/`uname -r`
           sudo ln -s /usr/lib/linux-tools/$FROM_KERNEL/perf /usr/lib/linux-tools/`uname -r`/perf
         fi
-        cargo install flamegraph
+        command -v flamegraph || cargo install flamegraph
 
     - name: Allow perf for unprivileged users
       run: echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid

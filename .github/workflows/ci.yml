@@ -22,7 +22,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
     - name: Install coverage tool
-      run: cargo install cargo-llvm-cov
+      run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov
     - name: Run tests
       run: cargo test:cov
 
