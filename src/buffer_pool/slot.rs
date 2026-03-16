@@ -110,19 +110,6 @@ pub struct PageSlot<'a> {
   state: Arc<FrameState>,
 }
 impl<'a> PageSlot<'a> {
-  pub fn new(
-    frame: &'a RwLock<Frame>,
-    dirty: &'a Bitmap,
-    state: Arc<FrameState>,
-  ) -> Self {
-    Self {
-      frame,
-      dirty,
-      state,
-    }
-  }
-}
-impl<'a> PageSlot<'a> {
   fn for_read<'b>(self) -> PageSlotRead<'b>
   where
     'a: 'b,
@@ -242,11 +229,6 @@ pub struct TempSlotRead<'a> {
   disk: &'a DiskController<PAGE_SIZE>,
   shard: &'a Mutex<Shard>,
   is_peek: bool,
-}
-impl<'a> AsRef<Page<PAGE_SIZE>> for TempSlotRead<'a> {
-  fn as_ref(&self) -> &Page<PAGE_SIZE> {
-    self.guard.as_ref()
-  }
 }
 impl<'a> TempSlotRead<'a> {
   fn release(&mut self) {
