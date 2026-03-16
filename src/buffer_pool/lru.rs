@@ -101,21 +101,17 @@ where
   //   Some(self.get_bucket(key, hash, hasher)?.get_value_mut())
   // }
 
-  // pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>
-  // where
-  //   K: Borrow<Q>,
-  //   Q: Hash + Eq,
-  // {
-  //   if let Some(bucket) = self.new_entries.get(hash, equivalent(key)) {
-  //     return Some(unsafe { bucket.as_ref() }.get_value());
-  //   }
-
-  //   let bucket = match self.old_entries.get(hash, equivalent(key)) {
-  //     Some(b) => b,
-  //     None => return None,
-  //   };
-  //   Some(unsafe { bucket.as_ref() }.get_value())
-  // }
+  pub fn peek<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<&V>
+  where
+    K: Borrow<Q>,
+    Q: Hash + Eq,
+  {
+    self
+      .new_entries
+      .get(hash, equivalent(key))
+      .or_else(|| self.old_entries.get(hash, equivalent(key)))
+      .map(|bucket| bucket.borrow_unsafe().get_value())
+  }
 
   fn rebalance<S>(&mut self, hasher: &S)
   where
