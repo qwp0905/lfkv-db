@@ -15,7 +15,14 @@ use tempfile::TempDir;
 
 const KEY_SIZE: usize = 16;
 const VALUE_SIZE: usize = 256;
-const RECORD_COUNT: usize = 500_000;
+const DEFAULT_RECORD_COUNT: usize = 500_000;
+
+fn record_count() -> usize {
+  std::env::var("YCSB_RECORD_COUNT")
+    .ok()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(DEFAULT_RECORD_COUNT)
+}
 const OP_COUNT: usize = 150_000;
 const THREADS: usize = 128;
 const SCAN_LENGTH: usize = 100;
@@ -124,20 +131,21 @@ fn spawn_workers(
   (tx, c, threads)
 }
 
-fn zipfian_index(rng: &mut impl Rng, zipf: &Zipf<f64>) -> usize {
+fn zipfian_index(rng: &mut impl Rng, zipf: &Zipf<f64>, record_count: usize) -> usize {
   let sample: f64 = zipf.sample(rng);
-  (sample as usize).saturating_sub(1).min(RECORD_COUNT - 1)
+  (sample as usize).saturating_sub(1).min(record_count - 1)
 }
 
 /// Workload A: 50% read, 50% update (write-heavy, session store)
 fn bench_ycsb_a(c: &mut Criterion) {
+  let record_count = record_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_load(dir.path(), RECORD_COUNT);
+  pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let zipf = Zipf::new(record_count as u64, ZIPF_EXPONENT).unwrap();
   let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-a");
@@ -149,7 +157,7 @@ fn bench_ycsb_a(c: &mut Criterion) {
       b.iter(|| {
         counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(rng, &zipf);
+          let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
             Op::Get(key)
@@ -169,13 +177,14 @@ fn bench_ycsb_a(c: &mut Criterion) {
 
 /// Workload B: 95% read, 5% update (read-heavy, typical web app)
 fn bench_ycsb_b(c: &mut Criterion) {
+  let record_count = record_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_load(dir.path(), RECORD_COUNT);
+  pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let zipf = Zipf::new(record_count as u64, ZIPF_EXPONENT).unwrap();
   let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-b");
@@ -187,7 +196,7 @@ fn bench_ycsb_b(c: &mut Criterion) {
       b.iter(|| {
         counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(rng, &zipf);
+          let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.95) {
             Op::Get(key)
@@ -207,13 +216,14 @@ fn bench_ycsb_b(c: &mut Criterion) {
 
 /// Workload D: 95% read, 5% insert (read latest, timeline/feed)
 fn bench_ycsb_d(c: &mut Criterion) {
+  let record_count = record_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_load(dir.path(), RECORD_COUNT);
+  pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let insert_counter = AtomicUsize::new(RECORD_COUNT);
+  let insert_counter = AtomicUsize::new(record_count);
   let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-d");
@@ -246,14 +256,15 @@ fn bench_ycsb_d(c: &mut Criterion) {
 
 /// Workload E: 95% scan, 5% insert (range query heavy, analytics)
 fn bench_ycsb_e(c: &mut Criterion) {
+  let record_count = record_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_load(dir.path(), RECORD_COUNT);
+  pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
-  let insert_counter = AtomicUsize::new(RECORD_COUNT);
+  let zipf = Zipf::new(record_count as u64, ZIPF_EXPONENT).unwrap();
+  let insert_counter = AtomicUsize::new(record_count);
   let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-e");
@@ -266,9 +277,9 @@ fn bench_ycsb_e(c: &mut Criterion) {
         counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
           let op = if rng.gen_bool(0.95) {
-            let idx = zipfian_index(rng, &zipf);
+            let idx = zipfian_index(rng, &zipf, record_count);
             let start = make_key(idx);
-            let end = make_key((idx + SCAN_LENGTH).min(RECORD_COUNT - 1));
+            let end = make_key((idx + SCAN_LENGTH).min(record_count - 1));
             Op::Scan(start, end)
           } else {
             let idx = insert_counter.fetch_add(1, Ordering::Relaxed);
@@ -287,13 +298,14 @@ fn bench_ycsb_e(c: &mut Criterion) {
 
 /// Workload F: 50% read, 50% read-modify-write (transactional, account balance)
 fn bench_ycsb_f(c: &mut Criterion) {
+  let record_count = record_count();
   let dir = TempDir::new_in(".").expect("dir failed.");
-  pre_load(dir.path(), RECORD_COUNT);
+  pre_load(dir.path(), record_count);
 
   let engine = Arc::new(build(dir.path()).build().expect("bootstrap error"));
   let (t, r) = unbounded();
   let (tx, counter, threads) = spawn_workers(engine.clone(), THREADS, &t);
-  let zipf = Zipf::new(RECORD_COUNT as u64, ZIPF_EXPONENT).unwrap();
+  let zipf = Zipf::new(record_count as u64, ZIPF_EXPONENT).unwrap();
   let rng = &mut rand::thread_rng();
 
   let mut group = c.benchmark_group("ycsb-f");
@@ -305,7 +317,7 @@ fn bench_ycsb_f(c: &mut Criterion) {
       b.iter(|| {
         counter.store(OP_COUNT, Ordering::Release);
         for _ in 0..OP_COUNT {
-          let idx = zipfian_index(rng, &zipf);
+          let idx = zipfian_index(rng, &zipf, record_count);
           let key = make_key(idx);
           let op = if rng.gen_bool(0.50) {
             Op::Get(key)

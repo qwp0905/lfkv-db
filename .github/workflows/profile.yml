@@ -11,6 +11,14 @@ on:
         description: "Benchmark filter (e.g. ycsb-a)"
         required: false
         default: ""
+      sample_size:
+        description: "Criterion sample size"
+        required: false
+        default: "10"
+      record_count:
+        description: "YCSB record count for pre-loading"
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,6 +35,16 @@ jobs:
 
     - uses: actions/checkout@v4
 
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
     - name: Install perf and flamegraph
       run: |
         sudo apt-get update
@@ -36,19 +54,22 @@ jobs:
           sudo mkdir -p /usr/lib/linux-tools/`uname -r`
           sudo ln -s /usr/lib/linux-tools/$FROM_KERNEL/perf /usr/lib/linux-tools/`uname -r`/perf
         fi
-        cargo install flamegraph
+        command -v flamegraph || cargo install flamegraph
 
     - name: Allow perf for unprivileged users
       run: echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 
     - name: Run flamegraph
+      env:
+        YCSB_RECORD_COUNT: ${{ github.event.inputs.record_count }}
       run: |
         FILTER="${{ github.event.inputs.filter }}"
+        SAMPLE="${{ github.event.inputs.sample_size }}"
+        ARGS="--sample-size $SAMPLE"
         if [ -n "$FILTER" ]; then
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- --bench "$FILTER"
-        else
-          cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg
+          ARGS="$ARGS --bench $FILTER"
         fi
+        cargo flamegraph --bench ${{ github.event.inputs.bench }} -o flamegraph.svg -- $ARGS
 
     - name: Upload flamegraph
       uses: actions/upload-artifact@v4

@@ -12,8 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
     - name: Install coverage tool
-      run: cargo install cargo-llvm-cov
+      run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov
     - name: Run tests
       run: cargo test:cov
 
@@ -23,6 +32,15 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
 
     - name: Switch to main baseline
       run: git switch main
@@ -42,6 +60,15 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
 
     - name: Switch to main baseline
       run: git switch main
