@@ -5,7 +5,7 @@ use std::{
 
 use super::PageRecorder;
 use crate::{
-  buffer_pool::{BufferPool, PageSlotWrite},
+  buffer_pool::{BufferPool, WritableSlot},
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   error::Result,
   serialize::{Serializable, SerializeType},
@@ -140,7 +140,7 @@ impl FreeList {
     Ok((set, visited))
   }
 
-  pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
+  pub fn alloc(&self) -> Result<WritableSlot<'_>> {
     let mut state = self.state.l();
     if let Some(index) = state.block.list.pop() {
       let mut free_slot = self.buffer_pool.read(state.index)?.for_write();

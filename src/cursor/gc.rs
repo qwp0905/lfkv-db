@@ -167,15 +167,16 @@ fn run_main(
     if !initialized.load(Ordering::Acquire) {
       return Ok(());
     }
-    let header: TreeHeader = buffer_pool
-      .read(HEADER_INDEX)?
+
+    let mut index = buffer_pool
+      .peek(HEADER_INDEX)?
       .for_read()
       .as_ref()
-      .deserialize()?;
+      .deserialize::<TreeHeader>()?
+      .get_root();
 
-    let mut index = header.get_root();
     while let CursorNode::Internal(node) = buffer_pool
-      .read(index)?
+      .peek(index)?
       .for_read()
       .as_ref()
       .deserialize::<CursorNode>()?
@@ -188,7 +189,7 @@ fn run_main(
     while let Some(i) = index.take() {
       {
         let leaf = buffer_pool
-          .read(i)?
+          .peek(i)?
           .for_read()
           .as_ref()
           .deserialize::<CursorNode>()?
@@ -200,7 +201,7 @@ fn run_main(
           .collect::<Result>()?;
       }
 
-      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut slot = buffer_pool.peek(i)?.for_write();
       let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
       index = leaf.get_next();
 
@@ -255,7 +256,7 @@ fn run_entry(
     let mut max_found = false;
 
     while let Some(i) = index.take() {
-      let mut slot = buffer_pool.read(i)?.for_write();
+      let mut slot = buffer_pool.peek(i)?.for_write();
       let mut entry: DataEntry = slot.as_ref().deserialize()?;
 
       let prev_len = entry.len();
@@ -304,12 +305,12 @@ fn run_entry(
       }
 
       let next = match entry.get_next() {
-        Some(next) => next,
+        Some(i) => i,
         None => return recorder.serialize_and_log(0, &mut slot, &entry),
       };
 
       let next_entry: DataEntry =
-        buffer_pool.read(next)?.for_read().as_ref().deserialize()?;
+        buffer_pool.peek(next)?.for_read().as_ref().deserialize()?;
       recorder.serialize_and_log(0, &mut slot, &next_entry)?;
       index = Some(i);
 
@@ -324,7 +325,7 @@ fn run_check(buffer_pool: Arc<BufferPool>) -> impl Fn(Pointer) -> Result<bool> {
   move |pointer: Pointer| {
     Ok(
       buffer_pool
-        .read(pointer)?
+        .peek(pointer)?
         .for_read()
         .as_ref()
         .deserialize::<DataEntry>()?

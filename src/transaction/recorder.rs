@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-  buffer_pool::PageSlotWrite,
+  buffer_pool::WritableSlot,
   error::Result,
   serialize::{Serializable, SerializeFrom},
   wal::WAL,
@@ -25,7 +25,7 @@ impl PageRecorder {
   pub fn serialize_and_log<T>(
     &self,
     tx_id: usize,
-    slot: &mut PageSlotWrite<'_>,
+    slot: &mut WritableSlot<'_>,
     data: &T,
   ) -> Result
   where

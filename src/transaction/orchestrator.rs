@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::{FreeList, PageRecorder, VersionVisibility};
 
 use crate::{
-  buffer_pool::{BufferPool, BufferPoolConfig, PageSlot, PageSlotWrite},
+  buffer_pool::{BufferPool, BufferPoolConfig, Slot, WritableSlot},
   cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
   serialize::Serializable,
@@ -63,14 +63,12 @@ impl TxOrchestrator {
     .to_arc();
 
     if !replay.is_new {
-      logger.info("create initial checkpoint");
-      let log_id = wal.current_log_id();
       gc.release_orphand(disk_len)?;
       logger.info("orphand block has released successfully.");
-      gc.run()?;
-      buffer_pool.flush()?;
-      wal.checkpoint_and_flush(log_id, version_visibility.min_version())?;
-      replay.segments.into_iter().for_each(|seg| wal.reuse(seg));
+      replay
+        .segments
+        .into_iter()
+        .for_each(|seg| wal.wait_checkpoint(seg));
     }
 
     let checkpoint = WorkBuilder::new()
@@ -103,14 +101,14 @@ impl TxOrchestrator {
       replay.is_new,
     ))
   }
-  pub fn fetch(&self, index: usize) -> Result<PageSlot<'_>> {
+  pub fn fetch(&self, index: usize) -> Result<Slot<'_>> {
     self.buffer_pool.read(index)
   }
 
   pub fn serialize_and_log<T>(
     &self,
     tx_id: usize,
-    slot: &mut PageSlotWrite<'_>,
+    slot: &mut WritableSlot<'_>,
     data: &T,
   ) -> Result
   where
@@ -119,7 +117,7 @@ impl TxOrchestrator {
     self.recorder.serialize_and_log(tx_id, slot, data)
   }
 
-  pub fn alloc(&self) -> Result<PageSlotWrite<'_>> {
+  pub fn alloc(&self) -> Result<WritableSlot<'_>> {
     self.free_list.alloc()
   }
 

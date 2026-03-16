@@ -349,8 +349,8 @@ impl WAL {
     }
   }
 
-  pub fn reuse(&self, segment: WALSegment) {
-    self.preloader.reuse(segment);
+  pub fn wait_checkpoint(&self, segment: WALSegment) {
+    let _ = self.wait_checkpoint.send(segment);
   }
 }
 unsafe impl Send for WAL {}
