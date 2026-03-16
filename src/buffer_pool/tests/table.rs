@@ -329,3 +329,82 @@ fn test_concurrent_acquire_waits_for_evicted_index() {
   let state = hit(&table, evicted);
   state.unpin();
 }
+
+#[test]
+fn test_peek_or_temp_creates_temp_when_not_in_lru() {
+  let table = make_table(1, 4);
+
+  match table.peek_or_temp(42) {
+    Ok(_) => panic!("should return TempGuard"),
+    Err(guard) => {
+      let (state, shard) = guard.take();
+      state.completion_evict(1);
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+  }
+}
+
+#[test]
+fn test_peek_or_temp_returns_lru_entry_without_promotion() {
+  let table = make_table(1, 4);
+
+  miss(&table, 10).commit();
+  let state = hit(&table, 10);
+  state.unpin();
+  state.unpin();
+
+  match table.peek_or_temp(10) {
+    Ok(state) => state.unpin(),
+    Err(_) => panic!("should return FrameState from LRU"),
+  }
+}
+
+#[test]
+fn test_acquire_hits_temp_page() {
+  let table = make_table(1, 4);
+
+  // create temp page via peek_or_temp
+  let guard = match table.peek_or_temp(42) {
+    Err(g) => g,
+    Ok(_) => panic!("should create temp"),
+  };
+  let (state, _) = guard.take();
+  state.completion_evict(1);
+
+  // acquire same index — should hit temp
+  match table.acquire(42) {
+    Acquired::Temp(temp) => {
+      let (state, shard) = temp.take();
+      state.unpin();
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+    _ => panic!("expected Acquired::Temp for index 42"),
+  };
+}
+
+#[test]
+fn test_remove_temp_then_peek_creates_new_temp() {
+  let table = make_table(1, 4);
+
+  // create and remove temp
+  let (state, shard) = match table.peek_or_temp(42) {
+    Err(g) => g.take(),
+    Ok(_) => panic!("should create temp"),
+  };
+  state.completion_evict(1);
+  state.unpin();
+  shard.l().remove_temp(42);
+
+  // peek again — should create new temp
+  match table.peek_or_temp(42) {
+    Err(guard) => {
+      let (state, shard) = guard.take();
+      state.completion_evict(1);
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+    Ok(_) => panic!("should create new TempGuard"),
+  }
+}
