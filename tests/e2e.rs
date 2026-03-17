@@ -23,6 +23,7 @@ fn build_engine(dir: &TempDir) -> Engine {
     .buffer_pool_shard_count(1 << 2)
     .group_commit_delay(Duration::from_millis(1))
     .group_commit_count(10)
+    .gc_trigger_interval(Duration::from_secs(10))
     .logger(TestLogger)
     .log_level(LogLevel::Trace)
     .build()
