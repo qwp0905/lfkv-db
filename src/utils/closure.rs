@@ -6,7 +6,7 @@ pub trait SafeCallable<T, R> {
 }
 impl<T, R, F> SafeCallable<T, R> for F
 where
-  T: UnwindSafe + 'static,
+  T: UnwindSafe,
   F: Fn(T) -> R + RefUnwindSafe,
 {
   type Error = Box<dyn std::any::Any + Send>;
@@ -23,7 +23,7 @@ pub trait SafeCallableMut<T, R> {
 }
 impl<T, R, F> SafeCallableMut<T, R> for F
 where
-  T: UnwindSafe + 'static,
+  T: UnwindSafe,
   F: FnMut(T) -> R + RefUnwindSafe,
 {
   type Error = Box<dyn std::any::Any + Send>;

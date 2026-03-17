@@ -56,7 +56,11 @@ where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
-  pub fn new<S: ToString>(name: S, size: usize, mut work: SafeWork<T, R>) -> Self {
+  pub fn new<S: ToString>(
+    name: S,
+    size: usize,
+    mut work: SafeWork<'static, T, R>,
+  ) -> Self {
     let (channel, rx) = unbounded();
     let th = Builder::new()
       .name(name.to_string())
@@ -72,7 +76,7 @@ where
   pub fn from_channel<S: ToString>(
     name: S,
     size: usize,
-    mut work: SafeWork<T, R>,
+    mut work: SafeWork<'static, T, R>,
     mut input: SingleWorkInput<T, R>,
   ) -> Result<Self> {
     let rx = match input.receiver.take() {

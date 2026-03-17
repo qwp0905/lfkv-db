@@ -51,7 +51,7 @@ fn worker_loop<T, R>(
   local: Worker<Context<T, R>>,
   global: Arc<Injector<Context<T, R>>>,
   stealers: Arc<Vec<Stealer<Context<T, R>>>>,
-  work: SharedFn<T, R>,
+  work: SharedFn<'static, T, R>,
 ) -> impl Fn()
 where
   T: Send + UnwindSafe + 'static,
