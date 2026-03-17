@@ -5,7 +5,10 @@ use std::{
   thread::{Builder, JoinHandle},
 };
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::{
+  channel::{unbounded, Receiver, Sender, TryRecvError},
+  utils::Backoff,
+};
 
 use crate::{
   error::Result,
@@ -19,9 +22,22 @@ where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
+  let backoff = Backoff::new();
   move || {
-    while let Ok(Context::Work(data, done)) = receiver.recv() {
-      done.fulfill(work.call(data));
+    while let Ok(Context::Work(v, done)) = receiver.recv() {
+      done.fulfill(work.call(v));
+
+      backoff.reset();
+      while !backoff.is_completed() {
+        match receiver.try_recv() {
+          Ok(Context::Work(v, done)) => {
+            done.fulfill(work.call(v));
+            backoff.reset();
+          }
+          Ok(Context::Term) | Err(TryRecvError::Disconnected) => return,
+          Err(TryRecvError::Empty) => backoff.snooze(),
+        }
+      }
     }
   }
 }
