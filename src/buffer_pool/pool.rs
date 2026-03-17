@@ -3,7 +3,7 @@ use std::{
   sync::{Arc, RwLock},
 };
 
-use super::{Acquired, Frame, LRUTable, Slot};
+use super::{Acquired, Frame, LRUTable, Peeked, Slot};
 use crate::{
   disk::{DiskController, DiskControllerConfig, PagePool, PAGE_SIZE},
   error::Result,
@@ -48,11 +48,15 @@ impl BufferPool {
 
   pub fn peek(&self, index: usize) -> Result<Slot<'_>> {
     let (state, shard) = match self.table.peek_or_temp(index) {
-      Ok(state) => {
+      Peeked::Hit(state) => {
         let id = state.get_frame_id();
         return Ok(Slot::page(&self.frame[id], &self.dirty, state));
       }
-      Err(temp) => temp.take(),
+      Peeked::Temp(temp) => {
+        let (state, shard) = temp.take();
+        return Ok(Slot::temp(state, index, &self.disk, shard, false));
+      }
+      Peeked::DiskRead(temp) => temp.take(),
     };
     let page = match self.disk.read(index) {
       Ok(p) => p,
