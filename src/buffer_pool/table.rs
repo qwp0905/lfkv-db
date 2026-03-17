@@ -108,6 +108,11 @@ pub enum Acquired<'a> {
   Hit(Arc<FrameState>),
   Evicted(EvictionGuard<'a>),
 }
+pub enum Peeked<'a> {
+  Hit(Arc<FrameState>),
+  Temp(TempGuard<'a>),
+  DiskRead(TempGuard<'a>),
+}
 
 pub struct LRUTable {
   shards: Vec<Mutex<Shard>>,
@@ -149,10 +154,7 @@ impl LRUTable {
     (h, shard, offset)
   }
 
-  pub fn peek_or_temp<'a>(
-    &'a self,
-    index: usize,
-  ) -> std::result::Result<Arc<FrameState>, TempGuard<'a>> {
+  pub fn peek_or_temp<'a>(&'a self, index: usize) -> Peeked<'a> {
     let (hash, s, _) = self.get_shard(index);
     let backoff = Backoff::new();
 
@@ -166,7 +168,7 @@ impl LRUTable {
 
       if let Some(state) = shard.temporary.get(&index) {
         if state.try_pin() {
-          return Err(TempGuard::new(state.clone(), s));
+          return Peeked::Temp(TempGuard::new(state.clone(), s));
         }
 
         drop(shard);
@@ -176,7 +178,7 @@ impl LRUTable {
 
       if let Some(state) = shard.lru.peek(&index, hash) {
         if state.try_pin() {
-          return Ok(state.clone());
+          return Peeked::Hit(state.clone());
         }
 
         drop(shard);
@@ -191,7 +193,7 @@ impl LRUTable {
         .get()
         .clone();
 
-      return Err(TempGuard::new(state, s));
+      return Peeked::DiskRead(TempGuard::new(state, s));
     }
   }
 

@@ -302,6 +302,7 @@ impl Cursor {
       }
     }
 
+    self.orchestrator.mark_gc(entry_index);
     let version = self.orchestrator.current_version();
     let record = VersionRecord::new(self.tx_id, version, data);
 

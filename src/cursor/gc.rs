@@ -15,7 +15,7 @@ use crate::{
   error::Result,
   thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
   transaction::{FreeList, PageRecorder, VersionVisibility},
-  utils::ToArc,
+  utils::{DoubleBuffer, LogFilter, ToArc},
 };
 
 pub struct GarbageCollectionConfig {
@@ -23,18 +23,56 @@ pub struct GarbageCollectionConfig {
   pub thread_count: usize,
 }
 
+enum GcPointer {
+  Trim(Pointer),    // release without head of data entry.
+  Release(Pointer), // release head of data entry lazyly.
+}
+
 pub struct GarbageCollector {
-  main: SingleWorkThread<(), Result>,
+  clean_leaf: SingleWorkThread<(), Result>,
   check: Arc<SharedWorkThread<Pointer, Result<bool>>>,
   entry: Arc<SharedWorkThread<Pointer, Result>>,
   release: Arc<SharedWorkThread<Pointer, Result>>,
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
   initialized: Arc<AtomicBool>,
+  queue: Arc<DoubleBuffer<GcPointer>>,
+  logger: LogFilter,
 }
 impl GarbageCollector {
   pub fn run(&self) -> Result {
-    self.main.send_await(())?
+    let queue = self.queue.switch();
+    self.logger.debug(format!(
+      "{} data will check version in this scope.",
+      queue.len()
+    ));
+    let mut waiting = Vec::new();
+    let mut release = Vec::new();
+    let mut dedup = HashSet::new();
+    while let Some(ptr) = queue.pop() {
+      match ptr {
+        GcPointer::Trim(ptr) => {
+          if !dedup.insert(ptr) {
+            continue;
+          }
+          waiting.push(self.entry.send(ptr));
+        }
+        GcPointer::Release(ptr) => release.push(ptr),
+      }
+    }
+    self.logger.debug("all entry cleaning triggered.");
+
+    waiting
+      .into_iter()
+      .map(|v| v.wait_flatten())
+      .collect::<Result>()?;
+    self.logger.debug("unreachable versions all collected.");
+    self.release.send_batch(release.into_iter());
+    Ok(())
+  }
+
+  pub fn mark(&self, pointer: Pointer) {
+    self.queue.push(GcPointer::Trim(pointer))
   }
 
   pub fn start(
@@ -42,9 +80,11 @@ impl GarbageCollector {
     version_visibility: Arc<VersionVisibility>,
     free_list: Arc<FreeList>,
     recorder: Arc<PageRecorder>,
+    logger: LogFilter,
     config: GarbageCollectionConfig,
   ) -> Self {
     let initialized = AtomicBool::new(false).to_arc();
+    let queue = DoubleBuffer::new().to_arc();
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
@@ -57,7 +97,7 @@ impl GarbageCollector {
       .shared(config.thread_count)
       .build_unchecked(run_entry(
         buffer_pool.clone(),
-        version_visibility.clone(),
+        version_visibility,
         recorder.clone(),
         release.clone(),
       ))
@@ -68,30 +108,32 @@ impl GarbageCollector {
       .shared(config.thread_count)
       .build_unchecked(run_check(buffer_pool.clone()))
       .to_arc();
-    let main = WorkBuilder::new()
-      .name("gc main")
+    let clean_leaf = WorkBuilder::new()
+      .name("gc clean leaf")
       .stack_size(2 << 20)
       .single()
       .with_timeout(
         config.interval,
-        run_main(
+        run_clean_leaf(
           buffer_pool.clone(),
-          version_visibility.clone(),
           recorder.clone(),
-          entry.clone(),
           check.clone(),
-          release.clone(),
+          queue.clone(),
           initialized.clone(),
+          logger.clone(),
         ),
       );
+
     Self {
-      main,
+      clean_leaf,
       check,
       entry,
       release,
       buffer_pool,
       free_list,
       initialized,
+      queue,
+      logger,
     }
   }
 
@@ -124,6 +166,15 @@ impl GarbageCollector {
       };
     }
 
+    // push to queue for initial checkpoint
+    for &pointer in entry_stack.iter() {
+      self.queue.push(GcPointer::Trim(pointer));
+    }
+    self.logger.debug(format!(
+      "{} entry queued for initial gc.",
+      entry_stack.len()
+    ));
+
     while let Some(index) = entry_stack.pop() {
       visited.insert(index);
       let entry: DataEntry = self
@@ -147,26 +198,28 @@ impl GarbageCollector {
   }
 
   pub fn close(&self) {
-    self.main.close();
+    self.clean_leaf.close();
     self.check.close();
     self.entry.close();
     self.release.close();
   }
 }
 
-fn run_main(
+fn run_clean_leaf(
   buffer_pool: Arc<BufferPool>,
-  version_visibility: Arc<VersionVisibility>,
   recorder: Arc<PageRecorder>,
-  entry_c: Arc<SharedWorkThread<Pointer, Result>>,
   check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
-  release_c: Arc<SharedWorkThread<Pointer, Result>>,
+  queue: Arc<DoubleBuffer<GcPointer>>,
   initialized: Arc<AtomicBool>,
+  logger: LogFilter,
 ) -> impl Fn(Option<()>) -> Result {
   move |_| {
     if !initialized.load(Ordering::Acquire) {
+      logger.debug("gc not ready for clean leaf nodes.");
       return Ok(());
     }
+
+    logger.debug("clean leaf collect start.");
 
     let mut index = buffer_pool
       .peek(HEADER_INDEX)?
@@ -184,7 +237,6 @@ fn run_main(
       index = node.first_child()
     }
 
-    let min_version = version_visibility.min_version();
     let mut index = Some(index);
     while let Some(i) = index.take() {
       {
@@ -194,11 +246,15 @@ fn run_main(
           .as_ref()
           .deserialize::<CursorNode>()?
           .as_leaf()?;
-        entry_c
+        if !check_c
           .send_batch(leaf.get_entry_pointers())
           .wait()?
           .into_iter()
-          .collect::<Result>()?;
+          .fold(Ok(false), |a, c| a.and_then(|a| c.map(|c| a || c)))?
+        {
+          index = leaf.get_next();
+          continue;
+        }
       }
 
       let mut slot = buffer_pool.peek(i)?.for_write();
@@ -229,10 +285,13 @@ fn run_main(
       recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
       drop(slot);
 
-      orphand.into_iter().for_each(|p| release_c.send_no_wait(p))
+      orphand
+        .into_iter()
+        .map(GcPointer::Release)
+        .for_each(|p| queue.push(p));
     }
 
-    version_visibility.remove_aborted(&min_version);
+    logger.debug("clean leaf collect end.");
     Ok(())
   }
 }

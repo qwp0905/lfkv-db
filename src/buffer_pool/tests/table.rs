@@ -335,8 +335,9 @@ fn test_peek_or_temp_creates_temp_when_not_in_lru() {
   let table = make_table(1, 4);
 
   match table.peek_or_temp(42) {
-    Ok(_) => panic!("should return TempGuard"),
-    Err(guard) => {
+    Peeked::Hit(_) => panic!("should return TempGuard"),
+    Peeked::Temp(_) => panic!("should return TempGuard"),
+    Peeked::DiskRead(guard) => {
       let (state, shard) = guard.take();
       state.completion_evict(1);
       state.unpin();
@@ -355,8 +356,8 @@ fn test_peek_or_temp_returns_lru_entry_without_promotion() {
   state.unpin();
 
   match table.peek_or_temp(10) {
-    Ok(state) => state.unpin(),
-    Err(_) => panic!("should return FrameState from LRU"),
+    Peeked::Hit(state) => state.unpin(),
+    _ => panic!("should return Hit from LRU"),
   }
 }
 
@@ -366,8 +367,8 @@ fn test_acquire_hits_temp_page() {
 
   // create temp page via peek_or_temp
   let guard = match table.peek_or_temp(42) {
-    Err(g) => g,
-    Ok(_) => panic!("should create temp"),
+    Peeked::DiskRead(g) => g,
+    _ => panic!("should create temp via DiskRead"),
   };
   let (state, _) = guard.take();
   state.completion_evict(1);
@@ -390,21 +391,46 @@ fn test_remove_temp_then_peek_creates_new_temp() {
 
   // create and remove temp
   let (state, shard) = match table.peek_or_temp(42) {
-    Err(g) => g.take(),
-    Ok(_) => panic!("should create temp"),
+    Peeked::DiskRead(g) => g.take(),
+    _ => panic!("should create temp via DiskRead"),
   };
   state.completion_evict(1);
   state.unpin();
   shard.l().remove_temp(42);
 
-  // peek again — should create new temp
+  // peek again — should create new temp (DiskRead)
   match table.peek_or_temp(42) {
-    Err(guard) => {
+    Peeked::DiskRead(guard) => {
       let (state, shard) = guard.take();
       state.completion_evict(1);
       state.unpin();
       shard.l().remove_temp(42);
     }
-    Ok(_) => panic!("should create new TempGuard"),
+    _ => panic!("should create new DiskRead"),
+  }
+}
+
+#[test]
+fn test_peek_or_temp_returns_existing_temp() {
+  let table = make_table(1, 4);
+
+  // create temp page
+  let guard = match table.peek_or_temp(42) {
+    Peeked::DiskRead(g) => g,
+    _ => panic!("should create temp via DiskRead"),
+  };
+  let (state, _) = guard.take();
+  state.completion_evict(1);
+
+  // peek same index — should return existing temp (not DiskRead)
+  match table.peek_or_temp(42) {
+    Peeked::Temp(guard) => {
+      let (state, shard) = guard.take();
+      state.unpin();
+      state.unpin();
+      shard.l().remove_temp(42);
+    }
+    Peeked::DiskRead(_) => panic!("should return existing Temp, not DiskRead"),
+    Peeked::Hit(_) => panic!("should return existing Temp, not Hit"),
   }
 }
