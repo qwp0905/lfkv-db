@@ -17,13 +17,13 @@ pub enum Context<T, R> {
   Term,
 }
 
-pub struct SharedFn<T, R>(Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>);
-impl<T, R> SharedFn<T, R>
+pub struct SharedFn<'a, T, R>(Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync + 'a>);
+impl<'a, T, R> SharedFn<'a, T, R>
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
-  pub fn new(f: Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync>) -> Self {
+  pub fn new(f: Arc<dyn Fn(T) -> R + RefUnwindSafe + Send + Sync + 'a>) -> Self {
     Self(f)
   }
   #[inline]
@@ -32,15 +32,15 @@ where
   }
 }
 
-pub struct SingleFn<T, R>(Box<dyn FnMut(T) -> R + RefUnwindSafe + Send + Sync>);
-impl<T, R> SingleFn<T, R>
+pub struct SingleFn<'a, T, R>(Box<dyn FnMut(T) -> R + RefUnwindSafe + Send + Sync + 'a>);
+impl<'a, T, R> SingleFn<'a, T, R>
 where
-  T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
+  T: Send + UnwindSafe,
+  R: Send,
 {
   pub fn new<F>(f: F) -> Self
   where
-    F: FnMut(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+    F: FnMut(T) -> R + RefUnwindSafe + Send + Sync + 'a,
   {
     Self(Box::new(f))
   }
@@ -51,15 +51,20 @@ where
   }
 }
 
-pub enum SafeWork<T, R> {
+pub enum SafeWork<'a, T, R> {
   // NoTimeout(SingleFn<T, R>),
-  WithTimeout(Duration, SingleFn<Option<T>, R>),
-  Buffering(Duration, usize, SingleFn<(T, bool), R>, SingleFn<(), bool>),
+  WithTimeout(Duration, SingleFn<'a, Option<T>, R>),
+  Buffering(
+    Duration,
+    usize,
+    SingleFn<'a, (T, bool), R>,
+    SingleFn<'a, (), bool>,
+  ),
 }
-impl<T, R> SafeWork<T, R>
+impl<'a, T, R> SafeWork<'a, T, R>
 where
-  T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
+  T: Send + UnwindSafe,
+  R: Send,
 {
   // pub fn no_timeout<F>(f: F) -> Self
   // where
@@ -69,15 +74,15 @@ where
   // }
   pub fn with_timeout<F>(timeout: Duration, f: F) -> Self
   where
-    F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'a,
   {
     SafeWork::WithTimeout(timeout, SingleFn::new(f))
   }
 
   pub fn buffering<F, E>(timeout: Duration, count: usize, each: F, before_each: E) -> Self
   where
-    F: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
-    E: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
+    F: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'a,
+    E: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'a,
   {
     SafeWork::Buffering(
       timeout,
@@ -87,10 +92,10 @@ where
     )
   }
 }
-impl<T, R> SafeWork<T, R>
+impl<'a, T, R> SafeWork<'a, T, R>
 where
-  T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
+  T: Send + UnwindSafe + 'a,
+  R: Send + 'a,
 {
   pub fn run(&mut self, rx: Receiver<Context<T, R>>) {
     match self {

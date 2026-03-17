@@ -17,7 +17,10 @@ use crate::{
 
 use super::{oneshot, BatchWorkResult, Context, SharedFn, WorkResult};
 
-fn worker_loop<T, R>(receiver: Receiver<Context<T, R>>, work: SharedFn<T, R>) -> impl Fn()
+fn worker_loop<T, R>(
+  receiver: Receiver<Context<T, R>>,
+  work: SharedFn<'static, T, R>,
+) -> impl Fn()
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
