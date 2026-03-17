@@ -5,7 +5,9 @@ use std::{
 
 use crate::Result;
 
-use super::{SafeWork, SharedWorkThread, SingleWorkInput, SingleWorkThread};
+use super::{
+  SafeWork, SharedWorkThread, SingleWorkInput, SingleWorkThread, StealingWorkThread,
+};
 
 pub struct WorkBuilder {
   name: String,
@@ -35,6 +37,12 @@ impl WorkBuilder {
   pub fn single(self) -> SafeWorkBuilder {
     SafeWorkBuilder { builder: self }
   }
+  pub fn stealing(self, count: usize) -> StealingWorkBuilder {
+    StealingWorkBuilder {
+      builder: self,
+      count,
+    }
+  }
 }
 
 pub struct SharedWorkBuilder {
@@ -42,23 +50,23 @@ pub struct SharedWorkBuilder {
   count: usize,
 }
 impl SharedWorkBuilder {
-  pub fn build<T, R, F, E, W>(
-    self,
-    build: F,
-  ) -> std::result::Result<SharedWorkThread<T, R>, E>
-  where
-    T: Send + UnwindSafe + 'static,
-    R: Send + 'static,
-    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-    F: Fn(usize) -> std::result::Result<W, E>,
-  {
-    SharedWorkThread::build(
-      self.builder.name,
-      self.builder.stack_size,
-      self.count,
-      build,
-    )
-  }
+  // pub fn build<T, R, F, E, W>(
+  //   self,
+  //   build: F,
+  // ) -> std::result::Result<SharedWorkThread<T, R>, E>
+  // where
+  //   T: Send + UnwindSafe + 'static,
+  //   R: Send + 'static,
+  //   W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+  //   F: Fn(usize) -> std::result::Result<W, E>,
+  // {
+  //   SharedWorkThread::build(
+  //     self.builder.name,
+  //     self.builder.stack_size,
+  //     self.count,
+  //     build,
+  //   )
+  // }
 
   pub fn build_unchecked<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
   where
@@ -73,6 +81,44 @@ impl SharedWorkBuilder {
       build,
     )
   }
+}
+
+pub struct StealingWorkBuilder {
+  builder: WorkBuilder,
+  count: usize,
+}
+impl StealingWorkBuilder {
+  pub fn build<T, R, F, E, W>(
+    self,
+    build: F,
+  ) -> std::result::Result<StealingWorkThread<T, R>, E>
+  where
+    T: Send + UnwindSafe + 'static,
+    R: Send + 'static,
+    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+    F: Fn(usize) -> std::result::Result<W, E>,
+  {
+    StealingWorkThread::build(
+      self.builder.name,
+      self.builder.stack_size,
+      self.count,
+      build,
+    )
+  }
+
+  // pub fn build_unchecked<T, R, F>(self, build: F) -> StealingWorkThread<T, R>
+  // where
+  //   T: Send + UnwindSafe + 'static,
+  //   R: Send + 'static,
+  //   F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+  // {
+  //   StealingWorkThread::new(
+  //     self.builder.name,
+  //     self.builder.stack_size,
+  //     self.count,
+  //     build,
+  //   )
+  // }
 }
 pub struct SafeWorkBuilder {
   builder: WorkBuilder,

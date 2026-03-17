@@ -58,6 +58,7 @@ impl TxOrchestrator {
       version_visibility.clone(),
       free_list.clone(),
       recorder.clone(),
+      logger.clone(),
       gc_config,
     )
     .to_arc();
@@ -119,6 +120,10 @@ impl TxOrchestrator {
 
   pub fn alloc(&self) -> Result<WritableSlot<'_>> {
     self.free_list.alloc()
+  }
+
+  pub fn mark_gc(&self, index: usize) {
+    self.gc.mark(index);
   }
 
   pub fn start_tx(&self) -> Result<usize> {
@@ -183,9 +188,15 @@ fn run_checkpoint(
   logger: &LogFilter,
 ) -> Result {
   let log_id = wal.current_log_id();
-  logger.debug(format!("checkpoint trigger id {log_id}"));
+  let min_version = version.min_version();
+  logger.debug(format!(
+    "checkpoint trigger id {log_id} version {min_version}"
+  ));
+
   gc.run()?;
+  version.remove_aborted(&min_version);
   logger.debug(format!("checkpoint garbage collected id {log_id}"));
+
   buffer_pool.flush()?;
   wal.checkpoint_and_flush(log_id, version.min_version())?;
   logger.debug(format!("checkpoint complete id {log_id}"));

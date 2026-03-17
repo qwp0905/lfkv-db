@@ -1,7 +1,6 @@
-
 use super::*;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -22,13 +21,13 @@ fn test_shared_work_thread_with_timeout() {
   let thread = SingleWorkThread::new("test-timeout", DEFAULT_STACK_SIZE, work);
 
   // Send a task
-  thread.send_await(5).unwrap();
+  thread.send(5).wait().unwrap();
 
   // Wait a bit to trigger timeout
   thread::sleep(Duration::from_millis(1000));
 
   // Send another task
-  thread.send_await(7).unwrap();
+  thread.send(7).wait().unwrap();
 
   // Check final counter value
   // timeout should called
@@ -52,12 +51,12 @@ fn test_panic_handling() {
   let thread = SingleWorkThread::new("test-panic", DEFAULT_STACK_SIZE, work);
 
   // Normal case
-  let result = thread.send_await(10);
+  let result = thread.send(10).wait();
   assert!(result.is_ok());
   assert_eq!(result.unwrap(), 20);
 
   // Panic-inducing case
-  let result = thread.send_await(-5);
+  let result = thread.send(-5).wait();
   assert!(result.is_err());
   if let Err(Error::Panic(_)) = result {
     // Panic was converted to Error::Panic as expected

@@ -30,7 +30,7 @@ impl<T, R> SingleWorkInput<T, R> {
   pub fn send(&self, v: T) -> WorkResult<R> {
     let (done_r, done_t) = oneshot();
     if let Err(TrySendError::Disconnected(_)) =
-      self.sender.try_send(Context::Work((v, done_t)))
+      self.sender.try_send(Context::Work(v, done_t))
     {
       drop(done_r);
       let (done_r, done_t) = oneshot();
@@ -94,7 +94,7 @@ where
   pub fn send(&self, v: T) -> WorkResult<R> {
     let (done_r, done_t) = oneshot();
     if let Err(TrySendError::Disconnected(_)) =
-      self.channel.try_send(Context::Work((v, done_t)))
+      self.channel.try_send(Context::Work(v, done_t))
     {
       drop(done_r);
       let (done_r, done_t) = oneshot();
@@ -102,10 +102,6 @@ where
       return WorkResult::from(done_r);
     }
     WorkResult::from(done_r)
-  }
-
-  pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
   }
 
   pub fn close(&self) {

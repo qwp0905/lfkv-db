@@ -7,7 +7,7 @@ use std::time::Duration;
 const DEFAULT_STACK_SIZE: usize = 64 << 10;
 
 #[test]
-fn test_shared_work_thread_no_timeout() {
+fn test_no_timeout() {
   let m: Arc<Mutex<usize>> = Default::default();
   let mc = m.clone();
   let c = AtomicUsize::new(0);
