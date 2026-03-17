@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub enum Context<T, R> {
-  Work((T, OneshotFulfill<Result<R>>)),
+  Work(T, OneshotFulfill<Result<R>>),
   Term,
 }
 
@@ -101,7 +101,7 @@ where
       // }
       SafeWork::WithTimeout(timeout, work) => loop {
         match rx.recv_timeout(*timeout) {
-          Ok(Context::Work((v, done))) => done.fulfill(work.call(Some(v))),
+          Ok(Context::Work(v, done)) => done.fulfill(work.call(Some(v))),
           Err(RecvTimeoutError::Timeout) => {
             let _ = work.call(None);
           }
@@ -119,7 +119,7 @@ where
         };
         loop {
           match rx.recv_timeout(timer.get_remain()) {
-            Ok(Context::Work((v, done))) => {
+            Ok(Context::Work(v, done)) => {
               buffer.push((v, done));
               if buffer.len() < *count {
                 timer.check();
