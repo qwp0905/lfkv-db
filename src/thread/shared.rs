@@ -1,90 +1,38 @@
 use std::{
-  hint::spin_loop,
+  cell::UnsafeCell,
   panic::{RefUnwindSafe, UnwindSafe},
-  sync::{Arc, Mutex},
-  thread::{park_timeout, yield_now, Builder, JoinHandle},
-  time::Duration,
+  sync::Arc,
+  thread::{Builder, JoinHandle},
 };
 
-use crossbeam::deque::{Injector, Stealer, Worker};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use crate::{
   error::Result,
-  utils::{ShortenedMutex, ToArc},
+  utils::{ToArc, UnsafeBorrowMut, UnwrappedSender},
 };
 
 use super::{oneshot, BatchWorkResult, Context, SharedFn, WorkResult};
 
-fn pop_or_steal<A>(
-  local: &Worker<A>,
-  global: &Injector<A>,
-  stealers: &Vec<Stealer<A>>,
-) -> Option<A> {
-  if let Some(task) = local.pop() {
-    return Some(task);
-  }
-  if let Some(task) = global.steal_batch_and_pop(local).success() {
-    return Some(task);
-  }
-
-  for stealer in stealers.iter() {
-    if let Some(task) = stealer.steal().success() {
-      return Some(task);
-    }
-  }
-  None
-}
-
-const THREAD_PARK_TIMEOUT: Duration = Duration::from_micros(100);
-const YIELD_LIMIT: u8 = 16;
-const SPIN_LIMIT: u8 = 8;
-
-fn return_task<A>(global: &Injector<A>, local: &Worker<A>) {
-  while let Some(v) = local.pop() {
-    global.push(v);
-  }
-}
-
-fn worker_loop<T, R>(
-  local: Worker<Context<T, R>>,
-  global: Arc<Injector<Context<T, R>>>,
-  stealers: Arc<Vec<Stealer<Context<T, R>>>>,
-  work: SharedFn<T, R>,
-) -> impl Fn()
+fn worker_loop<T, R>(receiver: Receiver<Context<T, R>>, work: SharedFn<T, R>) -> impl Fn()
 where
   T: Send + UnwindSafe + 'static,
   R: Send + 'static,
 {
   move || {
-    let mut count = 0;
-    loop {
-      if let Some(task) = pop_or_steal(&local, &global, &stealers) {
-        count = 0;
-        match task {
-          Context::Work((data, out)) => out.fulfill(work.call(data)),
-          Context::Term => return return_task(&global, &local),
-        }
-        continue;
-      }
-
-      if count >= YIELD_LIMIT {
-        park_timeout(THREAD_PARK_TIMEOUT);
-        continue;
-      }
-
-      if count >= SPIN_LIMIT {
-        yield_now();
-      } else {
-        spin_loop();
-      }
-      count += 1;
+    while let Ok(Context::Work(data, done)) = receiver.recv() {
+      done.fulfill(work.call(data));
     }
   }
 }
 
+/**
+ * Subscribe to shared channels to handle task distribution.
+ * Use when some performance is required during bursts but idle time is long.
+ */
 pub struct SharedWorkThread<T, R = ()> {
-  threads: Mutex<Vec<JoinHandle<()>>>,
-  global: Arc<Injector<Context<T, R>>>,
+  threads: UnsafeCell<Vec<JoinHandle<()>>>,
+  queue: Sender<Context<T, R>>,
 }
 impl<T, R> SharedWorkThread<T, R>
 where
@@ -101,33 +49,21 @@ where
     F: Fn(usize) -> std::result::Result<Arc<W>, E>,
     W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
   {
-    let (stealers, workers): (Vec<_>, Vec<_>) = (0..count)
-      .map(|_| Worker::<Context<T, R>>::new_fifo())
-      .map(|w| (w.stealer(), w))
-      .unzip();
-
-    let global = Injector::new().to_arc();
-    let stealers = stealers.to_arc();
-
+    let (tx, rx) = unbounded();
     let mut threads = Vec::with_capacity(count);
-    for (i, local) in workers.into_iter().enumerate() {
+    for i in 0..count {
       let thread = Builder::new()
         .name(format!("{}-{}", name.to_string(), i))
         .stack_size(size)
-        .spawn(worker_loop(
-          local,
-          Arc::clone(&global),
-          Arc::clone(&stealers),
-          SharedFn::new(build(i)?),
-        ))
+        .spawn(worker_loop(rx.clone(), SharedFn::new(build(i)?)))
         .unwrap();
 
       threads.push(thread);
     }
 
     Ok(Self {
-      global,
-      threads: Mutex::new(threads),
+      queue: tx,
+      threads: UnsafeCell::new(threads),
     })
   }
   pub fn new<S: ToString, F>(name: S, size: usize, count: usize, build: F) -> Self
@@ -138,28 +74,28 @@ where
     Self::build__(name, size, count, |_| Ok(build.clone()) as Result<Arc<F>>).unwrap()
   }
 
-  pub fn build<S: ToString, F, E, W>(
-    name: S,
-    size: usize,
-    count: usize,
-    build: F,
-  ) -> std::result::Result<Self, E>
-  where
-    F: Fn(usize) -> std::result::Result<W, E>,
-    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-  {
-    Self::build__(name, size, count, |i| build(i).map(Arc::new))
-  }
+  // pub fn build<S: ToString, F, E, W>(
+  //   name: S,
+  //   size: usize,
+  //   count: usize,
+  //   build: F,
+  // ) -> std::result::Result<Self, E>
+  // where
+  //   F: Fn(usize) -> std::result::Result<W, E>,
+  //   W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+  // {
+  //   Self::build__(name, size, count, |i| build(i).map(Arc::new))
+  // }
 
   #[inline]
   pub fn send(&self, v: T) -> WorkResult<R> {
     let (oneshot, fulfill) = oneshot();
-    self.global.push(Context::Work((v, fulfill)));
+    self.queue.must_send(Context::Work(v, fulfill));
     WorkResult::from(oneshot)
   }
-  pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
-  }
+  // pub fn send_await(&self, v: T) -> Result<R> {
+  //   self.send(v).wait()
+  // }
   pub fn send_no_wait(&self, v: T) {
     let _ = self.send(v);
   }
@@ -167,23 +103,24 @@ where
   pub fn send_batch(&self, v: impl Iterator<Item = T>) -> BatchWorkResult<R> {
     BatchWorkResult::from(v.map(|i| {
       let (oneshot, fulfill) = oneshot();
-      self.global.push(Context::Work((i, fulfill)));
+      self.queue.must_send(Context::Work(i, fulfill));
       oneshot
     }))
   }
 
   pub fn close(&self) {
-    let mut threads = self.threads.l();
+    let threads = self.threads.get().borrow_mut_unsafe();
     for _ in 0..threads.len() {
-      self.global.push(Context::Term);
+      self.queue.must_send(Context::Term);
     }
     for th in threads.drain(..) {
-      th.thread().unpark();
       let _ = th.join();
     }
   }
 }
 
+unsafe impl<T, R> Send for SharedWorkThread<T, R> {}
+unsafe impl<T, R> Sync for SharedWorkThread<T, R> {}
 impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
 
 #[cfg(test)]
