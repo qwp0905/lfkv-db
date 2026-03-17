@@ -7,7 +7,7 @@ use std::{
 use super::{DirectIO, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
-  thread::{SharedWorkThread, WorkBuilder, WorkResult},
+  thread::{StealingWorkThread, WorkBuilder, WorkResult},
   utils::ToArc,
 };
 
@@ -53,7 +53,7 @@ impl<const N: usize> WriteAsync<N> {
 
 pub struct DiskController<const N: usize> {
   background:
-    Arc<SharedWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
+    Arc<StealingWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
   page_pool: Arc<PagePool<N>>,
 }
 impl<const N: usize> DiskController<N> {
@@ -69,7 +69,7 @@ impl<const N: usize> DiskController<N> {
     let background = WorkBuilder::new()
       .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N * 500)
-      .shared(config.thread_count)
+      .stealing(config.thread_count)
       .build(move |_| {
         let fd = file.try_clone().map_err(Error::IO)?;
         let work = move |operation: DiskOperation<N>| match operation {
