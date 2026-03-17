@@ -104,10 +104,6 @@ where
     WorkResult::from(done_r)
   }
 
-  pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
-  }
-
   pub fn close(&self) {
     if let Some(v) = self.threads.take() {
       self.channel.must_send(Context::Term);
