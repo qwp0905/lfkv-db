@@ -29,6 +29,9 @@ pub enum Error {
   #[error("flush failed")]
   FlushFailed,
 
+  #[error("buffered write failed")]
+  BufferedWriteFailed,
+
   #[error("write conflict detected")]
   WriteConflict,
 
