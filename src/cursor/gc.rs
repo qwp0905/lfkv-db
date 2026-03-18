@@ -136,6 +136,9 @@ impl GarbageCollector {
       logger,
     }
   }
+  pub fn initial_state(&self) {
+    self.initialized.store(true, Ordering::Release);
+  }
 
   pub fn release_orphand(&self, end: usize) -> Result {
     let (mut free_indexes, free_visited) = self.free_list.get_all()?;
@@ -193,7 +196,7 @@ impl GarbageCollector {
       self.release.send_no_wait(index);
     }
 
-    self.initialized.store(true, Ordering::Release);
+    self.initial_state();
     Ok(())
   }
 
