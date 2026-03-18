@@ -61,7 +61,7 @@ impl Pwritev for File {
       libc::pwritev(
         self.as_raw_fd(),
         bufs.as_ptr() as *const libc::iovec,
-        bufs.len().min(libc::IOV_MAX as usize) as libc::c_int,
+        bufs.len() as libc::c_int,
         offset as _,
       )
     };
