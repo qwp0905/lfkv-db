@@ -70,6 +70,8 @@ impl TxOrchestrator {
         .segments
         .into_iter()
         .for_each(|seg| wal.wait_checkpoint(seg));
+    } else {
+      gc.initial_state();
     }
 
     let checkpoint = WorkBuilder::new()
