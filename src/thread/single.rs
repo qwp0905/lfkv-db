@@ -53,7 +53,7 @@ pub struct SingleWorkThread<T, R = ()> {
 }
 impl<T, R> SingleWorkThread<T, R>
 where
-  T: Send + UnwindSafe + 'static,
+  T: Send + UnwindSafe + RefUnwindSafe + 'static,
   R: Send + 'static,
 {
   pub fn new<S: ToString>(

@@ -51,6 +51,27 @@ where
   }
 }
 
+pub struct ReferenceFn<'a, T, R>(
+  Box<dyn for<'b> FnMut(&'b T) -> R + RefUnwindSafe + Send + Sync + 'a>,
+);
+impl<'a, 'b, T, R> ReferenceFn<'a, T, R>
+where
+  T: Send + RefUnwindSafe,
+  R: Send,
+{
+  pub fn new<F>(f: F) -> Self
+  where
+    F: FnMut(&T) -> R + RefUnwindSafe + Send + Sync + 'a,
+  {
+    Self(Box::new(f))
+  }
+
+  #[inline]
+  pub fn call(&mut self, v: &T) -> Result<R> {
+    self.0.as_mut().safe_call_mut(v).map_err(Error::Panic)
+  }
+}
+
 pub enum SafeWork<'a, T, R> {
   // NoTimeout(SingleFn<T, R>),
   WithTimeout(Duration, SingleFn<'a, Option<T>, R>),
@@ -58,12 +79,12 @@ pub enum SafeWork<'a, T, R> {
     Duration,
     usize,
     SingleFn<'a, (T, bool), R>,
-    SingleFn<'a, (), bool>,
+    ReferenceFn<'a, Vec<T>, bool>,
   ),
 }
 impl<'a, T, R> SafeWork<'a, T, R>
 where
-  T: Send + UnwindSafe,
+  T: Send + UnwindSafe + RefUnwindSafe,
   R: Send,
 {
   // pub fn no_timeout<F>(f: F) -> Self
@@ -82,20 +103,20 @@ where
   pub fn buffering<F, E>(timeout: Duration, count: usize, each: F, before_each: E) -> Self
   where
     F: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'a,
-    E: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'a,
+    E: FnMut(&Vec<T>) -> bool + Send + RefUnwindSafe + Sync + 'a,
   {
     SafeWork::Buffering(
       timeout,
       count,
       SingleFn::new(each),
-      SingleFn::new(before_each),
+      ReferenceFn::new(before_each),
     )
   }
 }
 impl<'a, T, R> SafeWork<'a, T, R>
 where
-  T: Send + UnwindSafe + 'a,
-  R: Send + 'a,
+  T: Send + UnwindSafe + RefUnwindSafe,
+  R: Send,
 {
   pub fn run(&mut self, rx: Receiver<Context<T, R>>) {
     match self {
@@ -117,8 +138,9 @@ where
         let mut buffer = Vec::<(T, OneshotFulfill<Result<R>>)>::with_capacity(*count);
         let mut timer = timeout.as_timer();
         let mut flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
-          let r = before_each.call(()).unwrap_or(false);
-          for (v, done) in buffer.drain(..) {
+          let (values, waiting): (Vec<_>, Vec<_>) = buffer.drain(..).unzip();
+          let r = before_each.call(&values).unwrap_or(false);
+          for (v, done) in values.into_iter().zip(waiting) {
             done.fulfill(each.call((v, r)));
           }
         };
