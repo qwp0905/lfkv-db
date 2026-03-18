@@ -70,7 +70,7 @@ pub fn replay(
   let mut last_checkpoint = None as Option<usize>;
   let mut last_min_active = None as Option<usize>;
   for path in files.into_iter() {
-    let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?; // only for replay. file number does not matter
+    let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?;
     let len = wal.len()?;
     let mut records = vec![];
 
