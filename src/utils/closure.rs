@@ -11,7 +11,7 @@ where
 {
   type Error = Box<dyn std::any::Any + Send>;
 
-  #[inline]
+  #[inline(always)]
   fn safe_call(&self, v: T) -> std::result::Result<R, Self::Error> {
     std::panic::catch_unwind(|| self(v))
   }
@@ -28,7 +28,7 @@ where
 {
   type Error = Box<dyn std::any::Any + Send>;
 
-  #[inline]
+  #[inline(always)]
   fn safe_call_mut(&mut self, v: T) -> std::result::Result<R, Self::Error> {
     let ptr = self as *mut Self;
     std::panic::catch_unwind(|| unsafe { &mut *ptr }(v))
