@@ -7,15 +7,15 @@ use crate::{
   cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
   serialize::Serializable,
-  thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToArc},
+  thread::{BackgroundThread, WorkBuilder, WorkInput},
+  utils::{LogFilter, ToArc, ToBox},
   wal::{WALConfig, WAL},
 };
 
 pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
-  checkpoint: SingleWorkThread<(), Result>,
+  checkpoint: Box<dyn BackgroundThread<(), Result>>,
   free_list: Arc<FreeList>,
   version_visibility: Arc<VersionVisibility>,
   gc: Arc<GarbageCollector>,
@@ -31,7 +31,7 @@ impl TxOrchestrator {
   ) -> Result<(Self, bool)> {
     let buffer_pool = BufferPool::open(buffer_pool_config, logger.clone())?.to_arc();
     let checkpoint_interval = wal_config.checkpoint_interval;
-    let checkpoint_ch = SingleWorkInput::new();
+    let checkpoint_ch = WorkInput::new();
 
     let (wal, replay) = WAL::replay(wal_config, checkpoint_ch.copy(), logger.clone())?;
     let wal = wal.to_arc();
@@ -70,16 +70,15 @@ impl TxOrchestrator {
         .segments
         .into_iter()
         .for_each(|seg| wal.wait_checkpoint(seg));
-    } else {
-      gc.initial_state();
     }
+    gc.ready();
 
     let checkpoint = WorkBuilder::new()
       .name("checkpoint")
       .stack_size(2 << 20)
       .single()
-      .with_channel::<(), Result>(checkpoint_ch)
-      .with_timeout(
+      .from_channel(checkpoint_ch)
+      .interval(
         checkpoint_interval,
         handle_checkpoint(
           wal.clone(),
@@ -88,7 +87,8 @@ impl TxOrchestrator {
           version_visibility.clone(),
           logger.clone(),
         ),
-      )?;
+      )?
+      .to_box();
 
     Ok((
       Self {

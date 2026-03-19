@@ -1,19 +1,18 @@
 use std::{
-  fs::{remove_file, File, OpenOptions},
+  fs::{remove_file, rename, File, OpenOptions},
   io::IoSlice,
   mem::transmute,
   path::{Path, PathBuf},
   sync::{Arc, Mutex},
-  time::Duration,
 };
 
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
-  disk::{DirectIO, Page, Pread, Pwritev},
+  disk::{DirectIO, Page, Pread, Pwrite, Pwritev},
   error::Result,
-  thread::{SingleWorkThread, WorkBuilder, WorkResult},
-  utils::{ShortenedMutex, ToArc},
+  thread::{BackgroundThread, WorkBuilder, WorkResult},
+  utils::{ShortenedMutex, ToArc, ToBox},
   Error,
 };
 
@@ -28,14 +27,13 @@ impl FsyncResult {
   }
 }
 
-const IO_BUFFER_COUNT: usize = 30;
-const IO_BUFFER_TIMEOUT: Duration = Duration::from_micros(100);
+const MAX_IO_BUFFER_COUNT: usize = 16;
 
 pub struct WALSegment {
   file: Arc<File>,
   path: Mutex<PathBuf>,
-  flush: SingleWorkThread<(), bool>,
-  io: SingleWorkThread<(usize, &'static [u8]), Result>,
+  io: Box<dyn BackgroundThread<(usize, &'static [u8]), Result>>,
+  flush: Box<dyn BackgroundThread<(), bool>>,
 }
 impl WALSegment {
   pub fn parse_generation<A, B>(filename: &A, prefix: &B) -> Result<usize>
@@ -56,7 +54,6 @@ impl WALSegment {
     prefix: P,
     generation: usize,
     flush_count: usize,
-    flush_interval: Duration,
     max_len: usize,
   ) -> Result<Self> {
     let path = format!(
@@ -79,13 +76,9 @@ impl WALSegment {
       .set_len((WAL_BLOCK_SIZE * max_len) as u64)
       .map_err(Error::IO)?;
     file.sync_all().map_err(Error::IO)?;
-    Ok(Self::new(file, path.into(), flush_count, flush_interval))
+    Ok(Self::new(file, path.into(), flush_count))
   }
-  pub fn open_exists<P: AsRef<Path>>(
-    path: P,
-    flush_count: usize,
-    flush_interval: Duration,
-  ) -> Result<Self> {
+  pub fn open_exists<P: AsRef<Path>>(path: P, flush_count: usize) -> Result<Self> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
@@ -94,12 +87,7 @@ impl WALSegment {
       .open(path.as_ref())
       .map_err(Error::IO)?
       .to_arc();
-    Ok(Self::new(
-      file,
-      path.as_ref().into(),
-      flush_count,
-      flush_interval,
-    ))
+    Ok(Self::new(file, path.as_ref().into(), flush_count))
   }
 
   pub fn read<P: AsMut<Page<WAL_BLOCK_SIZE>>>(
@@ -132,17 +120,12 @@ impl WALSegment {
       FILE_SUFFIX
     );
     let mut path = self.path.l();
-    std::fs::rename(path.as_path(), &new_path).map_err(Error::IO)?;
+    rename(path.as_path(), &new_path).map_err(Error::IO)?;
     *path = PathBuf::from(new_path);
     Ok(())
   }
 
-  fn new(
-    file: Arc<File>,
-    path: PathBuf,
-    flush_count: usize,
-    flush_interval: Duration,
-  ) -> Self {
+  fn new(file: Arc<File>, path: PathBuf, flush_count: usize) -> Self {
     let io = WorkBuilder::new()
       .name(format!(
         "{} buffered write",
@@ -150,23 +133,19 @@ impl WALSegment {
       ))
       .stack_size(2 << 20)
       .single()
-      .buffering(
-        IO_BUFFER_TIMEOUT,
-        IO_BUFFER_COUNT,
-        handle_write_result,
+      .eager_buffering(
+        MAX_IO_BUFFER_COUNT,
         handle_write(file.clone()),
-      );
+        handle_write_result,
+      )
+      .to_box();
 
     let flush = WorkBuilder::new()
       .name(format!("{} flush", path.as_path().to_string_lossy()))
       .stack_size(2 << 20)
       .single()
-      .buffering(
-        flush_interval,
-        flush_count,
-        |(_, r)| r,
-        handle_flush(file.clone()),
-      );
+      .eager_buffering(flush_count, handle_flush(file.clone()), |&r| r)
+      .to_box();
     Self {
       file,
       io,
@@ -180,7 +159,6 @@ impl WALSegment {
   }
 
   pub fn truncate(self) -> Result {
-    self.io.close();
     self.flush.close();
     remove_file(self.path.l().as_path()).map_err(Error::IO)?;
     Ok(())
@@ -191,33 +169,39 @@ impl WALSegment {
   }
 }
 
-fn handle_flush(file: Arc<File>) -> impl Fn(&Vec<()>) -> bool {
+fn handle_flush(file: Arc<File>) -> impl Fn(Vec<()>) -> bool {
   move |_| file.sync_data().is_ok()
 }
 
 fn pad_start(n: usize) -> String {
   format!("{:0>20}", n)
 }
-fn handle_write_result((_, result): ((usize, &[u8]), bool)) -> Result {
+fn handle_write_result(result: &bool) -> Result {
   result
     .then(|| Ok(()))
     .unwrap_or(Err(Error::BufferedWriteFailed))
 }
-fn handle_write(file: Arc<File>) -> impl FnMut(&Vec<(usize, &[u8])>) -> bool {
-  move |buffered| {
-    let mut sorted: Vec<_> = buffered.iter().map(|(i, slice)| (*i, slice)).collect();
-    sorted.sort_by_key(|(i, _)| *i);
-    sorted.dedup_by_key(|(i, _)| *i);
+fn handle_write(file: Arc<File>) -> impl FnMut(Vec<(usize, &[u8])>) -> bool {
+  move |mut buffered| {
+    if buffered.len() == 1 {
+      let (i, slice) = buffered[0];
+      return file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64).is_ok();
+    }
 
-    for (index, bufs) in sorted.chunk_by(|(a, _), (b, _)| *a + 1 == *b).map(|group| {
-      let i = group[0].0;
-      let bufs = group
-        .into_iter()
-        .map(|(_, s)| IoSlice::new(*s))
-        .collect::<Vec<_>>();
-      (i, bufs)
-    }) {
-      match file.pwritev(&bufs, (index * WAL_BLOCK_SIZE) as u64) {
+    buffered.sort_by_key(|(i, _)| *i);
+    buffered.dedup_by_key(|(i, _)| *i);
+
+    for group in buffered.chunk_by(|(a, _), (b, _)| *a + 1 == *b) {
+      match if group.len() == 1 {
+        let (i, slice) = group[0];
+        file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64)
+      } else {
+        let (indexes, bufs): (Vec<_>, Vec<_>) = group
+          .into_iter()
+          .map(|(i, s)| (*i, IoSlice::new(*s)))
+          .unzip();
+        file.pwritev(&bufs, (indexes[0] * WAL_BLOCK_SIZE) as u64)
+      } {
         Ok(_) => continue,
         Err(_) => return false,
       }

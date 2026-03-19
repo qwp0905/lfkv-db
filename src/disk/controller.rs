@@ -1,5 +1,5 @@
 use std::{
-  fs::{Metadata, OpenOptions},
+  fs::{File, Metadata, OpenOptions},
   path::PathBuf,
   sync::Arc,
 };
@@ -7,8 +7,8 @@ use std::{
 use super::{DirectIO, PagePool, PageRef, Pread, Pwrite};
 use crate::{
   error::{Error, Result},
-  thread::{StealingWorkThread, WorkBuilder, WorkResult},
-  utils::ToArc,
+  thread::{BackgroundThread, WorkBuilder, WorkResult},
+  utils::ToBox,
 };
 
 enum DiskOperation<const N: usize> {
@@ -51,9 +51,24 @@ impl<const N: usize> WriteAsync<N> {
   }
 }
 
+fn handle_disk<const N: usize>(
+  file: File,
+) -> impl Fn(DiskOperation<N>) -> std::io::Result<OperationResult<N>> {
+  move |operation: DiskOperation<N>| match operation {
+    DiskOperation::Read(offset, mut page) => file
+      .pread(page.as_mut().as_mut(), offset)
+      .map(|_| OperationResult::Read(page)),
+    DiskOperation::Write(offset, page) => file
+      .pwrite(page.as_ref().as_ref(), offset)
+      .map(|_| OperationResult::Write),
+    DiskOperation::Flush => file.sync_all().map(|_| OperationResult::Flush),
+    DiskOperation::Metadata => Ok(OperationResult::Metadata(file.metadata()?)),
+  }
+}
+
 pub struct DiskController<const N: usize> {
   background:
-    Arc<StealingWorkThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
+    Box<dyn BackgroundThread<DiskOperation<N>, std::io::Result<OperationResult<N>>>>,
   page_pool: Arc<PagePool<N>>,
 }
 impl<const N: usize> DiskController<N> {
@@ -70,21 +85,8 @@ impl<const N: usize> DiskController<N> {
       .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N * 500)
       .stealing(config.thread_count)
-      .build(move |_| {
-        let fd = file.try_clone().map_err(Error::IO)?;
-        let work = move |operation: DiskOperation<N>| match operation {
-          DiskOperation::Read(offset, mut page) => fd
-            .pread(page.as_mut().as_mut(), offset)
-            .map(|_| OperationResult::Read(page)),
-          DiskOperation::Write(offset, page) => fd
-            .pwrite(page.as_ref().as_ref(), offset)
-            .map(|_| OperationResult::Write),
-          DiskOperation::Flush => fd.sync_all().map(|_| OperationResult::Flush),
-          DiskOperation::Metadata => Ok(OperationResult::Metadata(fd.metadata()?)),
-        };
-        Ok(work)
-      })?
-      .to_arc();
+      .build(handle_disk(file))
+      .to_box();
 
     Ok(Self {
       background,
