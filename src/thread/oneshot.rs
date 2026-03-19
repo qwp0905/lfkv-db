@@ -1,6 +1,7 @@
 use std::{
   cell::UnsafeCell,
   mem::MaybeUninit,
+  panic::UnwindSafe,
   sync::Arc,
   thread::{current, park, Thread},
 };
@@ -101,6 +102,7 @@ impl<T> Drop for OneshotFulfill<T> {
 
 unsafe impl<T: Send> Sync for OneshotFulfill<T> {}
 unsafe impl<T: Send> Send for OneshotFulfill<T> {}
+impl<T> UnwindSafe for OneshotFulfill<T> {}
 
 #[cfg(test)]
 #[path = "tests/oneshot.rs"]

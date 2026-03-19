@@ -6,7 +6,8 @@ use std::{
 use crate::Result;
 
 use super::{
-  SafeWork, SharedWorkThread, SingleWorkInput, SingleWorkThread, StealingWorkThread,
+  BackgroundThread, EagerBufferingThread, IntervalWorkThread, LazyBufferingThread,
+  SharedWorkThread, SingleFn, StealingWorkThread, WorkInput,
 };
 
 pub struct WorkBuilder {
@@ -68,7 +69,7 @@ impl SharedWorkBuilder {
   //   )
   // }
 
-  pub fn build_unchecked<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
+  pub fn build<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
@@ -88,117 +89,107 @@ pub struct StealingWorkBuilder {
   count: usize,
 }
 impl StealingWorkBuilder {
-  pub fn build<T, R, F, E, W>(
-    self,
-    build: F,
-  ) -> std::result::Result<StealingWorkThread<T, R>, E>
+  pub fn build<T, R, F>(self, build: F) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
-    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-    F: Fn(usize) -> std::result::Result<W, E>,
+    F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
   {
-    StealingWorkThread::build(
+    StealingWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
       self.count,
       build,
     )
   }
-
-  // pub fn build_unchecked<T, R, F>(self, build: F) -> StealingWorkThread<T, R>
-  // where
-  //   T: Send + UnwindSafe + 'static,
-  //   R: Send + 'static,
-  //   F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-  // {
-  //   StealingWorkThread::new(
-  //     self.builder.name,
-  //     self.builder.stack_size,
-  //     self.count,
-  //     build,
-  //   )
-  // }
 }
 pub struct SafeWorkBuilder {
   builder: WorkBuilder,
 }
 impl SafeWorkBuilder {
-  pub fn with_channel<T, R>(
-    self,
-    input: SingleWorkInput<T, R>,
-  ) -> FromChannelBuilder<T, R> {
-    FromChannelBuilder {
-      input,
-      builder: self.builder,
-    }
-  }
-
-  // pub fn no_timeout<T, R, F>(self, f: F) -> SingleWorkThread<T, R>
-  // where
-  //   T: Send + UnwindSafe + 'static,
-  //   R: Send + 'static,
-  //   F: FnMut(T) -> R + Send + RefUnwindSafe + Sync + 'static,
-  // {
-  //   SingleWorkThread::new(
-  //     self.builder.name,
-  //     self.builder.stack_size,
-  //     SafeWork::no_timeout(f),
-  //   )
-  // }
-
-  pub fn with_timeout<T, R, F>(self, timeout: Duration, f: F) -> SingleWorkThread<T, R>
+  pub fn interval<T, R, F>(self, timeout: Duration, f: F) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + RefUnwindSafe + 'static,
     R: Send + 'static,
     F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SingleWorkThread::new(
+    IntervalWorkThread::new(
       self.builder.name,
       self.builder.stack_size,
-      SafeWork::with_timeout(timeout, f),
+      timeout,
+      SingleFn::new(f),
+    )
+  }
+  pub fn from_channel<T, R>(self, channel: WorkInput<T, R>) -> FromChannelBuilder<T, R> {
+    FromChannelBuilder {
+      builder: self.builder,
+      input: channel,
+    }
+  }
+
+  pub fn eager_buffering<A, B, C, T, R>(
+    self,
+    count: usize,
+    when_buffered: A,
+    result: B,
+  ) -> impl BackgroundThread<T, R>
+  where
+    T: Send + UnwindSafe + 'static,
+    R: Send + 'static,
+    C: Send + RefUnwindSafe + Sync + 'static,
+    A: FnMut(Vec<T>) -> C + RefUnwindSafe + Send + Sync + 'static,
+    B: for<'a> Fn(&'a C) -> R + Send + Sync + RefUnwindSafe + 'static,
+  {
+    EagerBufferingThread::new(
+      self.builder.name,
+      self.builder.stack_size,
+      count,
+      when_buffered,
+      result,
     )
   }
 
-  pub fn buffering<T, R, E, F>(
+  pub fn lazy_buffering<T, R, E, F>(
     self,
     timeout: Duration,
     count: usize,
-    each: E,
-    before_each: F,
-  ) -> SingleWorkThread<T, R>
+    when_buffered: F,
+    make_result: E,
+  ) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + RefUnwindSafe + 'static,
     R: Send + 'static,
+    F: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
     E: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
-    F: FnMut(&Vec<T>) -> bool + Send + RefUnwindSafe + Sync + 'static,
   {
-    SingleWorkThread::new(
+    LazyBufferingThread::new(
       self.builder.name,
       self.builder.stack_size,
-      SafeWork::buffering(timeout, count, each, before_each),
+      count,
+      timeout,
+      SingleFn::new(when_buffered),
+      SingleFn::new(make_result),
     )
   }
 }
 
 pub struct FromChannelBuilder<T, R> {
-  input: SingleWorkInput<T, R>,
   builder: WorkBuilder,
+  input: WorkInput<T, R>,
 }
-impl<T, R> FromChannelBuilder<T, R>
-where
-  T: Send + UnwindSafe + RefUnwindSafe + 'static,
-  R: Send + 'static,
-{
-  pub fn with_timeout<F>(self, timeout: Duration, f: F) -> Result<SingleWorkThread<T, R>>
+impl<T, R> FromChannelBuilder<T, R> {
+  pub fn interval<F>(self, timeout: Duration, f: F) -> Result<impl BackgroundThread<T, R>>
   where
+    T: Send + UnwindSafe + RefUnwindSafe + 'static,
+    R: Send + 'static,
     F: FnMut(Option<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
-    SingleWorkThread::from_channel(
+    IntervalWorkThread::from_channel(
       self.builder.name,
       self.builder.stack_size,
-      SafeWork::with_timeout(timeout, f),
+      timeout,
       self.input,
+      SingleFn::new(f),
     )
   }
 }

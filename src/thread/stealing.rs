@@ -1,7 +1,10 @@
 use std::{
   cell::UnsafeCell,
   panic::{RefUnwindSafe, UnwindSafe},
-  sync::Arc,
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+  },
   thread::{park_timeout, Builder, JoinHandle},
   time::Duration,
 };
@@ -16,8 +19,7 @@ use crate::{
   utils::{ToArc, UnsafeBorrowMut},
 };
 
-// use super::BatchWorkResult;
-use super::{oneshot, Context, SharedFn, WorkResult};
+use super::{BackgroundThread, Context, SharedFn};
 
 fn pop_or_steal<'a, A: 'a>(
   local: &Worker<A>,
@@ -88,6 +90,7 @@ where
 pub struct StealingWorkThread<T, R = ()> {
   threads: UnsafeCell<Vec<JoinHandle<()>>>,
   global: Arc<Injector<Context<T, R>>>,
+  closed: AtomicBool,
 }
 impl<T, R> StealingWorkThread<T, R>
 where
@@ -131,51 +134,41 @@ where
     Ok(Self {
       global,
       threads: UnsafeCell::new(threads),
+      closed: AtomicBool::new(false),
     })
   }
-  // pub fn new<S: ToString, F>(name: S, size: usize, count: usize, build: F) -> Self
-  // where
-  //   F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-  // {
-  //   let build = build.to_arc();
-  //   Self::build__(name, size, count, |_| Ok(build.clone()) as Result<Arc<F>>).unwrap()
-  // }
-
-  pub fn build<S: ToString, F, E, W>(
-    name: S,
-    size: usize,
-    count: usize,
-    build: F,
-  ) -> std::result::Result<Self, E>
+  pub fn new<S: ToString, F>(name: S, size: usize, count: usize, build: F) -> Self
   where
-    F: Fn(usize) -> std::result::Result<W, E>,
-    W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
+    F: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
   {
-    Self::build__(name, size, count, |i| build(i).map(Arc::new))
+    let build = build.to_arc();
+    Self::build__(name, size, count, |_| Ok(build.clone()) as Result<Arc<F>>).unwrap()
+  }
+}
+
+unsafe impl<T, R> Send for StealingWorkThread<T, R> {}
+unsafe impl<T, R> Sync for StealingWorkThread<T, R> {}
+impl<T, R> RefUnwindSafe for StealingWorkThread<T, R> {}
+impl<T, R> UnwindSafe for StealingWorkThread<T, R> {}
+
+impl<T, R> BackgroundThread<T, R> for StealingWorkThread<T, R> {
+  fn register(&self, ctx: Context<T, R>) -> bool {
+    if self.closed.load(Ordering::Acquire) {
+      return false;
+    }
+    self.global.push(ctx);
+    true
   }
 
-  #[inline]
-  pub fn send(&self, v: T) -> WorkResult<R> {
-    let (oneshot, fulfill) = oneshot();
-    self.global.push(Context::Work(v, fulfill));
-    WorkResult::from(oneshot)
-  }
-  pub fn send_await(&self, v: T) -> Result<R> {
-    self.send(v).wait()
-  }
-  // pub fn send_no_wait(&self, v: T) {
-  //   let _ = self.send(v);
-  // }
+  fn close(&self) {
+    if self
+      .closed
+      .compare_exchange(false, true, Ordering::Release, Ordering::Acquire)
+      .is_err()
+    {
+      return;
+    }
 
-  // pub fn send_batch(&self, v: impl Iterator<Item = T>) -> BatchWorkResult<R> {
-  //   BatchWorkResult::from(v.map(|i| {
-  //     let (oneshot, fulfill) = oneshot();
-  //     self.global.push(Context::Work(i, fulfill));
-  //     oneshot
-  //   }))
-  // }
-
-  pub fn close(&self) {
     let threads = self.threads.get().borrow_mut_unsafe();
     for _ in 0..threads.len() {
       self.global.push(Context::Term);
@@ -186,10 +179,6 @@ where
     }
   }
 }
-
-unsafe impl<T, R> Send for StealingWorkThread<T, R> {}
-unsafe impl<T, R> Sync for StealingWorkThread<T, R> {}
-impl<T, R> RefUnwindSafe for StealingWorkThread<T, R> {}
 
 #[cfg(test)]
 #[path = "tests/stealing.rs"]
