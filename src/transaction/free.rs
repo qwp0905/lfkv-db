@@ -72,7 +72,6 @@ struct FreeState {
 pub struct FreeList {
   state: Mutex<FreeState>,
   buffer_pool: Arc<BufferPool>,
-  // wal: Arc<WAL>,
   recorder: Arc<PageRecorder>,
 }
 impl FreeList {

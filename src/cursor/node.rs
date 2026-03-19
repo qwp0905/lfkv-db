@@ -250,6 +250,12 @@ impl LeafNode {
   pub fn set_entries(&mut self, entries: Vec<(Key, Pointer)>) {
     self.entries = entries;
   }
+  pub fn get_entries(&self) -> impl Iterator<Item = &(Key, Pointer)> {
+    self.entries.iter()
+  }
+  pub fn last_key(&self) -> Option<&Key> {
+    self.entries.last().map(|(k, _)| k)
+  }
 
   pub fn get_next(&self) -> Option<Pointer> {
     self.next

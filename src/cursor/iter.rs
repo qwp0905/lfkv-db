@@ -36,17 +36,17 @@ impl<'a> CursorIterator<'a> {
   }
 
   pub fn try_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-    if *self.committed {
-      return Err(Error::TransactionClosed);
-    }
-
     if self.closed {
       return Ok(None);
     }
     loop {
+      if *self.committed {
+        return Err(Error::TransactionClosed);
+      }
+
       'leaf: for i in self.pos..self.leaf.len() {
         let (key, ptr) = self.leaf.at(i);
-        if self.end.as_ref().map(|e| key.ge(e)).unwrap_or(false) {
+        if self.end.as_ref().map(|e| key >= e).unwrap_or(false) {
           self.closed = true;
           return Ok(None);
         }
