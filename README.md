@@ -2,7 +2,7 @@
 
 Lock-Free Key-Value Storage Engine implemented in Rust.
 
-A persistent, ACID-compliant key-value store built on a Blink tree index with MVCC (Multi-Version Concurrency Control) for snapshot isolation.
+A persistent, ACID-compliant key-value store that supports concurrent reads and writes from multiple threads, built on a Blink tree index with MVCC (Multi-Version Concurrency Control) for snapshot isolation.
 
 ## Features
 
@@ -12,7 +12,7 @@ A persistent, ACID-compliant key-value store built on a Blink tree index with MV
 - **Group Commit** - Batches multiple fsync calls per segment to amortize I/O cost
 - **Buffer Pool** - 2-tier LRU (old/new) page cache with sharded locking and atomic pin-based eviction control
 - **Direct I/O** - OS page cache bypass for predictable I/O performance
-- **Garbage Collection** - Background 4-stage pipeline with parallel work-stealing threads that reclaims obsolete versions and freed pages
+- **Garbage Collection** - Queue-based version cleanup and periodic leaf cleanup that reclaim obsolete versions and freed pages
 - **Crash Recovery** - Automatic WAL replay on startup with redo of committed transactions
 - **Custom Thread Infrastructure** - Work-stealing thread pool, oneshot channels, and buffered execution modes, all with panic safety
 
@@ -71,8 +71,8 @@ tx.commit()?;
          │        │          │          │         │
 ┌────────▼──────┐ │ ┌────────▼───────┐  │ ┌───────▼───────┐
 │  Buffer Pool  │ │ │   Free List    │  │ │    Garbage    │
-│ 2-tier LRU    │ │ │  (page alloc)  │  │ │   Collector   │
-│ sharded lock  │ │ └────────────────┘  │ │  4-stage pipe │
+│  2-tier LRU   │ │ │  (page alloc)  │  │ │   Collector   │
+│  sharded lock │ │ └────────────────┘  │ │   2-process   │
 └───────┬───────┘ │                     │ └───────────────┘
         │  ┌──────▼────────┐  ┌─────────▼──────────┐
         │  │      WAL      │  │     Version        │
@@ -120,12 +120,10 @@ tx.commit()?;
 
 ### Garbage Collection
 
-Background 4-stage pipeline, each stage running on a parallel work-stealing thread pool:
+Two background processes collaborate to reclaim obsolete versions and freed pages:
 
-1. **Leaf scan** - Traverses B-tree leaves to find entries with old versions
-2. **Empty check** - Check if the entry is empty
-3. **Entry cleanup** - Removes obsolete version records from data entries
-4. **Page release** - Reclaims freed pages back to the free list
+- **Queue-based version cleanup** - Transactions mark entries with old versions into a queue. A dedicated process drains the queue in bulk, removes obsolete version records, and releases emptied pages back to the free list.
+- **Periodic leaf cleanup** - A single thread periodically scans B-tree leaves, detects entries that have become empty, removes them from leaf nodes, and releases their pages.
 
 ## License
 
