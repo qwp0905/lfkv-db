@@ -10,6 +10,16 @@ impl<T> ToArc for T {
   }
 }
 
+pub trait ToBox {
+  fn to_box(self) -> Box<Self>;
+}
+impl<T> ToBox for T {
+  #[inline(always)]
+  fn to_box(self) -> Box<Self> {
+    Box::new(self)
+  }
+}
+
 pub trait ToRawPointer {
   fn to_raw_ptr(self) -> *const Self;
 }
