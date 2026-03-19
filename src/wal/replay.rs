@@ -1,7 +1,6 @@
 use std::{
   collections::{BTreeMap, BTreeSet, HashSet},
   fs::read_dir,
-  time::Duration,
 };
 
 use super::{Operation, WALSegment, WAL_BLOCK_SIZE};
@@ -37,7 +36,6 @@ pub fn replay(
   base_dir: &str,
   prefix: &str,
   flush_count: usize,
-  flush_interval: Duration,
   page_pool: &PagePool<WAL_BLOCK_SIZE>,
 ) -> Result<ReplayResult> {
   let mut files = Vec::new();
@@ -70,7 +68,7 @@ pub fn replay(
   let mut last_checkpoint = None as Option<usize>;
   let mut last_min_active = None as Option<usize>;
   for path in files.into_iter() {
-    let wal = WALSegment::open_exists(&path, flush_count, flush_interval)?;
+    let wal = WALSegment::open_exists(&path, flush_count)?;
     let len = wal.len()?;
     let mut records = vec![];
 
