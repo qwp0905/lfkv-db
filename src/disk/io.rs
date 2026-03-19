@@ -7,6 +7,8 @@ use std::{
 #[cfg(unix)]
 use libc;
 
+#[cfg(all(unix, not(target_vendor = "apple")))]
+use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::{
   io::Error,
@@ -121,12 +123,12 @@ impl Pwritev for File {
 }
 
 pub trait DirectIO {
-  fn direct_io<P: AsRef<Path>>(&self, path: P) -> Result<File>;
+  fn direct_io<P: AsRef<Path>>(&mut self, path: P) -> Result<File>;
 }
 
 impl DirectIO for OpenOptions {
   #[cfg(target_vendor = "apple")]
-  fn direct_io<P: AsRef<Path>>(&self, path: P) -> Result<File> {
+  fn direct_io<P: AsRef<Path>>(&mut self, path: P) -> Result<File> {
     let file = self.open(path)?;
     let ret = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1) };
     if ret == -1 {
@@ -135,11 +137,11 @@ impl DirectIO for OpenOptions {
     Ok(file)
   }
   #[cfg(all(unix, not(target_vendor = "apple")))]
-  fn direct_io<P: AsRef<Path>>(&self, path: P) -> Result<File> {
+  fn direct_io<P: AsRef<Path>>(&mut self, path: P) -> Result<File> {
     self.custom_flags(libc::O_DIRECT).open(path)
   }
   #[cfg(windows)]
-  fn direct_io<P: AsRef<Path>>(&self, path: P) -> Result<File> {
+  fn direct_io<P: AsRef<Path>>(&mut self, path: P) -> Result<File> {
     self
       .custom_flags(winapi::um::winbase::FILE_FLAG_NO_BUFFERING)
       .open(path)
