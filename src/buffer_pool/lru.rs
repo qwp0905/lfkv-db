@@ -33,12 +33,19 @@ pub struct LRUShard<K, V> {
   capacity: usize,
 }
 
+const OLD_RATIO: usize = 3;
+const NEW_RATIO: usize = 5;
+const TOTAL: usize = OLD_RATIO + NEW_RATIO;
+
 impl<K, V> LRUShard<K, V> {
   pub fn new(capacity: usize) -> Self {
+    let old_cap = ((capacity * OLD_RATIO) / TOTAL) + 1;
+    let new_cap = ((capacity * NEW_RATIO) / TOTAL) + 1;
+
     Self {
-      old_entries: RawTable::new(),
+      old_entries: RawTable::with_capacity(old_cap),
       old_sub_list: LRUList::new(),
-      new_entries: RawTable::new(),
+      new_entries: RawTable::with_capacity(new_cap),
       new_sub_list: LRUList::new(),
       capacity,
     }
@@ -117,7 +124,7 @@ where
   where
     S: BuildHasher,
   {
-    while self.new_sub_list.len() * 3 > self.old_sub_list.len() * 5 {
+    while self.new_sub_list.len() * OLD_RATIO > self.old_sub_list.len() * NEW_RATIO {
       let key = match self.new_sub_list.pop_tail() {
         Some(bucket) => bucket.borrow_unsafe().get_key(),
         None => break,
