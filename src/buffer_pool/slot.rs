@@ -8,19 +8,20 @@ use crossbeam::utils::Backoff;
 use super::{Frame, FrameState, Shard, TempFrameState};
 use crate::{
   disk::{DiskController, Page, PageRef, PAGE_SIZE},
-  utils::{Bitmap, ShortenedMutex, ShortenedRwLock},
+  utils::{Bitmap, ShortenedMutex, ShortenedRwLock, UnsafeBorrow},
 };
 
-pub enum Slot<'a> {
-  Temp(TempSlot<'a>),
-  Page(PageSlot<'a>),
+pub enum Slot {
+  Temp(TempSlot),
+  Page(PageSlot),
 }
-impl<'a> Slot<'a> {
+unsafe impl Send for Slot {}
+impl Slot {
   pub fn temp(
     state: Arc<TempFrameState>,
     index: usize,
-    disk: &'a DiskController<PAGE_SIZE>,
-    shard: &'a Mutex<Shard>,
+    disk: &DiskController<PAGE_SIZE>,
+    shard: &Mutex<Shard>,
     is_peek: bool,
   ) -> Self {
     Self::Temp(TempSlot {
@@ -31,34 +32,47 @@ impl<'a> Slot<'a> {
       is_peek,
     })
   }
-  pub fn page(
-    frame: &'a RwLock<Frame>,
-    dirty: &'a Bitmap,
-    state: Arc<FrameState>,
-  ) -> Self {
+  pub fn page(frame: &RwLock<Frame>, dirty: &Bitmap, state: Arc<FrameState>) -> Self {
     Self::Page(PageSlot {
       frame,
       dirty,
       state,
     })
   }
-  pub fn for_read<'b>(self) -> ReadableSlot<'b>
-  where
-    'a: 'b,
-  {
+  pub fn for_read<'a>(self) -> ReadableSlot<'a> {
     match self {
       Slot::Temp(temp) => ReadableSlot::Temp(temp.for_read()),
       Slot::Page(page) => ReadableSlot::Page(page.for_read()),
     }
   }
 
-  pub fn for_write<'b>(self) -> WritableSlot<'b>
-  where
-    'a: 'b,
-  {
+  pub fn for_write<'a>(self) -> WritableSlot<'a> {
     match self {
       Slot::Temp(temp) => WritableSlot::Temp(temp.for_write()),
       Slot::Page(page) => WritableSlot::Page(page.for_write()),
+    }
+  }
+
+  pub fn release(self) {
+    match self {
+      Slot::Page(page) => page.state.unpin(),
+      Slot::Temp(temp) => {
+        if !temp.is_peek {
+          return temp.state.unpin();
+        }
+
+        let backoff = Backoff::new();
+        while !temp.state.try_evict() {
+          backoff.snooze();
+        }
+        if temp.state.is_dirty() {
+          let _ = temp
+            .disk
+            .borrow_unsafe()
+            .write(temp.index, &temp.state.for_read());
+        }
+        temp.shard.borrow_unsafe().l().remove_temp(temp.index);
+      }
     }
   }
 }
@@ -104,28 +118,22 @@ impl<'a> AsRef<Page<PAGE_SIZE>> for ReadableSlot<'a> {
   }
 }
 
-pub struct PageSlot<'a> {
-  frame: &'a RwLock<Frame>,
-  dirty: &'a Bitmap,
+pub struct PageSlot {
+  frame: *const RwLock<Frame>,
+  dirty: *const Bitmap,
   state: Arc<FrameState>,
 }
-impl<'a> PageSlot<'a> {
-  fn for_read<'b>(self) -> PageSlotRead<'b>
-  where
-    'a: 'b,
-  {
+impl PageSlot {
+  fn for_read<'a>(self) -> PageSlotRead<'a> {
     PageSlotRead {
-      guard: self.frame.rl(),
+      guard: self.frame.borrow_unsafe().rl(),
       state: self.state,
     }
   }
 
-  fn for_write<'b>(self) -> PageSlotWrite<'b>
-  where
-    'a: 'b,
-  {
+  fn for_write<'a>(self) -> PageSlotWrite<'a> {
     PageSlotWrite {
-      guard: self.frame.wl(),
+      guard: self.frame.borrow_unsafe().wl(),
       dirty: self.dirty,
       state: self.state,
     }
@@ -133,13 +141,13 @@ impl<'a> PageSlot<'a> {
 }
 pub struct PageSlotWrite<'a> {
   guard: RwLockWriteGuard<'a, Frame>,
-  dirty: &'a Bitmap,
+  dirty: *const Bitmap,
   state: Arc<FrameState>,
 }
 
 impl<'a> Drop for PageSlotWrite<'a> {
   fn drop(&mut self) {
-    self.dirty.insert(self.state.get_frame_id());
+    self.dirty.borrow_unsafe().insert(self.state.get_frame_id());
     self.state.unpin();
   }
 }
@@ -154,18 +162,15 @@ impl<'a> Drop for PageSlotRead<'a> {
   }
 }
 
-pub struct TempSlot<'a> {
+pub struct TempSlot {
   state: Arc<TempFrameState>,
   index: usize,
-  disk: &'a DiskController<PAGE_SIZE>,
-  shard: &'a Mutex<Shard>,
+  disk: *const DiskController<PAGE_SIZE>,
+  shard: *const Mutex<Shard>,
   is_peek: bool,
 }
-impl<'a> TempSlot<'a> {
-  fn for_read<'b>(self) -> TempSlotRead<'b>
-  where
-    'a: 'b,
-  {
+impl TempSlot {
+  fn for_read<'a>(self) -> TempSlotRead<'a> {
     TempSlotRead {
       guard: ManuallyDrop::new(unsafe { transmute(self.state.for_read()) }),
       state: self.state.clone(),
@@ -176,10 +181,7 @@ impl<'a> TempSlot<'a> {
     }
   }
 
-  fn for_write<'b>(self) -> TempSlotWrite<'b>
-  where
-    'a: 'b,
-  {
+  fn for_write<'a>(self) -> TempSlotWrite<'a> {
     TempSlotWrite {
       guard: ManuallyDrop::new(unsafe { transmute(self.state.for_write()) }),
       state: self.state.clone(),
@@ -195,8 +197,8 @@ pub struct TempSlotWrite<'a> {
   state: Arc<TempFrameState>,
   guard: ManuallyDrop<RwLockWriteGuard<'a, PageRef<PAGE_SIZE>>>,
   index: usize,
-  disk: &'a DiskController<PAGE_SIZE>,
-  shard: &'a Mutex<Shard>,
+  disk: *const DiskController<PAGE_SIZE>,
+  shard: *const Mutex<Shard>,
   is_peek: bool,
 }
 
@@ -207,8 +209,11 @@ impl<'a> TempSlotWrite<'a> {
     while !self.state.try_evict() {
       backoff.snooze();
     }
-    let _ = self.disk.write(self.index, &self.state.for_read());
-    self.shard.l().remove_temp(self.index);
+    let _ = self
+      .disk
+      .borrow_unsafe()
+      .write(self.index, &self.state.for_read());
+    self.shard.borrow_unsafe().l().remove_temp(self.index);
   }
 }
 impl<'a> Drop for TempSlotWrite<'a> {
@@ -226,8 +231,8 @@ pub struct TempSlotRead<'a> {
   state: Arc<TempFrameState>,
   guard: ManuallyDrop<RwLockReadGuard<'a, PageRef<PAGE_SIZE>>>,
   index: usize,
-  disk: &'a DiskController<PAGE_SIZE>,
-  shard: &'a Mutex<Shard>,
+  disk: *const DiskController<PAGE_SIZE>,
+  shard: *const Mutex<Shard>,
   is_peek: bool,
 }
 impl<'a> TempSlotRead<'a> {
@@ -238,9 +243,12 @@ impl<'a> TempSlotRead<'a> {
       backoff.snooze();
     }
     if self.state.is_dirty() {
-      let _ = self.disk.write(self.index, &self.state.for_read());
+      let _ = self
+        .disk
+        .borrow_unsafe()
+        .write(self.index, &self.state.for_read());
     }
-    self.shard.l().remove_temp(self.index);
+    self.shard.borrow_unsafe().l().remove_temp(self.index);
   }
 }
 impl<'a> Drop for TempSlotRead<'a> {

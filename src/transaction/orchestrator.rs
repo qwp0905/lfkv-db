@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::{FreeList, PageRecorder, VersionVisibility};
 
 use crate::{
-  buffer_pool::{BufferPool, BufferPoolConfig, Slot, WritableSlot},
+  buffer_pool::{BufferPool, BufferPoolConfig, Prefetched, Slot, WritableSlot},
   cursor::{GarbageCollectionConfig, GarbageCollector},
   error::Result,
   serialize::Serializable,
@@ -104,8 +104,11 @@ impl TxOrchestrator {
       replay.is_new,
     ))
   }
-  pub fn fetch(&self, index: usize) -> Result<Slot<'_>> {
+  pub fn fetch(&self, index: usize) -> Result<Slot> {
     self.buffer_pool.read(index)
+  }
+  pub fn fetch_async(&self, index: usize) -> Prefetched {
+    self.buffer_pool.prefetch(index)
   }
 
   pub fn serialize_and_log<T>(

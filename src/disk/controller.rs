@@ -45,9 +45,17 @@ pub struct DiskControllerConfig {
 
 pub struct WriteAsync<const N: usize>(WorkResult<std::io::Result<OperationResult<N>>>);
 impl<const N: usize> WriteAsync<N> {
+  #[inline]
   pub fn wait(self) -> Result {
     self.0.wait()?.map_err(Error::IO)?;
     Ok(())
+  }
+}
+pub struct ReadAsync<const N: usize>(WorkResult<std::io::Result<OperationResult<N>>>);
+impl<const N: usize> ReadAsync<N> {
+  #[inline]
+  pub fn wait(self) -> Result<PageRef<N>> {
+    Ok(self.0.wait()?.map_err(Error::IO)?.as_read())
   }
 }
 
@@ -95,21 +103,21 @@ impl<const N: usize> DiskController<N> {
   }
 
   pub fn read(&self, index: usize) -> Result<PageRef<N>> {
-    Ok(
-      self
-        .background
-        .send_await(DiskOperation::Read(
-          (index * N) as u64,
-          self.page_pool.acquire(),
-        ))?
-        .map_err(Error::IO)?
-        .as_read(),
-    )
+    self.read_async(index).wait()
+  }
+  #[inline]
+  pub fn read_async(&self, index: usize) -> ReadAsync<N> {
+    let done = self.background.send(DiskOperation::Read(
+      (index * N) as u64,
+      self.page_pool.acquire(),
+    ));
+    ReadAsync(done)
   }
 
   pub fn write<'a>(&self, index: usize, page: &'a PageRef<N>) -> Result {
     self.write_async(index, page).wait()
   }
+  #[inline]
   pub fn write_async<'a>(&self, index: usize, page: &'a PageRef<N>) -> WriteAsync<N> {
     let mut pooled = self.page_pool.acquire();
     pooled.as_mut().copy_from(page.as_ref());
