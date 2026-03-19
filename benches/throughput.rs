@@ -49,10 +49,7 @@ fn bench_sequential_get(c: &mut Criterion) {
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_write_keys(dir.path(), SEQ_SIZE);
 
-  let engine = build(dir.path())
-    .group_commit_count(1)
-    .build()
-    .expect("bootstrap error");
+  let engine = build(dir.path()).build().expect("bootstrap error");
 
   let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
 
@@ -86,10 +83,7 @@ fn bench_sequential_insert(c: &mut Criterion) {
       b.iter_batched_ref(
         || {
           let dir = TempDir::new_in(".").expect("dir failed.");
-          let engine = build(dir.path())
-            .group_commit_count(1)
-            .build()
-            .expect("bootstrap error");
+          let engine = build(dir.path()).build().expect("bootstrap error");
           (dir, engine)
         },
         |(_, engine)| {
@@ -110,10 +104,7 @@ fn bench_sequential_update(c: &mut Criterion) {
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_write_keys(dir.path(), SEQ_SIZE);
 
-  let engine = build(dir.path())
-    .group_commit_count(1)
-    .build()
-    .expect("bootstrap error");
+  let engine = build(dir.path()).build().expect("bootstrap error");
 
   let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
   let values: Vec<_> = (0..SEQ_SIZE).map(make_value).collect();
