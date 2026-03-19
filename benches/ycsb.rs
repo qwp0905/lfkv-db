@@ -53,7 +53,6 @@ fn make_value(i: usize) -> Vec<u8> {
 fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
   EngineBuilder::new(dir)
     .group_commit_count(512)
-    .group_commit_delay(Duration::from_millis(10))
     .buffer_pool_memory_capacity(512 << 20)
     .buffer_pool_shard_count(1 << 8)
     .wal_file_size(32 << 20)

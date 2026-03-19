@@ -20,7 +20,6 @@ where
       wal_segment_flush_count: DEFAULT_WAL_SEGMENT_FLUSH_COUNT,
       wal_segment_flush_delay: DEFAULT_WAL_SEGMENT_FLUSH_DELAY,
       checkpoint_interval: DEFAULT_CHECKPOINT_INTERVAL,
-      group_commit_delay: DEFAULT_GROUP_COMMIT_DELAY,
       group_commit_count: DEFAULT_GROUP_COMMIT_COUNT,
       gc_trigger_interval: DEFAULT_GC_TRIGGER_INTERVAL,
       gc_thread_count: DEFAULT_GC_THREAD_COUNT,
@@ -46,10 +45,6 @@ where
   }
   pub fn checkpoint_interval(mut self, interval: Duration) -> Self {
     self.0.checkpoint_interval = interval;
-    self
-  }
-  pub fn group_commit_delay(mut self, delay: Duration) -> Self {
-    self.0.group_commit_delay = delay;
     self
   }
   pub fn group_commit_count(mut self, count: usize) -> Self {
@@ -94,7 +89,6 @@ const DEFAULT_WAL_FILE_SIZE: usize = 8 << 20; // 8 mb
 const DEFAULT_WAL_SEGMENT_FLUSH_DELAY: Duration = Duration::from_secs(10);
 const DEFAULT_WAL_SEGMENT_FLUSH_COUNT: usize = 32;
 const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
-const DEFAULT_GROUP_COMMIT_DELAY: Duration = Duration::from_millis(10);
 const DEFAULT_GROUP_COMMIT_COUNT: usize = 100;
 const DEFAULT_GC_TRIGGER_INTERVAL: Duration = Duration::from_secs(300);
 const DEFAULT_GC_THREAD_COUNT: usize = 3;

@@ -1,7 +1,4 @@
-use std::{
-  sync::Arc,
-  time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Instant};
 
 use crossbeam::channel::{unbounded, Sender};
 use lfkv_db::{EngineBuilder, LogLevel, Logger};
@@ -18,7 +15,6 @@ fn main() {
   let engine = Arc::new(
     EngineBuilder::new("./.local")
       .group_commit_count(512)
-      .group_commit_delay(Duration::from_millis(10))
       .buffer_pool_memory_capacity(512 << 20)
       .buffer_pool_shard_count(1 << 8)
       .wal_file_size(32 << 20)
