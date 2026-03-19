@@ -188,8 +188,8 @@ fn handle_write(file: Arc<File>) -> impl FnMut(Vec<(usize, &[u8])>) -> bool {
       return file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64).is_ok();
     }
 
-    buffered.sort_by_key(|(i, _)| *i);
     buffered.dedup_by_key(|(i, _)| *i);
+    buffered.sort_by_key(|(i, _)| *i);
 
     for group in buffered.chunk_by(|(a, _), (b, _)| *a + 1 == *b) {
       match if group.len() == 1 {
