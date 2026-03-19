@@ -29,47 +29,22 @@ impl WorkBuilder {
     self.stack_size = size;
     self
   }
-  pub fn shared(self, count: usize) -> SharedWorkBuilder {
-    SharedWorkBuilder {
+  pub fn multi(self, count: usize) -> MultiThreadBuilder {
+    MultiThreadBuilder {
       builder: self,
       count,
     }
   }
-  pub fn single(self) -> SafeWorkBuilder {
-    SafeWorkBuilder { builder: self }
-  }
-  pub fn stealing(self, count: usize) -> StealingWorkBuilder {
-    StealingWorkBuilder {
-      builder: self,
-      count,
-    }
+  pub fn single(self) -> SingleThreadBuilder {
+    SingleThreadBuilder { builder: self }
   }
 }
-
-pub struct SharedWorkBuilder {
+pub struct MultiThreadBuilder {
   builder: WorkBuilder,
   count: usize,
 }
-impl SharedWorkBuilder {
-  // pub fn build<T, R, F, E, W>(
-  //   self,
-  //   build: F,
-  // ) -> std::result::Result<SharedWorkThread<T, R>, E>
-  // where
-  //   T: Send + UnwindSafe + 'static,
-  //   R: Send + 'static,
-  //   W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-  //   F: Fn(usize) -> std::result::Result<W, E>,
-  // {
-  //   SharedWorkThread::build(
-  //     self.builder.name,
-  //     self.builder.stack_size,
-  //     self.count,
-  //     build,
-  //   )
-  // }
-
-  pub fn build<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
+impl MultiThreadBuilder {
+  pub fn shared<T, R, F>(self, build: F) -> SharedWorkThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
@@ -82,14 +57,8 @@ impl SharedWorkBuilder {
       build,
     )
   }
-}
 
-pub struct StealingWorkBuilder {
-  builder: WorkBuilder,
-  count: usize,
-}
-impl StealingWorkBuilder {
-  pub fn build<T, R, F>(self, build: F) -> impl BackgroundThread<T, R>
+  pub fn stealing<T, R, F>(self, build: F) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
     R: Send + 'static,
@@ -103,10 +72,11 @@ impl StealingWorkBuilder {
     )
   }
 }
-pub struct SafeWorkBuilder {
+
+pub struct SingleThreadBuilder {
   builder: WorkBuilder,
 }
-impl SafeWorkBuilder {
+impl SingleThreadBuilder {
   pub fn interval<T, R, F>(self, timeout: Duration, f: F) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + RefUnwindSafe + 'static,

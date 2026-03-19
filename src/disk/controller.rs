@@ -84,8 +84,8 @@ impl<const N: usize> DiskController<N> {
     let background = WorkBuilder::new()
       .name(format!("disk {}", config.path.to_string_lossy()))
       .stack_size(N * 500)
-      .stealing(config.thread_count)
-      .build(handle_disk(file))
+      .multi(config.thread_count)
+      .stealing(handle_disk(file))
       .to_box();
 
     Ok(Self {

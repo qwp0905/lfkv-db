@@ -88,14 +88,14 @@ impl GarbageCollector {
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build(run_release(free_list.clone()))
+      .multi(config.thread_count)
+      .shared(run_release(free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build(run_entry(
+      .multi(config.thread_count)
+      .shared(run_entry(
         buffer_pool.clone(),
         version_visibility,
         recorder.clone(),
@@ -105,8 +105,8 @@ impl GarbageCollector {
     let check = WorkBuilder::new()
       .name("gc check top entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build(run_check(buffer_pool.clone()))
+      .multi(config.thread_count)
+      .shared(run_check(buffer_pool.clone()))
       .to_arc();
     let clean_leaf = WorkBuilder::new()
       .name("gc clean leaf")
