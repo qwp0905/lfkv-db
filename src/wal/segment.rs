@@ -67,8 +67,7 @@ impl WALSegment {
       .read(true)
       .write(true)
       .create(true)
-      .direct_io()
-      .open(&path)
+      .direct_io(&path)
       .map_err(Error::IO)?
       .to_arc();
 
@@ -83,8 +82,7 @@ impl WALSegment {
       .read(true)
       .write(true)
       .create(true)
-      .direct_io()
-      .open(path.as_ref())
+      .direct_io(path.as_ref())
       .map_err(Error::IO)?
       .to_arc();
     Ok(Self::new(file, path.as_ref().into(), flush_count))

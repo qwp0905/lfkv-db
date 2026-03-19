@@ -85,8 +85,7 @@ impl<const N: usize> DiskController<N> {
       .read(true)
       .write(true)
       .create(true)
-      .direct_io()
-      .open(&config.path)
+      .direct_io(&config.path)
       .map_err(Error::IO)?;
 
     let background = WorkBuilder::new()
