@@ -16,8 +16,8 @@ use crossbeam::{
 use crate::{
   disk::PagePool,
   error::Result,
-  thread::{SingleWorkInput, SingleWorkThread, WorkBuilder},
-  utils::{LogFilter, ToArc, UnsafeBorrow},
+  thread::{BackgroundThread, WorkBuilder, WorkInput},
+  utils::{LogFilter, ToArc, ToBox, UnsafeBorrow},
 };
 
 use super::{
@@ -31,7 +31,6 @@ pub struct WALConfig {
   pub checkpoint_interval: Duration,
   pub segment_flush_delay: Duration,
   pub segment_flush_count: usize,
-  pub group_commit_delay: Duration,
   pub group_commit_count: usize,
   pub max_file_size: usize,
 }
@@ -61,7 +60,7 @@ pub struct WAL {
   /**
    * buffering rotated segment and trigger checkpoint.
    */
-  wait_checkpoint: SingleWorkThread<WALSegment, Result>,
+  wait_checkpoint: Box<dyn BackgroundThread<WALSegment, Result>>,
   /**
    * queue for segment whick checkpoint failed.
    * it will be clear and move to preloader to reuse segment when checkpoint complete.
@@ -80,7 +79,7 @@ pub struct WAL {
 impl WAL {
   pub fn replay(
     config: WALConfig,
-    checkpoint: SingleWorkInput<(), Result>,
+    checkpoint: WorkInput<(), Result>,
     logger: LogFilter,
   ) -> Result<(Self, ReplayResult)> {
     let max_index = config.max_file_size / WAL_BLOCK_SIZE;
@@ -91,7 +90,6 @@ impl WAL {
       config.base_dir.to_string_lossy().as_ref(),
       config.prefix.to_string_lossy().as_ref(),
       config.group_commit_count,
-      config.group_commit_delay,
       &page_pool,
     )?;
 
@@ -110,7 +108,6 @@ impl WAL {
       prefix,
       replay_result.generation,
       config.group_commit_count,
-      config.group_commit_delay,
       max_index,
     )
     .to_arc();
@@ -120,12 +117,13 @@ impl WAL {
       .name("wal checkpoint buffering")
       .stack_size(2 << 20)
       .single()
-      .buffering(
+      .lazy_buffering(
         config.segment_flush_delay,
         config.segment_flush_count,
-        waiting_checkpoint(preloader.clone(), not_flushed.clone()),
         move |_| checkpoint.send(()).wait().is_ok(),
-      );
+        waiting_checkpoint(preloader.clone(), not_flushed.clone()),
+      )
+      .to_box();
 
     let buffer = LogBuffer::init_new(page_pool.acquire(), preloader.load()?, 0);
 

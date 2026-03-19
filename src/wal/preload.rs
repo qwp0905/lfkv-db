@@ -6,8 +6,8 @@ use crossbeam::{
 };
 
 use crate::{
-  thread::{SingleWorkThread, WorkBuilder},
-  utils::ToArc,
+  thread::{BackgroundThread, WorkBuilder},
+  utils::{ToArc, ToBox},
   wal::WALSegment,
   Result,
 };
@@ -17,14 +17,13 @@ const SEGMENT_MAX_LIFE: Duration = Duration::from_secs(5);
 pub struct SegmentPreload {
   reuse: Arc<SegQueue<WALSegment>>,
   queue: Receiver<Result<WALSegment>>,
-  thread: SingleWorkThread<(), Result>,
+  thread: Box<dyn BackgroundThread<(), Result>>,
 }
 impl SegmentPreload {
   pub fn new(
     prefix: PathBuf,
     generation: usize,
     flush_count: usize,
-    flush_interval: Duration,
     max_len: usize,
   ) -> Self {
     let (tx, rx) = unbounded();
@@ -35,7 +34,7 @@ impl SegmentPreload {
       .name("wal segment preloader")
       .stack_size(2 << 20)
       .single()
-      .with_timeout(SEGMENT_MAX_LIFE, move |trigger| {
+      .interval(SEGMENT_MAX_LIFE, move |trigger| {
         if trigger.is_none() {
           return reuse_c.pop().map(|seg| seg.truncate()).unwrap_or(Ok(()));
         }
@@ -47,12 +46,13 @@ impl SegmentPreload {
           .pop()
           .map(|seg| seg.reuse(&prefix, current).map(|_| seg))
           .unwrap_or_else(|| {
-            WALSegment::open_new(&prefix, current, flush_count, flush_interval, max_len)
+            WALSegment::open_new(&prefix, current, flush_count, max_len)
           })?;
 
         tx.send(Ok(segment)).unwrap();
         Ok(())
-      });
+      })
+      .to_box();
 
     let _ = thread.send(());
     Self {

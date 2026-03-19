@@ -21,7 +21,6 @@ fn build_engine(dir: &TempDir) -> Engine {
   EngineBuilder::new(dir.path())
     .buffer_pool_memory_capacity(32 << 20)
     .buffer_pool_shard_count(1 << 2)
-    .group_commit_delay(Duration::from_millis(1))
     .group_commit_count(10)
     .gc_trigger_interval(Duration::from_secs(10))
     .logger(TestLogger)
@@ -508,7 +507,6 @@ fn test_btree_node_split_and_recovery() {
 fn crash_writer() {
   let dir = std::env::var("CRASH_DIR").expect("CRASH_DIR not set");
   let engine = EngineBuilder::new(std::path::Path::new(&dir))
-    .group_commit_delay(Duration::from_millis(1))
     .group_commit_count(10)
     .build()
     .expect("engine bootstrap failed");
@@ -698,7 +696,6 @@ fn test_heavy_gc_single_key() {
     EngineBuilder::new(dir.path())
       .buffer_pool_memory_capacity(32 << 20)
       .buffer_pool_shard_count(1 << 2)
-      .group_commit_delay(Duration::from_millis(1))
       .group_commit_count(10)
       .gc_trigger_interval(Duration::from_millis(50))
       .logger(TestLogger)
@@ -841,7 +838,6 @@ fn write_not_commit() {
   let dir = std::env::var("CRASH_DIR").expect("CRASH_DIR not set");
   let key = std::env::var("CRASH_KEY").expect("CRASH_KEY not set");
   let engine = EngineBuilder::new(std::path::Path::new(&dir))
-    .group_commit_delay(Duration::from_millis(1))
     .group_commit_count(10)
     .build()
     .expect("engine bootstrap failed");

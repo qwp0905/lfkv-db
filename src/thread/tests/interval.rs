@@ -11,14 +11,17 @@ fn test_shared_work_thread_with_timeout() {
   let counter = Arc::new(AtomicUsize::new(0));
   let counter_clone = counter.clone();
 
-  let work =
-    SafeWork::with_timeout(Duration::from_millis(100), move |x: Option<usize>| {
-      if x.is_none() {
-        counter_clone.store(1, Ordering::Release);
-      }
-    });
-
-  let thread = SingleWorkThread::new("test-timeout", DEFAULT_STACK_SIZE, work);
+  let work = SingleFn::new(move |x: Option<usize>| {
+    if x.is_none() {
+      counter_clone.store(1, Ordering::Release);
+    }
+  });
+  let thread = IntervalWorkThread::new(
+    "test-timeout",
+    DEFAULT_STACK_SIZE,
+    Duration::from_millis(100),
+    work,
+  );
 
   // Send a task
   thread.send(5).wait().unwrap();
@@ -38,7 +41,7 @@ fn test_shared_work_thread_with_timeout() {
 
 #[test]
 fn test_panic_handling() {
-  let work = SafeWork::with_timeout(Duration::from_secs(100), |x: Option<i32>| {
+  let work = SingleFn::new(|x: Option<i32>| {
     if let Some(x) = x {
       if x < 0 {
         panic!("Cannot process negative numbers");
@@ -48,7 +51,12 @@ fn test_panic_handling() {
     0
   });
 
-  let thread = SingleWorkThread::new("test-panic", DEFAULT_STACK_SIZE, work);
+  let thread = IntervalWorkThread::new(
+    "test-panic",
+    DEFAULT_STACK_SIZE,
+    Duration::from_secs(100),
+    work,
+  );
 
   // Normal case
   let result = thread.send(10).wait();
@@ -69,8 +77,13 @@ fn test_panic_handling() {
 
 #[test]
 fn test_multiple_close() {
-  let work = SafeWork::with_timeout(Duration::from_secs(10), |_: Option<()>| {});
-  let thread = SingleWorkThread::new("test-multiple-close", DEFAULT_STACK_SIZE, work);
+  let work = SingleFn::new(|_: Option<()>| {});
+  let thread = IntervalWorkThread::new(
+    "test-multiple-close",
+    DEFAULT_STACK_SIZE,
+    Duration::from_secs(10),
+    work,
+  );
 
   thread.close();
   thread.close();

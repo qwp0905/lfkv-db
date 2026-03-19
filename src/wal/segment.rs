@@ -1,17 +1,18 @@
 use std::{
-  fs::{remove_file, File, OpenOptions},
+  fs::{remove_file, rename, File, OpenOptions},
+  io::IoSlice,
+  mem::transmute,
   path::{Path, PathBuf},
   sync::{Arc, Mutex},
-  time::Duration,
 };
 
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
-  disk::{DirectIO, Page, Pread, Pwrite},
+  disk::{DirectIO, Page, Pread, Pwrite, Pwritev},
   error::Result,
-  thread::{SingleWorkThread, WorkBuilder, WorkResult},
-  utils::{ShortenedMutex, ToArc},
+  thread::{BackgroundThread, WorkBuilder, WorkResult},
+  utils::{ShortenedMutex, ToArc, ToBox},
   Error,
 };
 
@@ -26,10 +27,13 @@ impl FsyncResult {
   }
 }
 
+const MAX_IO_BUFFER_COUNT: usize = 16;
+
 pub struct WALSegment {
   file: Arc<File>,
   path: Mutex<PathBuf>,
-  flush: SingleWorkThread<(), bool>,
+  io: Box<dyn BackgroundThread<(usize, &'static [u8]), Result>>,
+  flush: Box<dyn BackgroundThread<(), bool>>,
 }
 impl WALSegment {
   pub fn parse_generation<A, B>(filename: &A, prefix: &B) -> Result<usize>
@@ -45,78 +49,11 @@ impl WALSegment {
       .map_err(Error::unknown)?;
     Ok(generation)
   }
-  pub fn open_exists<P: AsRef<Path>>(
-    path: P,
-    flush_count: usize,
-    flush_interval: Duration,
-  ) -> Result<Self> {
-    let file = OpenOptions::new()
-      .read(true)
-      .write(true)
-      .create(true)
-      .direct_io()
-      .open(path.as_ref())
-      .map_err(Error::IO)?
-      .to_arc();
-
-    let flush = WorkBuilder::new()
-      .name(format!("{} flush", path.as_ref().to_string_lossy()))
-      .stack_size(2 << 20)
-      .single()
-      .buffering(
-        flush_interval,
-        flush_count,
-        |(_, r)| r,
-        handle_flush(file.clone()),
-      );
-    Ok(Self {
-      file,
-      flush,
-      path: Mutex::new(path.as_ref().into()),
-    })
-  }
-
-  pub fn read<P: AsMut<Page<WAL_BLOCK_SIZE>>>(
-    &self,
-    index: usize,
-    page: &mut P,
-  ) -> Result {
-    self
-      .file
-      .pread(page.as_mut().as_mut(), (index * WAL_BLOCK_SIZE) as u64)
-      .map(|_| ())
-      .map_err(Error::IO)
-  }
-  pub fn write<P: AsRef<Page<WAL_BLOCK_SIZE>>>(&self, index: usize, page: &P) -> Result {
-    self
-      .file
-      .pwrite(page.as_ref().as_ref(), (index * WAL_BLOCK_SIZE) as u64)
-      .map(|_| ())
-      .map_err(Error::IO)
-  }
-  pub fn len(&self) -> Result<usize> {
-    let metadata = self.file.metadata().map_err(Error::IO)?;
-    Ok((metadata.len() as usize).div_ceil(WAL_BLOCK_SIZE))
-  }
-
-  pub fn reuse<P: AsRef<Path>>(&self, prefix: P, generation: usize) -> Result {
-    let new_path = format!(
-      "{}{}{}",
-      prefix.as_ref().to_string_lossy(),
-      pad_start(generation),
-      FILE_SUFFIX
-    );
-    let mut path = self.path.l();
-    std::fs::rename(path.as_path(), &new_path).map_err(Error::IO)?;
-    *path = PathBuf::from(new_path);
-    Ok(())
-  }
 
   pub fn open_new<P: AsRef<Path>>(
     prefix: P,
     generation: usize,
     flush_count: usize,
-    flush_interval: Duration,
     max_len: usize,
   ) -> Result<Self> {
     let path = format!(
@@ -138,22 +75,83 @@ impl WALSegment {
     file
       .set_len((WAL_BLOCK_SIZE * max_len) as u64)
       .map_err(Error::IO)?;
+    file.sync_all().map_err(Error::IO)?;
+    Ok(Self::new(file, path.into(), flush_count))
+  }
+  pub fn open_exists<P: AsRef<Path>>(path: P, flush_count: usize) -> Result<Self> {
+    let file = OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .direct_io()
+      .open(path.as_ref())
+      .map_err(Error::IO)?
+      .to_arc();
+    Ok(Self::new(file, path.as_ref().into(), flush_count))
+  }
 
-    let flush = WorkBuilder::new()
-      .name(format!("{} flush", &path))
+  pub fn read<P: AsMut<Page<WAL_BLOCK_SIZE>>>(
+    &self,
+    index: usize,
+    page: &mut P,
+  ) -> Result {
+    self
+      .file
+      .pread(page.as_mut().as_mut(), (index * WAL_BLOCK_SIZE) as u64)
+      .map(|_| ())
+      .map_err(Error::IO)
+  }
+  pub fn write<P: AsRef<Page<WAL_BLOCK_SIZE>>>(&self, index: usize, page: &P) -> Result {
+    self
+      .io
+      .send((index, unsafe { transmute(page.as_ref().as_ref()) }))
+      .wait_flatten()
+  }
+  pub fn len(&self) -> Result<usize> {
+    let metadata = self.file.metadata().map_err(Error::IO)?;
+    Ok((metadata.len() as usize).div_ceil(WAL_BLOCK_SIZE))
+  }
+
+  pub fn reuse<P: AsRef<Path>>(&self, prefix: P, generation: usize) -> Result {
+    let new_path = format!(
+      "{}{}{}",
+      prefix.as_ref().to_string_lossy(),
+      pad_start(generation),
+      FILE_SUFFIX
+    );
+    let mut path = self.path.l();
+    rename(path.as_path(), &new_path).map_err(Error::IO)?;
+    *path = PathBuf::from(new_path);
+    Ok(())
+  }
+
+  fn new(file: Arc<File>, path: PathBuf, flush_count: usize) -> Self {
+    let io = WorkBuilder::new()
+      .name(format!(
+        "{} buffered write",
+        path.as_path().to_string_lossy()
+      ))
       .stack_size(2 << 20)
       .single()
-      .buffering(
-        flush_interval,
-        flush_count,
-        |(_, r)| r,
-        handle_flush(file.clone()),
-      );
-    Ok(Self {
+      .eager_buffering(
+        MAX_IO_BUFFER_COUNT,
+        handle_write(file.clone()),
+        handle_write_result,
+      )
+      .to_box();
+
+    let flush = WorkBuilder::new()
+      .name(format!("{} flush", path.as_path().to_string_lossy()))
+      .stack_size(2 << 20)
+      .single()
+      .eager_buffering(flush_count, handle_flush(file.clone()), |&r| r)
+      .to_box();
+    Self {
       file,
+      io,
       flush,
-      path: Mutex::new(path.into()),
-    })
+      path: Mutex::new(path),
+    }
   }
 
   pub fn fsync(&self) -> FsyncResult {
@@ -171,10 +169,44 @@ impl WALSegment {
   }
 }
 
-fn handle_flush(file: Arc<File>) -> impl Fn(()) -> bool {
-  move |_| file.sync_all().is_ok()
+fn handle_flush(file: Arc<File>) -> impl Fn(Vec<()>) -> bool {
+  move |_| file.sync_data().is_ok()
 }
 
 fn pad_start(n: usize) -> String {
   format!("{:0>20}", n)
+}
+fn handle_write_result(result: &bool) -> Result {
+  result
+    .then(|| Ok(()))
+    .unwrap_or(Err(Error::BufferedWriteFailed))
+}
+fn handle_write(file: Arc<File>) -> impl FnMut(Vec<(usize, &[u8])>) -> bool {
+  move |mut buffered| {
+    if buffered.len() == 1 {
+      let (i, slice) = buffered[0];
+      return file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64).is_ok();
+    }
+
+    buffered.dedup_by_key(|(i, _)| *i);
+    buffered.sort_by_key(|(i, _)| *i);
+
+    for group in buffered.chunk_by(|(a, _), (b, _)| *a + 1 == *b) {
+      match if group.len() == 1 {
+        let (i, slice) = group[0];
+        file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64)
+      } else {
+        let (indexes, bufs): (Vec<_>, Vec<_>) = group
+          .into_iter()
+          .map(|(i, s)| (*i, IoSlice::new(*s)))
+          .unzip();
+        file.pwritev(&bufs, (indexes[0] * WAL_BLOCK_SIZE) as u64)
+      } {
+        Ok(_) => continue,
+        Err(_) => return false,
+      }
+    }
+
+    true
+  }
 }

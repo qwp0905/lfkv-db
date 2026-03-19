@@ -7,11 +7,20 @@ pub use builder::*;
 mod oneshot;
 pub use oneshot::*;
 
-mod single;
-pub use single::*;
-
 mod shared;
-pub use shared::*;
+use shared::*;
 
 mod stealing;
-pub use stealing::*;
+use stealing::*;
+
+mod eager;
+use eager::*;
+
+mod thread;
+pub use thread::*;
+
+mod interval;
+use interval::*;
+
+mod lazy;
+use lazy::*;

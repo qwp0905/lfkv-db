@@ -6,7 +6,7 @@ use std::{
 };
 
 use crossbeam::{
-  channel::{unbounded, Receiver, Sender, TryRecvError},
+  channel::{unbounded, Receiver, Sender, TryRecvError, TrySendError},
   utils::Backoff,
 };
 
@@ -15,7 +15,7 @@ use crate::{
   utils::{ToArc, UnsafeBorrowMut, UnwrappedSender},
 };
 
-use super::{oneshot, BatchWorkResult, Context, SharedFn, WorkResult};
+use super::{BackgroundThread, Context, SharedFn};
 
 fn worker_loop<T, R>(
   receiver: Receiver<Context<T, R>>,
@@ -92,42 +92,21 @@ where
     let build = build.to_arc();
     Self::build__(name, size, count, |_| Ok(build.clone()) as Result<Arc<F>>).unwrap()
   }
+}
 
-  // pub fn build<S: ToString, F, E, W>(
-  //   name: S,
-  //   size: usize,
-  //   count: usize,
-  //   build: F,
-  // ) -> std::result::Result<Self, E>
-  // where
-  //   F: Fn(usize) -> std::result::Result<W, E>,
-  //   W: Fn(T) -> R + RefUnwindSafe + Send + Sync + 'static,
-  // {
-  //   Self::build__(name, size, count, |i| build(i).map(Arc::new))
-  // }
+unsafe impl<T, R> Send for SharedWorkThread<T, R> {}
+unsafe impl<T, R> Sync for SharedWorkThread<T, R> {}
+impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
+impl<T, R> UnwindSafe for SharedWorkThread<T, R> {}
 
-  #[inline]
-  pub fn send(&self, v: T) -> WorkResult<R> {
-    let (oneshot, fulfill) = oneshot();
-    self.queue.must_send(Context::Work(v, fulfill));
-    WorkResult::from(oneshot)
+impl<T, R> BackgroundThread<T, R> for SharedWorkThread<T, R> {
+  fn register(&self, ctx: Context<T, R>) -> bool {
+    match self.queue.try_send(ctx) {
+      Err(TrySendError::Disconnected(_)) => false,
+      _ => true,
+    }
   }
-  // pub fn send_await(&self, v: T) -> Result<R> {
-  //   self.send(v).wait()
-  // }
-  pub fn send_no_wait(&self, v: T) {
-    let _ = self.send(v);
-  }
-
-  pub fn send_batch(&self, v: impl Iterator<Item = T>) -> BatchWorkResult<R> {
-    BatchWorkResult::from(v.map(|i| {
-      let (oneshot, fulfill) = oneshot();
-      self.queue.must_send(Context::Work(i, fulfill));
-      oneshot
-    }))
-  }
-
-  pub fn close(&self) {
+  fn close(&self) {
     let threads = self.threads.get().borrow_mut_unsafe();
     for _ in 0..threads.len() {
       self.queue.must_send(Context::Term);
@@ -137,10 +116,6 @@ where
     }
   }
 }
-
-unsafe impl<T, R> Send for SharedWorkThread<T, R> {}
-unsafe impl<T, R> Sync for SharedWorkThread<T, R> {}
-impl<T, R> RefUnwindSafe for SharedWorkThread<T, R> {}
 
 #[cfg(test)]
 #[path = "tests/shared.rs"]

@@ -13,9 +13,9 @@ use super::{
 use crate::{
   buffer_pool::BufferPool,
   error::Result,
-  thread::{SharedWorkThread, SingleWorkThread, WorkBuilder},
+  thread::{BackgroundThread, WorkBuilder},
   transaction::{FreeList, PageRecorder, VersionVisibility},
-  utils::{DoubleBuffer, LogFilter, ToArc},
+  utils::{DoubleBuffer, LogFilter, ToArc, ToBox},
 };
 
 pub struct GarbageCollectionConfig {
@@ -29,10 +29,10 @@ enum GcPointer {
 }
 
 pub struct GarbageCollector {
-  clean_leaf: SingleWorkThread<(), Result>,
-  check: Arc<SharedWorkThread<Pointer, Result<bool>>>,
-  entry: Arc<SharedWorkThread<Pointer, Result>>,
-  release: Arc<SharedWorkThread<Pointer, Result>>,
+  clean_leaf: Box<dyn BackgroundThread<(), Result>>,
+  check: Arc<dyn BackgroundThread<Pointer, Result<bool>>>,
+  entry: Arc<dyn BackgroundThread<Pointer, Result>>,
+  release: Arc<dyn BackgroundThread<Pointer, Result>>,
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
   initialized: Arc<AtomicBool>,
@@ -67,7 +67,7 @@ impl GarbageCollector {
       .map(|v| v.wait_flatten())
       .collect::<Result>()?;
     self.logger.debug("unreachable versions all collected.");
-    self.release.send_batch(release.into_iter());
+    self.release.send_batch(release);
     Ok(())
   }
 
@@ -88,14 +88,14 @@ impl GarbageCollector {
     let release = WorkBuilder::new()
       .name("gc release entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build_unchecked(run_release(free_list.clone()))
+      .multi(config.thread_count)
+      .shared(run_release(free_list.clone()))
       .to_arc();
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build_unchecked(run_entry(
+      .multi(config.thread_count)
+      .shared(run_entry(
         buffer_pool.clone(),
         version_visibility,
         recorder.clone(),
@@ -105,14 +105,14 @@ impl GarbageCollector {
     let check = WorkBuilder::new()
       .name("gc check top entry")
       .stack_size(2 << 20)
-      .shared(config.thread_count)
-      .build_unchecked(run_check(buffer_pool.clone()))
+      .multi(config.thread_count)
+      .shared(run_check(buffer_pool.clone()))
       .to_arc();
     let clean_leaf = WorkBuilder::new()
       .name("gc clean leaf")
       .stack_size(2 << 20)
       .single()
-      .with_timeout(
+      .interval(
         config.interval,
         run_clean_leaf(
           buffer_pool.clone(),
@@ -122,7 +122,8 @@ impl GarbageCollector {
           initialized.clone(),
           logger.clone(),
         ),
-      );
+      )
+      .to_box();
 
     Self {
       clean_leaf,
@@ -136,7 +137,7 @@ impl GarbageCollector {
       logger,
     }
   }
-  pub fn initial_state(&self) {
+  pub fn ready(&self) {
     self.initialized.store(true, Ordering::Release);
   }
 
@@ -196,7 +197,6 @@ impl GarbageCollector {
       self.release.send_no_wait(index);
     }
 
-    self.initial_state();
     Ok(())
   }
 
@@ -211,7 +211,7 @@ impl GarbageCollector {
 fn run_clean_leaf(
   buffer_pool: Arc<BufferPool>,
   recorder: Arc<PageRecorder>,
-  check_c: Arc<SharedWorkThread<Pointer, Result<bool>>>,
+  check_c: Arc<dyn BackgroundThread<Pointer, Result<bool>>>,
   queue: Arc<DoubleBuffer<GcPointer>>,
   initialized: Arc<AtomicBool>,
   logger: LogFilter,
@@ -250,7 +250,7 @@ fn run_clean_leaf(
           .deserialize::<CursorNode>()?
           .as_leaf()?;
         if !check_c
-          .send_batch(leaf.get_entry_pointers())
+          .send_batch(leaf.get_entry_pointers().collect())
           .wait()?
           .into_iter()
           .fold(Ok(false), |a, c| a.and_then(|a| c.map(|c| a || c)))?
@@ -308,7 +308,7 @@ fn run_entry(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
   recorder: Arc<PageRecorder>,
-  release_c: Arc<SharedWorkThread<Pointer, Result>>,
+  release_c: Arc<dyn BackgroundThread<Pointer, Result>>,
 ) -> impl Fn(Pointer) -> Result {
   let buffer_pool = buffer_pool.clone();
   let release_c = release_c.clone();

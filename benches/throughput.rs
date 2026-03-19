@@ -29,7 +29,6 @@ fn make_value(i: usize) -> Vec<u8> {
 fn build<T: AsRef<std::path::Path> + ?Sized>(dir: &T) -> EngineBuilder<&T> {
   EngineBuilder::new(dir)
     .group_commit_count(512)
-    .group_commit_delay(Duration::from_millis(10))
     .buffer_pool_memory_capacity(512 << 20)
     .buffer_pool_shard_count(1 << 8)
     .wal_file_size(32 << 20)
@@ -50,10 +49,7 @@ fn bench_sequential_get(c: &mut Criterion) {
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_write_keys(dir.path(), SEQ_SIZE);
 
-  let engine = build(dir.path())
-    .group_commit_count(1)
-    .build()
-    .expect("bootstrap error");
+  let engine = build(dir.path()).build().expect("bootstrap error");
 
   let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
 
@@ -87,10 +83,7 @@ fn bench_sequential_insert(c: &mut Criterion) {
       b.iter_batched_ref(
         || {
           let dir = TempDir::new_in(".").expect("dir failed.");
-          let engine = build(dir.path())
-            .group_commit_count(1)
-            .build()
-            .expect("bootstrap error");
+          let engine = build(dir.path()).build().expect("bootstrap error");
           (dir, engine)
         },
         |(_, engine)| {
@@ -111,10 +104,7 @@ fn bench_sequential_update(c: &mut Criterion) {
   let dir = TempDir::new_in(".").expect("dir failed.");
   pre_write_keys(dir.path(), SEQ_SIZE);
 
-  let engine = build(dir.path())
-    .group_commit_count(1)
-    .build()
-    .expect("bootstrap error");
+  let engine = build(dir.path()).build().expect("bootstrap error");
 
   let keys: Vec<_> = (0..SEQ_SIZE).map(make_key).collect();
   let values: Vec<_> = (0..SEQ_SIZE).map(make_value).collect();

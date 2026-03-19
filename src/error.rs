@@ -29,6 +29,9 @@ pub enum Error {
   #[error("flush failed")]
   FlushFailed,
 
+  #[error("buffered write failed")]
+  BufferedWriteFailed,
+
   #[error("write conflict detected")]
   WriteConflict,
 
@@ -40,6 +43,9 @@ pub enum Error {
 
   #[error("panic")]
   Panic(Box<dyn std::any::Any + Send>),
+
+  #[error("buffering failed by panic")]
+  BufferingFailed,
 }
 impl Error {
   pub fn unknown<E>(err: E) -> Self
