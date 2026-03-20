@@ -114,19 +114,8 @@ impl Cursor {
     let mut slot = self.orchestrator.fetch(index)?.for_read();
     loop {
       let entry: DataEntry = slot.as_ref().deserialize()?;
-      for record in entry.get_versions() {
-        if record.owner == self.tx_id {
-          return Ok(record.data.cloned());
-        }
-
-        if record.version > self.tx_id {
-          continue;
-        }
-        if !self.orchestrator.is_visible(&record.owner) {
-          continue;
-        }
-
-        return Ok(record.data.cloned());
+      if let Some(v) = entry.find_value(self.tx_id, |i| self.orchestrator.is_visible(i)) {
+        return Ok(Some(v));
       }
 
       match entry.get_next() {
@@ -183,7 +172,7 @@ impl Cursor {
           ));
           let entry_index = self.alloc_and_log(&entry)?;
 
-          let mut split = match leaf.insert_at(i, key.clone(), entry_index) {
+          let split = match leaf.insert_at(i, key.clone(), entry_index) {
             Some(split) => split,
             None => {
               return self.serialize_and_log(&mut leaf_slot, &CursorNode::Leaf(leaf))
@@ -191,7 +180,6 @@ impl Cursor {
           };
 
           let mid_key = split.top().clone();
-          split.set_prev(leaf_slot.get_index());
           let split_index = self.alloc_and_log(&CursorNode::Leaf(split))?;
 
           leaf.set_next(split_index);

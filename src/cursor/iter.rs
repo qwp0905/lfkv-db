@@ -1,6 +1,6 @@
 use std::mem::replace;
 
-use super::{CursorNode, DataEntry, Key, LeafNode};
+use super::{CursorNode, DataEntry, Key, LeafNode, Pointer};
 use crate::{
   error::{Error, Result},
   transaction::TxOrchestrator,
@@ -35,6 +35,21 @@ impl<'a> CursorIterator<'a> {
     }
   }
 
+  fn find_value(&self, ptr: Pointer) -> Result<Option<Vec<u8>>> {
+    let mut slot = self.orchestrator.fetch(ptr)?.for_read();
+    loop {
+      let entry = slot.as_ref().deserialize::<DataEntry>()?;
+      if let Some(v) = entry.find_value(self.tx_id, |i| self.orchestrator.is_visible(i)) {
+        return Ok(Some(v));
+      }
+
+      match entry.get_next() {
+        Some(i) => drop(replace(&mut slot, self.orchestrator.fetch(i)?.for_read())),
+        None => return Ok(None),
+      }
+    }
+  }
+
   pub fn try_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     if *self.committed {
       return Err(Error::TransactionClosed);
@@ -44,32 +59,16 @@ impl<'a> CursorIterator<'a> {
       return Ok(None);
     }
     loop {
-      'leaf: for i in self.pos..self.leaf.len() {
+      for i in self.pos..self.leaf.len() {
         let (key, ptr) = self.leaf.at(i);
         if self.end.as_ref().map(|e| key.ge(e)).unwrap_or(false) {
           self.closed = true;
           return Ok(None);
         }
 
-        let mut slot = self.orchestrator.fetch(*ptr)?.for_read();
-        loop {
-          let entry = slot.as_ref().deserialize::<DataEntry>()?;
-          for record in entry.get_versions() {
-            if record.owner == self.tx_id || self.orchestrator.is_visible(&record.owner) {
-              match record.data.cloned() {
-                Some(data) => {
-                  self.pos = i + 1;
-                  return Ok(Some((key.clone(), data)));
-                }
-                None => continue 'leaf,
-              }
-            }
-          }
-
-          match entry.get_next() {
-            Some(i) => drop(replace(&mut slot, self.orchestrator.fetch(i)?.for_read())),
-            None => continue 'leaf,
-          }
+        self.pos += 1;
+        if let Some(value) = self.find_value(*ptr)? {
+          return Ok(Some((key.clone(), value)));
         }
       }
 
