@@ -71,6 +71,7 @@ impl DataEntry {
     self.versions = new_versions;
   }
 
+  #[allow(unused)]
   pub fn get_versions(&self) -> impl Iterator<Item = &VersionRecord> {
     self.versions.iter()
   }
@@ -88,6 +89,26 @@ impl DataEntry {
 
   pub fn append(&mut self, record: VersionRecord) {
     self.versions.push_front(record);
+  }
+
+  pub fn find_value<F>(&self, tx_id: usize, is_visible: F) -> Option<Vec<u8>>
+  where
+    F: Fn(&usize) -> bool,
+  {
+    for record in self.versions.iter() {
+      if record.owner == tx_id {
+        return record.data.cloned();
+      }
+      if record.version > tx_id {
+        continue;
+      }
+      if !is_visible(&record.owner) {
+        continue;
+      }
+      return record.data.cloned();
+    }
+
+    None
   }
 
   pub fn is_available(&self, record: &VersionRecord) -> bool {

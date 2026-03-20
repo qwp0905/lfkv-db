@@ -256,7 +256,7 @@ impl WAL {
           continue;
         }
 
-        let segment = failed.new.take_segement();
+        let segment = failed.new.take_segment();
         self.syned_count.fetch_add(1, Ordering::Release);
         self.preloader.reuse(segment);
         continue;
@@ -282,7 +282,7 @@ impl WAL {
         backoff.snooze();
       }
 
-      let segment = buffer.take_segement();
+      let segment = buffer.take_segment();
       self.fsync_queue.push(segment.fsync());
       self.wait_checkpoint.send(segment);
     }
@@ -342,7 +342,7 @@ impl WAL {
         }
 
         let taken = unsafe { ptr.into_owned() };
-        let segment = taken.take_segement();
+        let segment = taken.take_segment();
         let _ = self.preloader.close();
         return segment.close();
       }

@@ -159,7 +159,7 @@ impl LogBuffer {
    * to drop segment and pin
    * it should be call when nothing to refer this segment
    */
-  pub fn take_segement(&self) -> WALSegment {
+  pub fn take_segment(&self) -> WALSegment {
     let _ = self.written_count.take_unsafe();
     let _ = self.segment_pin.take_unsafe();
     self.segment.take_unsafe()

@@ -1,4 +1,3 @@
-
 use crate::{disk::Page, serialize::SerializeFrom};
 
 use super::*;
@@ -27,10 +26,9 @@ fn test_serialize_leaf() {
 
   let key = vec![49, 50, 51];
   let ptr = 100;
-  let prev = None;
   let next = Some(1100);
 
-  let node = CursorNode::Leaf(LeafNode::new(vec![(key.clone(), ptr)], next, prev));
+  let node = CursorNode::Leaf(LeafNode::new(vec![(key.clone(), ptr)], next));
   page.serialize_from(&node).expect("serialize error");
 
   let d = page
@@ -40,7 +38,6 @@ fn test_serialize_leaf() {
     .expect("desirialize leaf error");
   assert_eq!(d.entries, vec![(key, ptr)]);
   assert_eq!(d.next, next);
-  assert_eq!(d.prev, prev);
 }
 
 #[test]
@@ -67,11 +64,8 @@ fn test_serialize_internal_with_keys_and_right() {
 #[test]
 fn test_serialize_leaf_with_prev_and_next() {
   let mut page = Page::new();
-  let node = CursorNode::Leaf(LeafNode::new(
-    vec![(vec![1], 10), (vec![2], 20)],
-    Some(50),
-    Some(40),
-  ));
+  let node =
+    CursorNode::Leaf(LeafNode::new(vec![(vec![1], 10), (vec![2], 20)], Some(50)));
   page.serialize_from(&node).expect("serialize error");
 
   let d = page
@@ -81,14 +75,13 @@ fn test_serialize_leaf_with_prev_and_next() {
     .expect("as_leaf error");
 
   assert_eq!(d.entries, vec![(vec![1], 10), (vec![2], 20)]);
-  assert_eq!(d.prev, Some(40));
   assert_eq!(d.next, Some(50));
 }
 
 #[test]
 fn test_serialize_empty_leaf() {
   let mut page = Page::new();
-  let node = CursorNode::Leaf(LeafNode::new(vec![], None, None));
+  let node = CursorNode::Leaf(LeafNode::new(vec![], None));
   page.serialize_from(&node).expect("serialize error");
 
   let d = page
@@ -98,6 +91,5 @@ fn test_serialize_empty_leaf() {
     .expect("as_leaf error");
 
   assert!(d.entries.is_empty());
-  assert_eq!(d.prev, None);
   assert_eq!(d.next, None);
 }
