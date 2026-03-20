@@ -8,7 +8,10 @@ use std::{
 
 use crossbeam::atomic::AtomicCell;
 
-use crate::{utils::ToArc, Error, Result};
+use crate::{
+  utils::{ToArc, UnsafeBorrow, UnsafeBorrowMut},
+  Error, Result,
+};
 
 pub fn oneshot<T>() -> (Oneshot<T>, OneshotFulfill<T>) {
   let inner = OneshotInner::new().to_arc();
@@ -25,28 +28,34 @@ enum State {
 struct OneshotInner<T> {
   state: AtomicCell<State>,
   value: UnsafeCell<MaybeUninit<T>>,
-  caller: AtomicCell<Option<Thread>>,
+  caller: UnsafeCell<Option<Thread>>,
 }
 impl<T> OneshotInner<T> {
   fn new() -> Self {
     Self {
       state: AtomicCell::new(State::Waiting),
       value: UnsafeCell::new(MaybeUninit::uninit()),
-      caller: AtomicCell::new(None),
+      caller: UnsafeCell::new(None),
     }
   }
+  #[inline]
   fn get_value(&self) -> &MaybeUninit<T> {
-    unsafe { &*self.value.get() }
+    self.value.get().borrow_unsafe()
   }
+  #[inline]
   fn get_value_mut(&self) -> &mut MaybeUninit<T> {
-    unsafe { &mut *self.value.get() }
+    self.value.get().borrow_mut_unsafe()
+  }
+  #[inline]
+  fn get_caller_mut(&self) -> &mut Option<Thread> {
+    self.caller.get().borrow_mut_unsafe()
   }
 }
 
 pub struct Oneshot<T>(Arc<OneshotInner<T>>);
 impl<T> Oneshot<T> {
   pub fn wait(self) -> Result<T> {
-    self.0.caller.store(Some(current()));
+    unsafe { self.0.caller.get().write(Some(current())) };
     loop {
       match self
         .0
@@ -64,7 +73,7 @@ impl<T> Oneshot<T> {
 impl<T> Drop for Oneshot<T> {
   fn drop(&mut self) {
     if let State::Fulfilled = self.0.state.swap(State::Disconnected) {
-      unsafe { (&mut *self.0.value.get()).assume_init_drop() };
+      unsafe { self.0.get_value_mut().assume_init_drop() };
     }
   }
 }
@@ -81,7 +90,7 @@ impl<T> OneshotFulfill<T> {
       .unwrap_or_else(|s| s)
     {
       State::Waiting => {
-        self.0.caller.take().map(|th| th.unpark());
+        self.0.get_caller_mut().take().map(|th| th.unpark());
       }
       State::Disconnected => unsafe { value.assume_init_drop() },
       State::Fulfilled => unreachable!(),
@@ -95,7 +104,7 @@ impl<T> Drop for OneshotFulfill<T> {
       .state
       .compare_exchange(State::Waiting, State::Disconnected)
     {
-      self.0.caller.take().map(|th| th.unpark());
+      self.0.get_caller_mut().take().map(|th| th.unpark());
     }
   }
 }
