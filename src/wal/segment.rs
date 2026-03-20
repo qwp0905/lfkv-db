@@ -9,7 +9,7 @@ use std::{
 use super::WAL_BLOCK_SIZE;
 use crate::{
   constant::FILE_SUFFIX,
-  disk::{DirectIO, Page, Pread, Pwrite, Pwritev},
+  disk::{max_iov, DirectIO, Page, Pread, Pwrite, Pwritev},
   error::Result,
   thread::{BackgroundThread, WorkBuilder, WorkResult},
   utils::{ShortenedMutex, ToArc, ToBox},
@@ -26,8 +26,6 @@ impl FsyncResult {
       .unwrap_or_else(|| Err(Error::FlushFailed))
   }
 }
-
-const MAX_IO_BUFFER_COUNT: usize = 16;
 
 pub struct WALSegment {
   file: Arc<File>,
@@ -131,11 +129,7 @@ impl WALSegment {
       ))
       .stack_size(2 << 20)
       .single()
-      .eager_buffering(
-        MAX_IO_BUFFER_COUNT,
-        handle_write(file.clone()),
-        handle_write_result,
-      )
+      .eager_buffering(max_iov(), handle_write(file.clone()), handle_write_result)
       .to_box();
 
     let flush = WorkBuilder::new()
