@@ -12,7 +12,7 @@ pub enum CursorNode {
 }
 impl CursorNode {
   pub fn initial_state() -> Self {
-    Self::Leaf(LeafNode::new(Default::default(), None, None))
+    Self::Leaf(LeafNode::new(Default::default(), None))
   }
   pub fn as_leaf(self) -> Result<LeafNode> {
     match self {
@@ -55,7 +55,6 @@ impl Serializable for CursorNode {
       }
       CursorNode::Leaf(node) => {
         writer.write(&[1])?;
-        writer.write_usize(node.prev.unwrap_or(0))?;
         writer.write_usize(node.next.unwrap_or(0))?;
         writer.write_usize(node.entries.len())?;
         for (key, pointer) in &node.entries {
@@ -95,7 +94,6 @@ impl Serializable for CursorNode {
       }
       1 => {
         // leaf
-        let prev = scanner.read_usize()?;
         let next = scanner.read_usize()?;
         let len = scanner.read_usize()?;
         let mut entries = Vec::with_capacity(len);
@@ -108,7 +106,6 @@ impl Serializable for CursorNode {
         Ok(Self::Leaf(LeafNode::new(
           entries,
           (next != 0).then(|| next),
-          (prev != 0).then(|| prev),
         )))
       }
       _ => Err(Error::InvalidFormat("invalid cursor node type")),
@@ -205,20 +202,11 @@ pub enum NodeFindResult {
 #[derive(Debug)]
 pub struct LeafNode {
   entries: Vec<(Key, Pointer)>,
-  prev: Option<Pointer>,
   next: Option<Pointer>,
 }
 impl LeafNode {
-  fn new(
-    entries: Vec<(Key, Pointer)>,
-    next: Option<Pointer>,
-    prev: Option<Pointer>,
-  ) -> Self {
-    Self {
-      entries,
-      prev,
-      next,
-    }
+  fn new(entries: Vec<(Key, Pointer)>, next: Option<Pointer>) -> Self {
+    Self { entries, next }
   }
   pub fn find(&self, key: KeyRef) -> NodeFindResult {
     match self
@@ -260,9 +248,6 @@ impl LeafNode {
   pub fn set_next(&mut self, pointer: Pointer) -> Option<Pointer> {
     self.next.replace(pointer)
   }
-  pub fn set_prev(&mut self, pointer: Pointer) -> Option<Pointer> {
-    self.prev.replace(pointer)
-  }
 
   pub fn insert_at(
     &mut self,
@@ -281,7 +266,6 @@ impl LeafNode {
         return Some(LeafNode::new(
           self.entries.split_off(self.entries.len() >> 1),
           self.next.take(),
-          None,
         ));
       }
     }
