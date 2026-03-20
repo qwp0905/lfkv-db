@@ -12,8 +12,7 @@ fn test_basic_send_and_receive() {
     "test-basic",
     DEFAULT_STACK_SIZE,
     16,
-    |values: Vec<usize>| values,
-    |values| values.iter().sum::<usize>(),
+    SingleFn::new(|values: Vec<usize>| values.iter().sum::<usize>()),
   );
 
   let result = thread.send(10).wait().unwrap();
@@ -36,7 +35,7 @@ fn test_buffering_burst() {
     "test-burst",
     DEFAULT_STACK_SIZE,
     64,
-    move |values: Vec<usize>| {
+    SingleFn::new(move |values: Vec<usize>| {
       flush_count_c.fetch_add(1, Ordering::Release);
       let mut m = max_batch_c.load(Ordering::Acquire);
       loop {
@@ -49,8 +48,7 @@ fn test_buffering_burst() {
       // simulate slow IO to allow buffering
       thread::sleep(Duration::from_millis(50));
       values.iter().sum::<usize>()
-    },
-    |sum| *sum,
+    }),
   );
 
   // send first to trigger blocking recv
@@ -96,13 +94,12 @@ fn test_try_recv_drains_pending() {
     "test-drain",
     DEFAULT_STACK_SIZE,
     64,
-    move |values: Vec<usize>| {
+    SingleFn::new(move |values: Vec<usize>| {
       batch_sizes_c.lock().unwrap().push(values.len());
       // slow processing so requests accumulate
       thread::sleep(Duration::from_millis(50));
       0usize
-    },
-    |v| *v,
+    }),
   );
 
   // trigger first recv (blocking) and wait
@@ -138,12 +135,11 @@ fn test_max_count_respected() {
     "test-max-count",
     DEFAULT_STACK_SIZE,
     max_count,
-    move |values: Vec<usize>| {
+    SingleFn::new(move |values: Vec<usize>| {
       let len = values.len();
       batch_sizes_c.lock().unwrap().push(len);
       len
-    },
-    |v| *v,
+    }),
   );
 
   // send more than max_count
@@ -172,8 +168,7 @@ fn test_result_per_item() {
     "test-result",
     DEFAULT_STACK_SIZE,
     16,
-    |values: Vec<usize>| values.iter().map(|v| v * 3).collect::<Vec<_>>(),
-    |results: &Vec<usize>| results.clone(),
+    SingleFn::new(|values: Vec<usize>| values.iter().map(|v| v * 3).collect::<Vec<_>>()),
   );
 
   // each sender should get the shared result
@@ -193,11 +188,10 @@ fn test_close_flushes_remaining() {
     "test-close-flush",
     DEFAULT_STACK_SIZE,
     1024,
-    move |values: Vec<usize>| {
+    SingleFn::new(move |values: Vec<usize>| {
       total_c.fetch_add(values.len(), Ordering::Release);
       values.len()
-    },
-    |count| *count,
+    }),
   );
 
   // send items
@@ -217,8 +211,7 @@ fn test_multiple_close() {
     "test-multi-close",
     DEFAULT_STACK_SIZE,
     16,
-    |v: Vec<()>| v.len(),
-    |_| (),
+    SingleFn::new(|v: Vec<()>| v.len()),
   );
 
   thread.close();
@@ -232,8 +225,7 @@ fn test_panic_recovery() {
     "test-panic",
     DEFAULT_STACK_SIZE,
     16,
-    |_: Vec<usize>| -> usize { panic!("intentional panic") },
-    |_| 0usize,
+    SingleFn::new(|_: Vec<usize>| -> usize { panic!("intentional panic") }),
   );
 
   let result = thread.send(1).wait();
@@ -251,12 +243,11 @@ fn test_concurrent_senders() {
     "test-concurrent",
     DEFAULT_STACK_SIZE,
     64,
-    move |values: Vec<usize>| {
+    SingleFn::new(move |values: Vec<usize>| {
       let sum: usize = values.iter().sum();
       total_c.fetch_add(sum, Ordering::Release);
       sum
-    },
-    |sum| *sum,
+    }),
   ));
 
   let mut handles = vec![];

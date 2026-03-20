@@ -97,40 +97,34 @@ impl SingleThreadBuilder {
     }
   }
 
-  pub fn eager_buffering<A, B, C, T, R>(
+  pub fn eager_buffering<F, T, R>(
     self,
     count: usize,
-    when_buffered: A,
-    result: B,
+    when_buffered: F,
   ) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + 'static,
-    R: Send + 'static,
-    C: Send + RefUnwindSafe + Sync + 'static,
-    A: FnMut(Vec<T>) -> C + RefUnwindSafe + Send + Sync + 'static,
-    B: for<'a> Fn(&'a C) -> R + Send + Sync + RefUnwindSafe + 'static,
+    R: Send + Clone + 'static,
+    F: FnMut(Vec<T>) -> R + RefUnwindSafe + Send + Sync + 'static,
   {
     EagerBufferingThread::new(
       self.builder.name,
       self.builder.stack_size,
       count,
-      when_buffered,
-      result,
+      SingleFn::new(when_buffered),
     )
   }
 
-  pub fn lazy_buffering<T, R, E, F>(
+  pub fn lazy_buffering<T, R, F>(
     self,
     timeout: Duration,
     count: usize,
     when_buffered: F,
-    make_result: E,
   ) -> impl BackgroundThread<T, R>
   where
     T: Send + UnwindSafe + RefUnwindSafe + 'static,
-    R: Send + 'static,
-    F: FnMut(()) -> bool + Send + RefUnwindSafe + Sync + 'static,
-    E: FnMut((T, bool)) -> R + Send + RefUnwindSafe + Sync + 'static,
+    R: Send + Clone + 'static,
+    F: FnMut(Vec<T>) -> R + Send + RefUnwindSafe + Sync + 'static,
   {
     LazyBufferingThread::new(
       self.builder.name,
@@ -138,7 +132,6 @@ impl SingleThreadBuilder {
       count,
       timeout,
       SingleFn::new(when_buffered),
-      SingleFn::new(make_result),
     )
   }
 }

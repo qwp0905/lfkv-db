@@ -72,7 +72,7 @@ impl WALSegment {
     file
       .set_len((WAL_BLOCK_SIZE * max_len) as u64)
       .map_err(Error::IO)?;
-    file.sync_all().map_err(Error::IO)?;
+    file.sync_all().map_err(Error::IO)?; // sync metadata for replay at once
     Ok(Self::new(file, path.into(), flush_count))
   }
   pub fn open_exists<P: AsRef<Path>>(path: P, flush_count: usize) -> Result<Self> {
@@ -129,14 +129,14 @@ impl WALSegment {
       ))
       .stack_size(2 << 20)
       .single()
-      .eager_buffering(max_iov(), handle_write(file.clone()), handle_write_result)
+      .eager_buffering(max_iov(), handle_write(file.clone()))
       .to_box();
 
     let flush = WorkBuilder::new()
       .name(format!("{} flush", path.as_path().to_string_lossy()))
       .stack_size(2 << 20)
       .single()
-      .eager_buffering(flush_count, handle_flush(file.clone()), |&r| r)
+      .eager_buffering(flush_count, handle_flush(file.clone()))
       .to_box();
     Self {
       file,
@@ -168,37 +168,26 @@ fn handle_flush(file: Arc<File>) -> impl Fn(Vec<()>) -> bool {
 fn pad_start(n: usize) -> String {
   format!("{:0>20}", n)
 }
-fn handle_write_result(result: &bool) -> Result {
-  result
-    .then(|| Ok(()))
-    .unwrap_or(Err(Error::BufferedWriteFailed))
-}
-fn handle_write(file: Arc<File>) -> impl FnMut(Vec<(usize, &[u8])>) -> bool {
+
+fn handle_write(file: Arc<File>) -> impl FnMut(Vec<(usize, &[u8])>) -> Result {
   move |mut buffered| {
     if buffered.len() == 1 {
       let (i, slice) = buffered[0];
-      return file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64).is_ok();
+      return file
+        .pwrite(slice, (i * WAL_BLOCK_SIZE) as u64)
+        .map_err(Error::IO)
+        .map(drop);
     }
 
     buffered.dedup_by_key(|(i, _)| *i);
     buffered.sort_by_key(|(i, _)| *i);
 
-    for group in buffered.chunk_by(|(a, _), (b, _)| *a + 1 == *b) {
-      match if group.len() == 1 {
-        let (i, slice) = group[0];
-        file.pwrite(slice, (i * WAL_BLOCK_SIZE) as u64)
-      } else {
-        let (indexes, bufs): (Vec<_>, Vec<_>) = group
-          .into_iter()
-          .map(|(i, s)| (*i, IoSlice::new(*s)))
-          .unzip();
-        file.pwritev(&bufs, (indexes[0] * WAL_BLOCK_SIZE) as u64)
-      } {
-        Ok(_) => continue,
-        Err(_) => return false,
-      }
-    }
-
-    true
+    buffered
+      .chunk_by(|(a, _), (b, _)| *a + 1 == *b)
+      .map(|g| g.into_iter().map(|(i, s)| (*i, IoSlice::new(*s))).unzip())
+      .map(|(indexes, bufs): (Vec<_>, Vec<_>)| ((indexes[0] * WAL_BLOCK_SIZE), bufs))
+      .map(|(offset, bufs)| file.pwritev(&bufs, offset as u64))
+      .fold(Ok(()), |a, c| a.and_then(|_| c.map(drop)))
+      .map_err(Error::IO)
   }
 }
