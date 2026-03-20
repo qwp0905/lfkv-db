@@ -36,7 +36,7 @@ where
       .name(name.to_string())
       .stack_size(size)
       .spawn(move || {
-        let mut buffered = vec![];
+        let mut buffered = Vec::with_capacity(max_buffering_count);
         let mut timer = timeout.as_timer();
 
         let mut flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
