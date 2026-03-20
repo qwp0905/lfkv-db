@@ -25,7 +25,7 @@ where
   }
   #[inline]
   pub fn call(&self, v: T) -> Result<R> {
-    self.0.as_ref().safe_call(v).map_err(Error::Panic)
+    self.0.as_ref().safe_call(v).map_err(Error::panic)
   }
 }
 
@@ -44,7 +44,7 @@ where
 
   #[inline]
   pub fn call(&mut self, v: T) -> Result<R> {
-    self.0.as_mut().safe_call_mut(v).map_err(Error::Panic)
+    self.0.as_mut().safe_call_mut(v).map_err(Error::panic)
   }
 }
 
