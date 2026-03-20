@@ -43,13 +43,15 @@ fn main() {
     .expect("bootstrap error");
 
   let mut t = engine.new_transaction().expect("tx start error");
-  let mut iter = t.scan_all().expect("scan start error");
+  {
+    let mut iter = t.scan_all().expect("scan start error");
 
-  let mut c = 0;
-  while let Ok(Some(_)) = iter.try_next() {
-    c += 1;
+    let mut c = 0;
+    while let Ok(Some(_)) = iter.try_next() {
+      c += 1;
+    }
+    println!("key count {c}");
   }
-  println!("key count {c}");
 
   for i in 0..count {
     let bytes: Vec<u8> = i.to_le_bytes().into();

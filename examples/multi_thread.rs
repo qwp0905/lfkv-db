@@ -76,17 +76,18 @@ fn main() {
   let mut found_ne = 0;
   let mut not_found = 0;
   let mut t = engine.new_transaction().expect("scan start error");
-
-  let mut iter = t.scan_all().expect("scan create error");
-  while let Ok(Some(_)) = iter.try_next() {
-    total += 1;
-  }
-  println!("total {}", total);
-  for key in keys {
-    match t.get(&key).unwrap() {
-      Some(v) if v == key => found_eq += 1,
-      Some(_) => found_ne += 1,
-      None => not_found += 1,
+  {
+    let mut iter = t.scan_all().expect("scan create error");
+    while let Ok(Some(_)) = iter.try_next() {
+      total += 1;
+    }
+    println!("total {}", total);
+    for key in keys {
+      match t.get(&key).unwrap() {
+        Some(v) if v == key => found_eq += 1,
+        Some(_) => found_ne += 1,
+        None => not_found += 1,
+      }
     }
   }
 

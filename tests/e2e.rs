@@ -599,15 +599,17 @@ fn test_process_crash_recovery() {
     let engine = build_engine(&dir);
     let mut tx = engine.new_transaction().unwrap();
     let mut c = 0;
-    let mut iter = tx.scan_all().unwrap();
-    while let Ok(Some(_)) = iter.try_next() {
-      c += 1;
+    {
+      let mut iter = tx.scan_all().unwrap();
+      while let Ok(Some(_)) = iter.try_next() {
+        c += 1;
+      }
+      assert!(
+        c >= committed.len(),
+        "exists {c} committed {}",
+        committed.len()
+      );
     }
-    assert!(
-      c >= committed.len(),
-      "exists {c} committed {}",
-      committed.len()
-    );
     for i in &committed {
       let key = format!("key-{:06}", i).into_bytes();
       let expected = format!("val-{:06}", i).into_bytes();
@@ -675,11 +677,12 @@ fn test_hard_workload() {
   keys.sort();
   let mut count = 0;
   let mut t = engine.new_transaction().expect("tx start error");
-
-  let mut iter = t.scan_all().expect("scan start error");
-  while let Ok(Some((k, _))) = iter.try_next() {
-    assert_eq!(keys[count], k);
-    count += 1;
+  {
+    let mut iter = t.scan_all().expect("scan start error");
+    while let Ok(Some((k, _))) = iter.try_next() {
+      assert_eq!(keys[count], k);
+      count += 1;
+    }
   }
 
   assert_eq!(key_count, count);
@@ -806,13 +809,14 @@ fn insert_and_remove_and_gc() {
   let engine = build_engine(&dir);
 
   let mut t = engine.new_transaction().expect("tx start error");
-  let mut iter = t.scan_all().expect("scan start error");
-
-  let mut c = 0;
-  while let Ok(Some(_)) = iter.try_next() {
-    c += 1;
+  {
+    let mut iter = t.scan_all().expect("scan start error");
+    let mut c = 0;
+    while let Ok(Some(_)) = iter.try_next() {
+      c += 1;
+    }
+    assert_eq!(c, 1);
   }
-  assert_eq!(c, 1);
 
   for i in 0..count {
     let bytes: Vec<u8> = i.to_le_bytes().into();
@@ -822,13 +826,15 @@ fn insert_and_remove_and_gc() {
   t.commit().expect("commit error");
 
   let mut t = engine.new_transaction().expect("tx start error");
-  let mut iter = t.scan_all().expect("scan start error");
+  {
+    let mut iter = t.scan_all().expect("scan start error");
 
-  let mut c = 0;
-  while let Ok(Some(_)) = iter.try_next() {
-    c += 1;
+    let mut c = 0;
+    while let Ok(Some(_)) = iter.try_next() {
+      c += 1;
+    }
+    assert_eq!(c, count + 1);
   }
-  assert_eq!(c, count + 1);
   t.commit().expect("commit error");
 }
 
