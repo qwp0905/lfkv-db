@@ -81,13 +81,13 @@ impl Serializable for CursorNode {
         };
 
         let len = scanner.read_usize()?;
-        let mut keys = Vec::new();
+        let mut keys = Vec::with_capacity(len);
         for _ in 0..len {
           let l = scanner.read_usize()?;
           keys.push(scanner.read_n(l)?.to_vec());
         }
 
-        let mut children = Vec::new();
+        let mut children = Vec::with_capacity(len + 1);
         for _ in 0..=len {
           children.push(scanner.read_usize()?);
         }
@@ -98,7 +98,7 @@ impl Serializable for CursorNode {
         let prev = scanner.read_usize()?;
         let next = scanner.read_usize()?;
         let len = scanner.read_usize()?;
-        let mut entries = Vec::new();
+        let mut entries = Vec::with_capacity(len);
         for _ in 0..len {
           let l = scanner.read_usize()?;
           let key = scanner.read_n(l)?.to_vec();

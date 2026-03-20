@@ -134,7 +134,7 @@ impl Serializable for DataEntry {
   fn read_from(reader: &mut crate::disk::PageScanner) -> crate::Result<Self> {
     let next = reader.read_usize()?;
     let len = reader.read_usize()?;
-    let mut versions = VecDeque::new();
+    let mut versions = VecDeque::with_capacity(len);
     for _ in 0..len {
       let version = reader.read_usize()?;
       let owner = reader.read_usize()?;
