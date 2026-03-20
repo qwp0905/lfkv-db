@@ -76,11 +76,11 @@ where
         let mut flush = make_flush(SingleFn::new(when_buffered), SingleFn::new(result));
 
         loop {
-          while !backoff.is_completed() {
-            while buffered.len() < count {
+          'burst: while !backoff.is_completed() {
+            'inner: while buffered.len() < count {
               match queue_c.pop() {
                 Some(Context::Work(v, done)) => buffered.push((v, done)),
-                None => break,
+                None => break 'inner,
                 Some(Context::Term) => {
                   flush(&mut buffered);
                   return;
@@ -90,7 +90,7 @@ where
 
             if flush(&mut buffered) {
               backoff.reset();
-              continue;
+              continue 'burst;
             };
             backoff.snooze();
           }
