@@ -1,6 +1,5 @@
 use std::{
   cell::UnsafeCell,
-  mem::transmute,
   panic::{RefUnwindSafe, UnwindSafe},
   sync::Arc,
   thread::{park, Builder, JoinHandle, Thread},
@@ -8,36 +7,29 @@ use std::{
 
 use crate::{
   utils::{ToArc, UnsafeBorrow, UnsafeBorrowMut},
-  Error, Result,
+  Result,
 };
 
 use super::{BackgroundThread, Context, OneshotFulfill, SingleFn};
 use crossbeam::{queue::SegQueue, utils::Backoff};
 
-fn make_flush<'a, T, R, A>(
-  mut when_buffered: SingleFn<'a, Vec<T>, A>,
-  mut make_result: SingleFn<'a, &'a A, R>,
+fn make_flush<'a, T, R>(
+  mut when_buffered: SingleFn<'a, Vec<T>, R>,
 ) -> impl FnMut(&mut Vec<(T, OneshotFulfill<Result<R>>)>) -> bool + 'a
 where
   T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
-  A: Send + RefUnwindSafe + Sync + 'static,
+  R: Send + Clone + 'static,
 {
   move |buffered| {
     if buffered.is_empty() {
       return false;
     }
 
-    let (values, waiting): (Vec<_>, Vec<OneshotFulfill<Result<R>>>) =
-      buffered.drain(..).unzip();
-    match when_buffered.call(values) {
-      Ok(r) => waiting
-        .into_iter()
-        .for_each(|done| done.fulfill(make_result.call(unsafe { transmute(&r) }))),
-      Err(_) => waiting
-        .into_iter()
-        .for_each(|done| done.fulfill(Err(Error::BufferingFailed))),
-    };
+    let (values, waiting): (Vec<_>, Vec<_>) = buffered.drain(..).unzip();
+    let result = when_buffered.call(values).map(Ok).unwrap_or_else(Err);
+    waiting
+      .into_iter()
+      .for_each(|done| done.fulfill(result.clone()));
     true
   }
 }
@@ -50,20 +42,14 @@ pub struct EagerBufferingThread<T, R> {
 impl<T, R> EagerBufferingThread<T, R>
 where
   T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
+  R: Send + Clone + 'static,
 {
-  pub fn new<A, F, E, S: ToString>(
+  pub fn new<S: ToString>(
     name: S,
     size: usize,
     count: usize,
-    when_buffered: F,
-    result: E,
-  ) -> Self
-  where
-    A: Send + RefUnwindSafe + Sync + 'static,
-    F: FnMut(Vec<T>) -> A + RefUnwindSafe + Send + Sync + 'static,
-    E: for<'a> Fn(&'a A) -> R + Send + Sync + RefUnwindSafe + 'static,
-  {
+    when_buffered: SingleFn<'static, Vec<T>, R>,
+  ) -> Self {
     let queue = SegQueue::new().to_arc();
     let queue_c = Arc::clone(&queue);
 
@@ -73,7 +59,7 @@ where
       .spawn(move || {
         let backoff = Backoff::new();
         let mut buffered = Vec::with_capacity(count);
-        let mut flush = make_flush(SingleFn::new(when_buffered), SingleFn::new(result));
+        let mut flush = make_flush(when_buffered);
 
         loop {
           'burst: while !backoff.is_completed() {
