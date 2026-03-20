@@ -69,7 +69,7 @@ impl Cursor {
     Ok(())
   }
 
-  fn find_leaf(&self, key: &Vec<u8>) -> Result<usize> {
+  fn find_leaf(&self, key: &[u8]) -> Result<usize> {
     let mut index = self
       .orchestrator
       .fetch(HEADER_INDEX)?
@@ -90,12 +90,12 @@ impl Cursor {
     Ok(index)
   }
 
-  pub fn get(&self, key: &Vec<u8>) -> Result<Option<Vec<u8>>> {
+  pub fn get<K: AsRef<[u8]>>(&self, key: &K) -> Result<Option<Vec<u8>>> {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
 
-    let mut index = self.find_leaf(key)?;
+    let mut index = self.find_leaf(key.as_ref())?;
     loop {
       let node = self
         .orchestrator
@@ -104,7 +104,7 @@ impl Cursor {
         .as_ref()
         .deserialize::<CursorNode>()?
         .as_leaf()?;
-      match node.find(key) {
+      match node.find(key.as_ref()) {
         NodeFindResult::Found(_, i) => break index = i,
         NodeFindResult::Move(i) => index = i,
         NodeFindResult::NotFound(_) => return Ok(None),
@@ -319,11 +319,11 @@ impl Cursor {
     Ok(())
   }
 
-  pub fn remove(&self, key: &Vec<u8>) -> Result {
+  pub fn remove<K: AsRef<[u8]>>(&self, key: &K) -> Result {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
-    let mut index = self.find_leaf(key)?;
+    let mut index = self.find_leaf(key.as_ref())?;
     loop {
       let node = self
         .orchestrator
@@ -332,7 +332,7 @@ impl Cursor {
         .as_ref()
         .deserialize::<CursorNode>()?
         .as_leaf()?;
-      match node.find(key) {
+      match node.find(key.as_ref()) {
         NodeFindResult::Found(_, i) => return self.insert_at(i, RecordData::Tombstone),
         NodeFindResult::Move(i) => index = i,
         NodeFindResult::NotFound(_) => return Ok(()),
@@ -340,12 +340,12 @@ impl Cursor {
     }
   }
 
-  pub fn scan(&self, start: &Vec<u8>, end: &Vec<u8>) -> Result<CursorIterator<'_>> {
+  pub fn scan<K: AsRef<[u8]>>(&self, start: &K, end: &K) -> Result<CursorIterator<'_>> {
     if self.committed {
       return Err(Error::TransactionClosed);
     }
 
-    let mut index = self.find_leaf(start)?;
+    let mut index = self.find_leaf(start.as_ref())?;
     let (leaf, pos) = loop {
       let node = self
         .orchestrator
@@ -354,7 +354,7 @@ impl Cursor {
         .as_ref()
         .deserialize::<CursorNode>()?
         .as_leaf()?;
-      match node.find(start) {
+      match node.find(start.as_ref()) {
         NodeFindResult::Found(pos, _) => break (node, pos),
         NodeFindResult::Move(i) => index = i,
         NodeFindResult::NotFound(pos) => break (node, pos),
@@ -367,7 +367,7 @@ impl Cursor {
       leaf,
       pos,
       &self.committed,
-      Some(end.clone()),
+      Some(end.as_ref().into()),
     ))
   }
 
