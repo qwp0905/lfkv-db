@@ -1,4 +1,4 @@
-use super::{Key, Pointer};
+use super::{Key, KeyRef, Pointer};
 use crate::{
   disk::{PageScanner, PageWriter, PAGE_SIZE},
   serialize::{Serializable, SerializeType},
@@ -132,13 +132,13 @@ impl InternalNode {
       right,
     }
   }
-  pub fn find(&self, key: &Key) -> std::result::Result<Pointer, Pointer> {
+  pub fn find(&self, key: KeyRef) -> std::result::Result<Pointer, Pointer> {
     if let Some((right, high)) = &self.right {
-      if high <= key {
+      if high as KeyRef <= key.as_ref() {
         return Err(*right);
       }
     };
-    match self.keys.binary_search_by(|k| k.cmp(key)) {
+    match self.keys.binary_search_by(|k| (k as KeyRef).cmp(key)) {
       Ok(i) => Ok(self.children[i + 1]),
       Err(i) => Ok(self.children[i]),
     }
@@ -220,8 +220,11 @@ impl LeafNode {
       next,
     }
   }
-  pub fn find(&self, key: &Key) -> NodeFindResult {
-    match self.entries.binary_search_by(|(k, _)| k.cmp(key)) {
+  pub fn find(&self, key: KeyRef) -> NodeFindResult {
+    match self
+      .entries
+      .binary_search_by(|(k, _)| (k as KeyRef).cmp(key.as_ref()))
+    {
       Ok(i) => NodeFindResult::Found(i, self.entries[i].1),
       Err(i) => {
         if i == self.entries.len() {
