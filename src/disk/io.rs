@@ -108,7 +108,7 @@ impl Pwritev for File {
 
     Ok(ret as usize)
   }
-  #[cfg(windows)]
+  #[cfg(not(unix))]
   fn pwritev(&self, bufs: &[IoSlice], offset: u64) -> Result<usize> {
     let total: usize = bufs.iter().map(|b| b.len()).sum();
     let mut buf = vec![0u8; total];
