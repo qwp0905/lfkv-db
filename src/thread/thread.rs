@@ -6,7 +6,7 @@ use crate::{Error, Result};
 
 use super::{oneshot, BatchWorkResult, Context, WorkResult};
 
-pub trait BackgroundThread<T, R>: Send + Sync + RefUnwindSafe + UnwindSafe {
+pub trait BackgroundThread<T, R = ()>: Send + Sync + RefUnwindSafe + UnwindSafe {
   /**
    * return flag of success or failed to register work to thread.
    */

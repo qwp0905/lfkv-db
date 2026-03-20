@@ -20,15 +20,14 @@ pub struct LazyBufferingThread<T, R> {
 impl<T, R> LazyBufferingThread<T, R>
 where
   T: Send + UnwindSafe + 'static,
-  R: Send + 'static,
+  R: Send + Clone + 'static,
 {
   pub fn new<S: ToString>(
     name: S,
     size: usize,
     max_buffering_count: usize,
     timeout: Duration,
-    mut when_buffered: SingleFn<'static, (), bool>,
-    mut make_result: SingleFn<'static, (T, bool), R>,
+    mut when_buffered: SingleFn<'static, Vec<T>, R>,
   ) -> Self {
     let (tx, rx) = unbounded();
 
@@ -40,10 +39,15 @@ where
         let mut timer = timeout.as_timer();
 
         let mut flush = |buffer: &mut Vec<(T, OneshotFulfill<Result<R>>)>| {
-          let r = when_buffered.call(()).unwrap_or(false);
-          for (v, done) in buffer.drain(..) {
-            done.fulfill(make_result.call((v, r)));
+          if buffer.is_empty() {
+            return;
           }
+
+          let (values, waiting): (Vec<_>, Vec<_>) = buffer.drain(..).unzip();
+          let result = when_buffered.call(values).map(Ok).unwrap_or_else(Err);
+          waiting
+            .into_iter()
+            .for_each(|done| done.fulfill(result.clone()));
         };
 
         loop {
@@ -59,11 +63,6 @@ where
               return flush(&mut buffered)
             }
             Err(RecvTimeoutError::Timeout) => {}
-          }
-
-          if buffered.is_empty() {
-            timer.reset();
-            continue;
           }
 
           flush(&mut buffered);

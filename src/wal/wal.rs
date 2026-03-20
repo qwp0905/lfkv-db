@@ -35,6 +35,9 @@ pub struct WALConfig {
   pub max_file_size: usize,
 }
 
+/**
+ * Write ahead log
+ */
 pub struct WAL {
   /**
    *  preload wal segment
@@ -60,7 +63,7 @@ pub struct WAL {
   /**
    * buffering rotated segment and trigger checkpoint.
    */
-  wait_checkpoint: Box<dyn BackgroundThread<WALSegment, Result>>,
+  wait_checkpoint: Box<dyn BackgroundThread<WALSegment>>,
   /**
    * queue for segment whick checkpoint failed.
    * it will be clear and move to preloader to reuse segment when checkpoint complete.
@@ -120,8 +123,7 @@ impl WAL {
       .lazy_buffering(
         config.segment_flush_delay,
         config.segment_flush_count,
-        move |_| checkpoint.send(()).wait().is_ok(),
-        waiting_checkpoint(preloader.clone(), not_flushed.clone()),
+        waiting_checkpoint(checkpoint, preloader.clone(), not_flushed.clone()),
       )
       .to_box();
 
@@ -355,19 +357,17 @@ unsafe impl Send for WAL {}
 unsafe impl Sync for WAL {}
 
 fn waiting_checkpoint(
+  checkpoint: WorkInput<(), Result>,
   preloader: Arc<SegmentPreload>,
   failed: Arc<SegQueue<WALSegment>>,
-) -> impl Fn((WALSegment, bool)) -> Result {
-  move |(segment, result)| {
-    match result {
-      true => {
-        while let Some(buffered) = failed.pop() {
-          preloader.reuse(buffered);
-        }
-        preloader.reuse(segment)
+) -> impl Fn(Vec<WALSegment>) {
+  move |segments| match checkpoint.send(()).wait_flatten() {
+    Ok(_) => {
+      while let Some(buffered) = failed.pop() {
+        preloader.reuse(buffered);
       }
-      false => failed.push(segment),
+      segments.into_iter().for_each(|s| preloader.reuse(s));
     }
-    Ok(())
+    Err(_) => segments.into_iter().for_each(|s| failed.push(s)),
   }
 }
