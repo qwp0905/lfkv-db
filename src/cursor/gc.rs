@@ -280,9 +280,9 @@ fn run_clean_leaf(
         }
       }
 
-      match new_entries.len() {
-        len if len == 0 => {}
-        len if len == prev_len => continue,
+      let next = match (new_entries.len(), index) {
+        (0, Some(next)) => next,
+        (len, _) if len == prev_len => continue,
         _ => {
           leaf.set_entries(new_entries);
           recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
@@ -294,25 +294,9 @@ fn run_clean_leaf(
             .for_each(|p| queue.push(p));
           continue;
         }
-      }
-
-      // merge start
-      let next = match index {
-        Some(next) => next,
-        None => {
-          leaf.set_entries(new_entries);
-          recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
-          drop(slot);
-
-          orphand
-            .into_iter()
-            .map(GcPointer::Release)
-            .for_each(|p| queue.push(p));
-
-          continue;
-        }
       };
 
+      // merge start
       logger.debug(format!(
         "trying to start merge {} with {}",
         slot.get_index(),
