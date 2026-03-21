@@ -22,7 +22,7 @@ fn build_engine(dir: &TempDir) -> Engine {
     .buffer_pool_memory_capacity(32 << 20)
     .buffer_pool_shard_count(1 << 2)
     .group_commit_count(10)
-    .gc_trigger_interval(Duration::from_secs(10))
+    .gc_trigger_interval(Duration::from_secs(5))
     .logger(TestLogger)
     .log_level(LogLevel::Trace)
     .build()
@@ -778,7 +778,7 @@ fn test_heavy_gc_single_key() {
 #[test]
 fn insert_and_remove_and_gc() {
   let dir = tempdir_in(".").unwrap();
-  let engine = build_engine(&dir);
+  let engine = Arc::new(build_engine(&dir));
 
   let count: usize = 1000;
   for i in 0..count {
@@ -794,14 +794,23 @@ fn insert_and_remove_and_gc() {
     t.remove(&bytes).expect("insert error");
     t.commit().expect("commit error")
   }
+  let e = engine.clone();
+  let th = std::thread::spawn(move || {
+    for _ in 0..count {
+      let tx = e.new_transaction().expect("tx start error");
+      let mut iter = tx.scan_all().expect("scan error");
+      while let Ok(Some(_)) = iter.try_next() {}
+    }
+  });
+  std::thread::sleep(Duration::from_secs(60));
 
-  let last_key = count.to_le_bytes();
-  let mut tx = engine.new_transaction().expect("tx start error");
-  tx.insert(last_key.clone().into(), last_key.clone().into())
-    .expect("insert error");
-  tx.commit().expect("commit error");
-
-  drop(engine);
+  for i in count..count << 1 {
+    let mut t = engine.new_transaction().expect("tx start error");
+    let bytes: Vec<u8> = i.to_le_bytes().into();
+    t.insert(bytes.clone(), bytes).expect("insert error");
+    t.commit().expect("commit error")
+  }
+  th.join().unwrap();
 
   let engine = build_engine(&dir);
 
@@ -812,7 +821,7 @@ fn insert_and_remove_and_gc() {
   while let Ok(Some(_)) = iter.try_next() {
     c += 1;
   }
-  assert_eq!(c, 1);
+  assert_eq!(c, count);
 
   for i in 0..count {
     let bytes: Vec<u8> = i.to_le_bytes().into();
@@ -828,7 +837,7 @@ fn insert_and_remove_and_gc() {
   while let Ok(Some(_)) = iter.try_next() {
     c += 1;
   }
-  assert_eq!(c, count + 1);
+  assert_eq!(c, count << 1);
   t.commit().expect("commit error");
 }
 
