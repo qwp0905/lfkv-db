@@ -299,6 +299,20 @@ impl WAL {
     )
   }
 
+  pub fn append_multi(
+    &self,
+    tx_id: usize,
+    index1: usize,
+    data1: Vec<u8>,
+    index2: usize,
+    data2: Vec<u8>,
+  ) -> Result {
+    self.append(
+      |log_id| LogRecord::new_multi(log_id, tx_id, index1, data1, index2, data2),
+      false,
+    )
+  }
+
   pub fn checkpoint_and_flush(&self, last_log_id: usize, min_active: usize) -> Result {
     self.append(
       |log_id| LogRecord::new_checkpoint(log_id, last_log_id, min_active),
