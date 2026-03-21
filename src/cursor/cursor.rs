@@ -155,15 +155,17 @@ impl Cursor {
     }
 
     let (mid_key, right_ptr) = loop {
-      let mut leaf_slot = self.orchestrator.fetch(index)?.for_write();
-      let mut leaf = leaf_slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
+      let mut slot = self.orchestrator.fetch(index)?.for_write();
+      let mut leaf = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
 
       match leaf.find(&key) {
         NodeFindResult::Move(i) => {
           index = i;
           continue;
         }
-        NodeFindResult::Found(_, i) => return self.insert_at(i, RecordData::Data(value)),
+        NodeFindResult::Found(_, i) => {
+          return self.insert_at(i, RecordData::Data(value), slot)
+        }
         NodeFindResult::NotFound(i) => {
           let entry = DataEntry::init(VersionRecord::new(
             self.tx_id,
@@ -174,16 +176,14 @@ impl Cursor {
 
           let split = match leaf.insert_at(i, key.clone(), entry_index) {
             Some(split) => split,
-            None => {
-              return self.serialize_and_log(&mut leaf_slot, &CursorNode::Leaf(leaf))
-            }
+            None => return self.serialize_and_log(&mut slot, &CursorNode::Leaf(leaf)),
           };
 
           let mid_key = split.top().clone();
           let split_index = self.alloc_and_log(&CursorNode::Leaf(split))?;
 
           leaf.set_next(split_index);
-          self.serialize_and_log(&mut leaf_slot, &CursorNode::Leaf(leaf))?;
+          self.serialize_and_log(&mut slot, &CursorNode::Leaf(leaf))?;
 
           break (mid_key, split_index);
         }
@@ -281,8 +281,13 @@ impl Cursor {
     Ok(Some((split_key, split_index)))
   }
 
-  fn insert_at(&self, entry_index: usize, data: RecordData) -> Result {
+  /**
+   * coupling required because of gc can collect entry header before write lock.
+   */
+  fn insert_at<T>(&self, entry_index: usize, data: RecordData, coupling: T) -> Result {
     let mut slot = self.orchestrator.fetch(entry_index)?.for_write();
+    drop(coupling);
+
     let mut entry: DataEntry = slot.as_ref().deserialize()?;
     if let Some(owner) = entry.get_last_owner() {
       if owner != self.tx_id && self.orchestrator.is_active(&owner) {
@@ -313,15 +318,12 @@ impl Cursor {
     }
     let mut index = self.find_leaf(key.as_ref())?;
     loop {
-      let node = self
-        .orchestrator
-        .fetch(index)?
-        .for_read()
-        .as_ref()
-        .deserialize::<CursorNode>()?
-        .as_leaf()?;
+      let slot = self.orchestrator.fetch(index)?.for_read();
+      let node = slot.as_ref().deserialize::<CursorNode>()?.as_leaf()?;
       match node.find(key.as_ref()) {
-        NodeFindResult::Found(_, i) => return self.insert_at(i, RecordData::Tombstone),
+        NodeFindResult::Found(_, i) => {
+          return self.insert_at(i, RecordData::Tombstone, slot)
+        }
         NodeFindResult::Move(i) => index = i,
         NodeFindResult::NotFound(_) => return Ok(()),
       }
@@ -364,14 +366,13 @@ impl Cursor {
       return Err(Error::TransactionClosed);
     }
 
-    let header: TreeHeader = self
+    let mut index = self
       .orchestrator
       .fetch(HEADER_INDEX)?
       .for_read()
       .as_ref()
-      .deserialize()?;
-
-    let mut index = header.get_root();
+      .deserialize::<TreeHeader>()?
+      .get_root();
     let leaf = loop {
       let node: CursorNode = self
         .orchestrator
