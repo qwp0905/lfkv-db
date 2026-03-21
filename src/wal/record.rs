@@ -10,6 +10,13 @@ pub enum Operation {
     usize,   // index of the page
     Vec<u8>, // data
   ),
+  // like in case merge btree node, two insert opertion should be atomic
+  Multi(
+    usize,   // index of the first page
+    Vec<u8>, // data of the first page
+    usize,   // index of the second page
+    Vec<u8>, // data of the second page
+  ),
   Start,
   Commit,
   Abort,
@@ -21,11 +28,12 @@ pub enum Operation {
 impl Operation {
   fn type_byte(&self) -> u8 {
     match self {
-      Operation::Insert(_, _) => 1,
+      Operation::Insert(..) => 1,
       Operation::Start => 2,
       Operation::Commit => 3,
       Operation::Abort => 4,
-      Operation::Checkpoint(_, _) => 5,
+      Operation::Checkpoint(..) => 5,
+      Operation::Multi(..) => 6,
     }
   }
 
@@ -34,6 +42,7 @@ impl Operation {
   fn byte_len(&self) -> u16 {
     match self {
       Operation::Insert(_, data) => 1 + 8 + data.len() as u16,
+      Operation::Multi(_, d1, _, d2) => 1 + 16 + 2 + d1.len() as u16 + d2.len() as u16,
       Operation::Checkpoint(_, _) => Self::CHECKPOINT_LEN,
       _ => Self::OTHER_LEN,
     }
@@ -79,6 +88,20 @@ impl LogRecord {
   pub fn new_checkpoint(log_id: usize, last_log_id: usize, min_active: usize) -> Self {
     LogRecord::new(log_id, 0, Operation::Checkpoint(last_log_id, min_active))
   }
+  pub fn new_multi(
+    log_id: usize,
+    tx_id: usize,
+    index1: usize,
+    data1: Vec<u8>,
+    index2: usize,
+    data2: Vec<u8>,
+  ) -> Self {
+    LogRecord::new(
+      log_id,
+      tx_id,
+      Operation::Multi(index1, data1, index2, data2),
+    )
+  }
 
   unsafe fn write_at(&self, ptr: *mut u8) {
     let mut offset = 4;
@@ -107,6 +130,22 @@ impl LogRecord {
       Operation::Start => {}
       Operation::Commit => {}
       Operation::Abort => {}
+      Operation::Multi(index1, data1, index2, data2) => {
+        copy_nonoverlapping(index1.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+        offset += 8;
+        let data_len = data1.len();
+        copy_nonoverlapping((data_len as u16).to_le_bytes().as_ptr(), ptr.add(offset), 2);
+        offset += 2;
+
+        copy_nonoverlapping(data1.as_ptr(), ptr.add(offset), data_len);
+        offset += data_len;
+
+        copy_nonoverlapping(index2.to_le_bytes().as_ptr(), ptr.add(offset), 8);
+        offset += 8;
+        let data_len = data2.len();
+        copy_nonoverlapping(data2.as_ptr(), ptr.add(offset), data_len);
+        offset += data_len;
+      }
     };
 
     let mut hasher = crc32fast::Hasher::new();
@@ -152,45 +191,65 @@ impl TryFrom<&[u8]> for LogRecord {
       return Err(Error::InvalidFormat("checksum not matched."));
     }
 
+    let mut offset = 21;
     let log_id = usize::from_le_bytes(unsafe { (ptr.add(4) as *const [u8; 8]).read() });
     let tx_id = usize::from_le_bytes(unsafe { (ptr.add(12) as *const [u8; 8]).read() });
     let operation = match unsafe { *ptr.add(20) } {
-      1 => {
-        let index =
-          usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
+      1 => unsafe {
+        let index = usize::from_le_bytes((ptr.add(offset) as *const [u8; 8]).read());
+        offset += 8;
 
-        let mut data = vec![0; len - 29];
-        unsafe { copy_nonoverlapping(ptr.add(29), data.as_mut_ptr(), len - 29) };
+        let mut data = vec![0; len - offset];
+        copy_nonoverlapping(ptr.add(offset), data.as_mut_ptr(), data.len());
         Operation::Insert(index, data)
-      }
+      },
       2 => {
-        if len != 21 {
+        if len != offset {
           return Err(Error::InvalidFormat("invalid len for start log."));
         }
         Operation::Start
       }
       3 => {
-        if len != 21 {
+        if len != offset {
           return Err(Error::InvalidFormat("invalid len for commit log."));
         }
         Operation::Commit
       }
       4 => {
-        if len != 21 {
+        if len != offset {
           return Err(Error::InvalidFormat("invalid len for abort log."));
         };
         Operation::Abort
       }
-      5 => {
-        if len != 37 {
+      5 => unsafe {
+        if len != offset + 16 {
           return Err(Error::InvalidFormat("invalid len for checkpoint log."));
         }
-        let log_id =
-          usize::from_le_bytes(unsafe { (ptr.add(21) as *const [u8; 8]).read() });
-        let min_active =
-          usize::from_le_bytes(unsafe { (ptr.add(29) as *const [u8; 8]).read() });
+        let log_id = usize::from_le_bytes((ptr.add(offset) as *const [u8; 8]).read());
+        offset += 8;
+        let min_active = usize::from_le_bytes((ptr.add(offset) as *const [u8; 8]).read());
         Operation::Checkpoint(log_id, min_active)
-      }
+      },
+      6 => unsafe {
+        let index1 = usize::from_le_bytes((ptr.add(offset) as *const [u8; 8]).read());
+        offset += 8;
+
+        let data_len =
+          u16::from_le_bytes((ptr.add(offset) as *const [u8; 2]).read()) as usize;
+        offset += 2;
+
+        let mut data1 = vec![0; data_len];
+        copy_nonoverlapping(ptr.add(offset), data1.as_mut_ptr(), data_len);
+        offset += data_len;
+
+        let index2 = usize::from_le_bytes((ptr.add(offset) as *const [u8; 8]).read());
+        offset += 8;
+
+        let mut data2 = vec![0; len - offset];
+        copy_nonoverlapping(ptr.add(offset), data2.as_mut_ptr(), data2.len());
+
+        Operation::Multi(index1, data1, index2, data2)
+      },
       _ => return Err(Error::InvalidFormat("invalid type log record.")),
     };
     Ok(LogRecord::new(log_id, tx_id, operation))

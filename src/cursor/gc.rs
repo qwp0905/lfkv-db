@@ -280,13 +280,45 @@ fn run_clean_leaf(
         }
       }
 
-      if new_entries.len() == prev_len {
-        continue;
-      }
+      let next = match (new_entries.len(), index) {
+        (0, Some(next)) => next,
+        (len, _) if len == prev_len => continue,
+        _ => {
+          leaf.set_entries(new_entries);
+          recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
+          drop(slot);
 
-      leaf.set_entries(new_entries);
-      recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
+          orphand
+            .into_iter()
+            .map(GcPointer::Release)
+            .for_each(|p| queue.push(p));
+          continue;
+        }
+      };
+
+      // merge start
+      logger.debug(format!(
+        "trying to start merge {} with {}",
+        slot.get_index(),
+        next
+      ));
+
+      let mut next_slot = buffer_pool.peek(next)?.for_write();
+      let next_leaf = next_slot.as_ref().deserialize::<CursorNode>()?;
+      leaf.set_next(slot.get_index());
+
+      recorder.log_multi(
+        0,
+        &mut slot,
+        &next_leaf,
+        &mut next_slot,
+        &CursorNode::Leaf(leaf),
+      )?;
+
+      index = Some(slot.get_index());
+
       drop(slot);
+      drop(next_slot);
 
       orphand
         .into_iter()

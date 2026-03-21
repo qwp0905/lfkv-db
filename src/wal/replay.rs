@@ -58,7 +58,7 @@ pub fn replay(
 
   let mut tx_id = 0;
   let mut log_id = 0;
-  let mut redo = BTreeMap::<usize, (usize, Vec<u8>)>::new();
+  let mut redo = BTreeMap::<usize, Vec<(usize, Vec<u8>)>>::new();
   let mut aborted = BTreeMap::<usize, usize>::new();
   let mut started = BTreeSet::<usize>::new();
   let mut closed = HashSet::<usize>::new();
@@ -91,7 +91,15 @@ pub fn replay(
           if last_checkpoint.map_or(false, |c| c >= record.log_id) {
             continue;
           }
-          redo.insert(record.log_id, (i, page));
+          redo.entry(record.log_id).or_default().push((i, page));
+        }
+        Operation::Multi(idx1, data1, idx2, data2) => {
+          if last_checkpoint.map_or(false, |c| c >= record.log_id) {
+            continue;
+          }
+          let e = redo.entry(record.log_id).or_default();
+          e.push((idx1, data1));
+          e.push((idx2, data2));
         }
         Operation::Start => {
           if let Some(&id) = last_min_active.as_ref() {
@@ -126,7 +134,12 @@ pub fn replay(
   }
   let mut redo = redo
     .into_iter()
-    .map(|(id, (index, data))| (id, index, data))
+    .flat_map(|(id, data)| {
+      data
+        .into_iter()
+        .map(|(i, p)| (id, i, p))
+        .collect::<Vec<_>>()
+    })
     .collect::<Vec<_>>();
   redo.sort_by_key(|(id, _, _)| *id);
 
