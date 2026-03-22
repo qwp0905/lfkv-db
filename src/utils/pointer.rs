@@ -1,4 +1,7 @@
-use std::{ptr::NonNull, sync::Arc};
+use std::{
+  ptr::{drop_in_place, NonNull},
+  sync::Arc,
+};
 
 pub trait ToArc {
   fn to_arc(self) -> Arc<Self>;
@@ -81,5 +84,14 @@ impl<T> UnsafeTake<T> for NonNull<T> {
   #[inline(always)]
   fn take_unsafe(self) -> T {
     unsafe { *Box::from_raw(self.as_ptr()) }
+  }
+}
+
+pub trait UnsafeDrop<T> {
+  fn drop_unsafe(self);
+}
+impl<T> UnsafeDrop<T> for *const T {
+  fn drop_unsafe(self) {
+    unsafe { drop_in_place(self as *mut T) };
   }
 }

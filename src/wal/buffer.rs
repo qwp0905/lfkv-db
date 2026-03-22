@@ -7,7 +7,7 @@ use super::{FsyncResult, WALSegment, WAL_BLOCK_SIZE};
 use crate::{
   disk::PageRef,
   error::Result,
-  utils::{ToRawPointer, UnsafeBorrow, UnsafeTake},
+  utils::{ToRawPointer, UnsafeBorrow, UnsafeDrop, UnsafeTake},
 };
 
 const U16_MASK: u32 = 0xFFFF;
@@ -160,8 +160,8 @@ impl LogBuffer {
    * it should be call when nothing to refer this segment
    */
   pub fn take_segment(&self) -> WALSegment {
-    let _ = self.written_count.take_unsafe();
-    let _ = self.segment_pin.take_unsafe();
+    self.written_count.drop_unsafe();
+    self.segment_pin.drop_unsafe();
     self.segment.take_unsafe()
   }
   pub fn load_offset(&self) -> usize {
