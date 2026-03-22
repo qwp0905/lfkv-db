@@ -285,7 +285,7 @@ fn run_clean_leaf(
         (len, _) if len == prev_len => continue,
         _ => {
           leaf.set_entries(new_entries);
-          recorder.serialize_and_log(0, &mut slot, &CursorNode::Leaf(leaf))?;
+          recorder.serialize_and_log(0, &mut slot, &leaf.to_node())?;
           drop(slot);
 
           orphand
@@ -307,14 +307,7 @@ fn run_clean_leaf(
       let next_leaf = next_slot.as_ref().deserialize::<CursorNode>()?;
       leaf.set_next(slot.get_index());
 
-      recorder.log_multi(
-        0,
-        &mut slot,
-        &next_leaf,
-        &mut next_slot,
-        &CursorNode::Leaf(leaf),
-      )?;
-
+      recorder.log_multi(0, &mut slot, &next_leaf, &mut next_slot, &leaf.to_node())?;
       index = Some(slot.get_index());
 
       drop(slot);

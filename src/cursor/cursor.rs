@@ -176,14 +176,14 @@ impl Cursor {
 
           let split = match leaf.insert_at(i, key.clone(), entry_index) {
             Some(split) => split,
-            None => return self.serialize_and_log(&mut slot, &CursorNode::Leaf(leaf)),
+            None => return self.serialize_and_log(&mut slot, &leaf.to_node()),
           };
 
           let mid_key = split.top().clone();
-          let split_index = self.alloc_and_log(&CursorNode::Leaf(split))?;
+          let split_index = self.alloc_and_log(&split.to_node())?;
 
           leaf.set_next(split_index);
-          self.serialize_and_log(&mut slot, &CursorNode::Leaf(leaf))?;
+          self.serialize_and_log(&mut slot, &leaf.to_node())?;
 
           break (mid_key, split_index);
         }
@@ -209,7 +209,7 @@ impl Cursor {
       let mut index = header.get_root();
       if old_height == current_height {
         let new_root = InternalNode::initialize(split_key, index, split_pointer);
-        let new_root_index = self.alloc_and_log(&CursorNode::Internal(new_root))?;
+        let new_root_index = self.alloc_and_log(&new_root.to_node())?;
 
         header.set_root(new_root_index);
         header.increase_height();
@@ -268,15 +268,15 @@ impl Cursor {
       Some(split) => split,
       None => {
         return self
-          .serialize_and_log(&mut slot, &CursorNode::Internal(internal))
+          .serialize_and_log(&mut slot, &internal.to_node())
           .map(|_| None)
       }
     };
 
-    let split_index = self.alloc_and_log(&CursorNode::Internal(split_node))?;
+    let split_index = self.alloc_and_log(&split_node.to_node())?;
 
     internal.set_right(&split_key, split_index);
-    self.serialize_and_log(&mut slot, &CursorNode::Internal(internal))?;
+    self.serialize_and_log(&mut slot, &internal.to_node())?;
 
     Ok(Some((split_key, split_index)))
   }
