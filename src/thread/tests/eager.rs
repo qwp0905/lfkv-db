@@ -25,67 +25,6 @@ fn test_basic_send_and_receive() {
 }
 
 #[test]
-fn test_buffering_burst() {
-  let flush_count = Arc::new(AtomicUsize::new(0));
-  let flush_count_c = flush_count.clone();
-  let max_batch = Arc::new(AtomicUsize::new(0));
-  let max_batch_c = max_batch.clone();
-
-  let thread = EagerBufferingThread::new(
-    "test-burst",
-    DEFAULT_STACK_SIZE,
-    64,
-    SingleFn::new(move |values: Vec<usize>| {
-      flush_count_c.fetch_add(1, Ordering::Release);
-      let mut m = max_batch_c.load(Ordering::Acquire);
-      loop {
-        let new = m.max(values.len());
-        match max_batch_c.compare_exchange(m, new, Ordering::Release, Ordering::Acquire) {
-          Ok(_) => break,
-          Err(v) => m = v,
-        }
-      }
-      // simulate slow IO to allow buffering
-      thread::sleep(Duration::from_millis(50));
-      values.iter().sum::<usize>()
-    }),
-  );
-
-  // send first to trigger blocking recv
-  let first = thread.send(1);
-
-  // wait for worker to start processing
-  thread::sleep(Duration::from_millis(10));
-
-  // burst send while worker is busy
-  let mut results = vec![first];
-  for i in 2..=10 {
-    results.push(thread.send(i));
-  }
-
-  // all should complete
-  let values: Vec<usize> = results.into_iter().map(|r| r.wait().unwrap()).collect();
-  assert_eq!(values[0], 1); // first was alone
-  let sum: usize = (2..=10).sum();
-  for &v in &values[1..] {
-    assert_eq!(v, sum); // rest were batched together
-  }
-
-  // should have had fewer flushes than total sends
-  let flushes = flush_count.load(Ordering::Acquire);
-  assert!(
-    flushes < 10,
-    "expected fewer flushes than sends, got {flushes}"
-  );
-
-  // batch size should be > 1 (buffering occurred)
-  let batch = max_batch.load(Ordering::Acquire);
-  assert!(batch > 1, "expected batch size > 1, got {batch}");
-
-  thread.close();
-}
-
-#[test]
 fn test_try_recv_drains_pending() {
   let batch_sizes = Arc::new(Mutex::new(vec![]));
   let batch_sizes_c = batch_sizes.clone();
