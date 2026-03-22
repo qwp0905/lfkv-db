@@ -33,10 +33,10 @@ tx.insert(b"key1".to_vec(), b"value1".to_vec())?;
 tx.insert(b"key2".to_vec(), b"value2".to_vec())?;
 
 // Read
-let value = tx.get(&b"key1".to_vec())?;
+let value = tx.get(b"key1")?;
 
 // Range scan [start, end)
-let mut iter = tx.scan(&b"key1".to_vec(), &b"key3".to_vec())?;
+let mut iter = tx.scan(b"key1", b"key3")?;
 while let Some((key, value)) = iter.try_next()? {
     // process data
 }
@@ -48,7 +48,7 @@ while let Some((key, value)) = iter.try_next()? {
 }
 
 // Delete
-tx.remove(&b"key1".to_vec())?;
+tx.remove(b"key1")?;
 
 // Commit (or auto-aborts on drop)
 tx.commit()?;
