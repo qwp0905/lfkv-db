@@ -196,7 +196,7 @@ fn test_close_flushes_remaining() {
 
   // send items
   for i in 0..5 {
-    thread.send_no_wait(i);
+    let _ = thread.send(i);
   }
 
   // close should flush remaining

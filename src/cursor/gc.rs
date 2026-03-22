@@ -32,7 +32,6 @@ pub struct GarbageCollector {
   clean_leaf: Box<dyn BackgroundThread<(), Result>>,
   check: Arc<dyn BackgroundThread<Pointer, Result<bool>>>,
   entry: Arc<dyn BackgroundThread<Pointer, Result>>,
-  release: Arc<dyn BackgroundThread<Pointer, Result>>,
   buffer_pool: Arc<BufferPool>,
   free_list: Arc<FreeList>,
   initialized: Arc<AtomicBool>,
@@ -67,7 +66,10 @@ impl GarbageCollector {
       .map(|v| v.wait_flatten())
       .collect::<Result>()?;
     self.logger.debug("unreachable versions all collected.");
-    self.release.send_batch(release);
+
+    // must release after triming because of trim type can contain release type.
+    // it could occur dangling pointer reference.
+    release.into_iter().for_each(|i| self.free_list.dealloc(i));
     Ok(())
   }
 
@@ -85,12 +87,7 @@ impl GarbageCollector {
   ) -> Self {
     let initialized = AtomicBool::new(false).to_arc();
     let queue = DoubleBuffer::new().to_arc();
-    let release = WorkBuilder::new()
-      .name("gc release entry")
-      .stack_size(2 << 20)
-      .multi(config.thread_count)
-      .shared(run_release(free_list.clone()))
-      .to_arc();
+
     let entry = WorkBuilder::new()
       .name("gc found entry")
       .stack_size(2 << 20)
@@ -99,7 +96,7 @@ impl GarbageCollector {
         buffer_pool.clone(),
         version_visibility,
         recorder.clone(),
-        release.clone(),
+        free_list.clone(),
       ))
       .to_arc();
     let check = WorkBuilder::new()
@@ -129,7 +126,6 @@ impl GarbageCollector {
       clean_leaf,
       check,
       entry,
-      release,
       buffer_pool,
       free_list,
       initialized,
@@ -142,9 +138,7 @@ impl GarbageCollector {
   }
 
   pub fn release_orphand(&self, end: usize) -> Result {
-    let (mut free_indexes, free_visited) = self.free_list.get_all()?;
-    let mut visited: HashSet<usize> =
-      vec![HEADER_INDEX].into_iter().chain(free_visited).collect();
+    let mut visited: HashSet<usize> = HashSet::from_iter(vec![HEADER_INDEX]);
 
     let root = self
       .buffer_pool
@@ -191,10 +185,10 @@ impl GarbageCollector {
     }
 
     for index in 0..end {
-      if visited.remove(&index) || free_indexes.remove(&index) {
+      if visited.remove(&index) {
         continue;
       }
-      self.release.send_no_wait(index);
+      self.free_list.dealloc(index);
     }
 
     Ok(())
@@ -204,7 +198,6 @@ impl GarbageCollector {
     self.clean_leaf.close();
     self.check.close();
     self.entry.close();
-    self.release.close();
   }
 }
 
@@ -324,20 +317,12 @@ fn run_clean_leaf(
   }
 }
 
-fn run_release(free_list: Arc<FreeList>) -> impl Fn(Pointer) -> Result {
-  let free_list = free_list.clone();
-  move |pointer: Pointer| free_list.dealloc(pointer)
-}
-
 fn run_entry(
   buffer_pool: Arc<BufferPool>,
   version_visibility: Arc<VersionVisibility>,
   recorder: Arc<PageRecorder>,
-  release_c: Arc<dyn BackgroundThread<Pointer, Result>>,
+  free_list: Arc<FreeList>,
 ) -> impl Fn(Pointer) -> Result {
-  let buffer_pool = buffer_pool.clone();
-  let release_c = release_c.clone();
-  let version_visibility = version_visibility.clone();
   move |ptr: Pointer| {
     let mut index = Some(ptr);
     let mut max_found = false;
@@ -401,7 +386,7 @@ fn run_entry(
       recorder.serialize_and_log(0, &mut slot, &next_entry)?;
       index = Some(i);
 
-      release_c.send_no_wait(next);
+      free_list.dealloc(next);
     }
     Ok(())
   }
