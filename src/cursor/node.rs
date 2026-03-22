@@ -122,6 +122,10 @@ impl InternalNode {
   pub fn initialize(key: Key, left: Pointer, right: Pointer) -> Self {
     Self::new(vec![key], vec![left, right], None)
   }
+  #[inline]
+  pub fn to_node(self) -> CursorNode {
+    CursorNode::Internal(self)
+  }
   fn new(keys: Vec<Key>, children: Vec<Pointer>, right: Option<(Pointer, Key)>) -> Self {
     Self {
       keys,
@@ -207,6 +211,10 @@ pub struct LeafNode {
 impl LeafNode {
   fn new(entries: Vec<(Key, Pointer)>, next: Option<Pointer>) -> Self {
     Self { entries, next }
+  }
+  #[inline]
+  pub fn to_node(self) -> CursorNode {
+    CursorNode::Leaf(self)
   }
   pub fn find(&self, key: KeyRef) -> NodeFindResult {
     match self
