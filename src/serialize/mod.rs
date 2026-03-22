@@ -8,7 +8,6 @@ pub enum SerializeType {
   Header,
   CursorNode,
   DataEntry,
-  Free,
 }
 impl From<SerializeType> for u8 {
   fn from(value: SerializeType) -> Self {
@@ -16,7 +15,6 @@ impl From<SerializeType> for u8 {
       SerializeType::Header => 1,
       SerializeType::CursorNode => 2,
       SerializeType::DataEntry => 3,
-      SerializeType::Free => 4,
     }
   }
 }

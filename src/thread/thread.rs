@@ -29,10 +29,6 @@ pub trait BackgroundThread<T, R = ()>: Send + Sync + RefUnwindSafe + UnwindSafe 
     self.send(v).wait()
   }
 
-  fn send_no_wait(&self, v: T) {
-    let _ = self.send(v);
-  }
-
   fn send_batch(&self, v: Vec<T>) -> BatchWorkResult<R> {
     BatchWorkResult::from(v.into_iter().map(|i| {
       let (done_r, done_t) = oneshot();
