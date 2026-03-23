@@ -145,7 +145,7 @@ impl TxOrchestrator {
     let state = TxState::new(tx_id).to_arc();
     self
       .timeout_thread
-      .register(state.clone(), timeout.unwrap_or(self.tx_timeout));
+      .register(Arc::downgrade(&state), timeout.unwrap_or(self.tx_timeout));
     Ok(state)
   }
 

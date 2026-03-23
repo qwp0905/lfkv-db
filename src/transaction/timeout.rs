@@ -1,7 +1,7 @@
 use std::{
   cell::UnsafeCell,
   ops::Index,
-  sync::Arc,
+  sync::{Arc, Weak},
   thread::{Builder, JoinHandle},
   time::{Duration, Instant},
 };
@@ -279,7 +279,7 @@ where
 }
 
 enum Msg {
-  Register(Arc<TxState>, Duration),
+  Register(Weak<TxState>, Duration),
   Term,
 }
 
@@ -299,7 +299,11 @@ impl TimeoutThread {
       .stack_size(2 << 20)
       .spawn(move || {
         let logger_c = logger.clone();
-        let mut wheel = TimingWheel::new(move |state: Arc<TxState>| {
+        let mut wheel = TimingWheel::new(move |weak: Weak<TxState>| {
+          let state = match weak.upgrade() {
+            Some(s) => s,
+            None => return,
+          };
           if !state.try_abort() {
             return;
           }
@@ -335,7 +339,7 @@ impl TimeoutThread {
     }
   }
 
-  pub fn register(&self, state: Arc<TxState>, timeout: Duration) {
+  pub fn register(&self, state: Weak<TxState>, timeout: Duration) {
     self.channel.send(Msg::Register(state, timeout)).unwrap();
   }
 
