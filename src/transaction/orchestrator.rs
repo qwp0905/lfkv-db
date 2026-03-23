@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use super::{FreeList, PageRecorder, VersionVisibility};
+use super::{FreeList, PageRecorder, TimeoutThread, TxState, VersionVisibility};
 
 use crate::{
   buffer_pool::{BufferPool, BufferPoolConfig, Slot, WritableSlot},
@@ -12,6 +12,10 @@ use crate::{
   wal::{WALConfig, WAL},
 };
 
+pub struct TransactionConfig {
+  pub timeout: Duration,
+}
+
 pub struct TxOrchestrator {
   wal: Arc<WAL>,
   buffer_pool: Arc<BufferPool>,
@@ -21,9 +25,12 @@ pub struct TxOrchestrator {
   gc: Arc<GarbageCollector>,
   recorder: Arc<PageRecorder>,
   logger: LogFilter,
+  timeout_thread: TimeoutThread,
+  tx_timeout: Duration,
 }
 impl TxOrchestrator {
   pub fn new(
+    transaction_config: TransactionConfig,
     buffer_pool_config: BufferPoolConfig,
     wal_config: WALConfig,
     gc_config: GarbageCollectionConfig,
@@ -89,6 +96,8 @@ impl TxOrchestrator {
       )?
       .to_box();
 
+    let timeout_thread = TimeoutThread::new(version_visibility.clone(), logger.clone());
+
     Ok((
       Self {
         checkpoint,
@@ -99,6 +108,8 @@ impl TxOrchestrator {
         gc,
         recorder,
         logger,
+        timeout_thread,
+        tx_timeout: transaction_config.timeout,
       },
       replay.is_new,
     ))
@@ -128,10 +139,14 @@ impl TxOrchestrator {
     self.gc.mark(index);
   }
 
-  pub fn start_tx(&self) -> Result<usize> {
+  pub fn start_tx(&self, timeout: Option<Duration>) -> Result<Arc<TxState>> {
     let tx_id = self.version_visibility.new_transaction();
     self.wal.append_start(tx_id)?;
-    Ok(tx_id)
+    let state = TxState::new(tx_id).to_arc();
+    self
+      .timeout_thread
+      .register(state.clone(), timeout.unwrap_or(self.tx_timeout));
+    Ok(state)
   }
 
   pub fn commit_tx(&self, tx_id: usize) -> Result {
@@ -159,6 +174,7 @@ impl TxOrchestrator {
   }
 
   pub fn close(&self) -> Result {
+    self.timeout_thread.close();
     let wal_close = self.wal.twostep_close();
     self.checkpoint.close();
     self.logger.info("last checkpoint completed.");

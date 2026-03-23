@@ -5,14 +5,15 @@ use super::{
   TreeHeader, VersionRecord, HEADER_INDEX,
 };
 use crate::{
-  buffer_pool::WritableSlot, serialize::Serializable, transaction::TxOrchestrator, Error,
-  Result,
+  buffer_pool::WritableSlot,
+  serialize::Serializable,
+  transaction::{TxOrchestrator, TxState},
+  Error, Result,
 };
 
 pub struct Cursor {
   orchestrator: Arc<TxOrchestrator>,
-  committed: bool,
-  tx_id: usize,
+  state: Arc<TxState>,
   _marker: PhantomData<*const ()>, // do not send to another thread!!!.
 }
 impl Cursor {
@@ -28,7 +29,9 @@ impl Cursor {
     slot: &mut WritableSlot<'_>,
     data: &T,
   ) -> Result {
-    self.orchestrator.serialize_and_log(self.tx_id, slot, data)
+    self
+      .orchestrator
+      .serialize_and_log(self.state.get_id(), slot, data)
   }
 
   pub fn initialize(mut self) -> Result {
@@ -41,31 +44,32 @@ impl Cursor {
 
     self.commit()
   }
-  pub fn new(orchestrator: Arc<TxOrchestrator>, tx_id: usize) -> Self {
+  pub fn new(orchestrator: Arc<TxOrchestrator>, state: Arc<TxState>) -> Self {
     Self {
       orchestrator,
-      committed: false,
-      tx_id,
+      state,
       _marker: Default::default(),
     }
   }
 
   pub fn commit(&mut self) -> Result {
-    if self.committed {
+    if !self.state.try_commit() {
       return Err(Error::TransactionClosed);
     }
+    if let Err(err) = self.orchestrator.commit_tx(self.state.get_id()) {
+      self.state.make_available();
+      return Err(err);
+    }
 
-    self.orchestrator.commit_tx(self.tx_id)?;
-    self.committed = true;
+    self.state.complete_commit();
     Ok(())
   }
 
   pub fn abort(&mut self) -> Result {
-    if self.committed {
+    if !self.state.try_abort() {
       return Err(Error::TransactionClosed);
     }
-    self.orchestrator.abort_tx(self.tx_id)?;
-    self.committed = true;
+    self.orchestrator.abort_tx(self.state.get_id())?;
     Ok(())
   }
 
@@ -91,7 +95,7 @@ impl Cursor {
   }
 
   pub fn get<K: AsRef<[u8]>>(&self, key: &K) -> Result<Option<Vec<u8>>> {
-    if self.committed {
+    if !self.state.is_available() {
       return Err(Error::TransactionClosed);
     }
 
@@ -114,7 +118,9 @@ impl Cursor {
     let mut slot = self.orchestrator.fetch(index)?.for_read();
     loop {
       let entry: DataEntry = slot.as_ref().deserialize()?;
-      if let Some(v) = entry.find_value(self.tx_id, |i| self.orchestrator.is_visible(i)) {
+      if let Some(v) =
+        entry.find_value(self.state.get_id(), |i| self.orchestrator.is_visible(i))
+      {
         return Ok(Some(v));
       }
 
@@ -126,7 +132,7 @@ impl Cursor {
   }
 
   pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result {
-    if self.committed {
+    if !self.state.is_available() {
       return Err(Error::TransactionClosed);
     }
 
@@ -168,7 +174,7 @@ impl Cursor {
         }
         NodeFindResult::NotFound(i) => {
           let entry = DataEntry::init(VersionRecord::new(
-            self.tx_id,
+            self.state.get_id(),
             self.orchestrator.current_version(),
             RecordData::Data(value),
           ));
@@ -290,14 +296,14 @@ impl Cursor {
 
     let mut entry: DataEntry = slot.as_ref().deserialize()?;
     if let Some(owner) = entry.get_last_owner() {
-      if owner != self.tx_id && self.orchestrator.is_active(&owner) {
+      if owner != self.state.get_id() && self.orchestrator.is_active(&owner) {
         return Err(Error::WriteConflict);
       }
     }
 
     self.orchestrator.mark_gc(entry_index);
     let version = self.orchestrator.current_version();
-    let record = VersionRecord::new(self.tx_id, version, data);
+    let record = VersionRecord::new(self.state.get_id(), version, data);
 
     if entry.is_available(&record) {
       entry.append(record);
@@ -313,7 +319,7 @@ impl Cursor {
   }
 
   pub fn remove<K: AsRef<[u8]>>(&self, key: &K) -> Result {
-    if self.committed {
+    if !self.state.is_available() {
       return Err(Error::TransactionClosed);
     }
     let mut index = self.find_leaf(key.as_ref())?;
@@ -331,7 +337,7 @@ impl Cursor {
   }
 
   pub fn scan<K: AsRef<[u8]>>(&self, start: &K, end: &K) -> Result<CursorIterator<'_>> {
-    if self.committed {
+    if !self.state.is_available() {
       return Err(Error::TransactionClosed);
     }
 
@@ -352,17 +358,16 @@ impl Cursor {
     };
 
     Ok(CursorIterator::new(
-      self.tx_id,
+      &self.state,
       &self.orchestrator,
       leaf,
       pos,
-      &self.committed,
       Some(end.as_ref().into()),
     ))
   }
 
   pub fn scan_all(&self) -> Result<CursorIterator<'_>> {
-    if self.committed {
+    if !self.state.is_available() {
       return Err(Error::TransactionClosed);
     }
 
@@ -387,21 +392,16 @@ impl Cursor {
     };
 
     Ok(CursorIterator::new(
-      self.tx_id,
+      &self.state,
       &self.orchestrator,
       leaf,
       0,
-      &self.committed,
       None,
     ))
   }
 }
 impl Drop for Cursor {
   fn drop(&mut self) {
-    if self.committed {
-      return;
-    }
-
     let _ = self.abort();
   }
 }
