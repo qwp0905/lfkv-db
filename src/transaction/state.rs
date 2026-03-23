@@ -16,7 +16,7 @@ impl TxState {
   pub fn new(id: usize) -> Self {
     Self {
       id,
-      status: AtomicU8::new(0),
+      status: AtomicU8::new(STATUS_AVAILABLE),
     }
   }
 
