@@ -44,7 +44,7 @@ fn main() {
       .stack_size(2 << 20)
       .spawn(move || {
         while let Ok((vec, t)) = rx.recv() {
-          let mut r = e.new_transaction().expect("start error");
+          let mut r = e.new_tx().expect("start error");
           r.insert(vec.clone(), vec).expect("insert error");
           r.commit().expect("commit error");
           t.send(()).unwrap();
@@ -75,7 +75,7 @@ fn main() {
   let mut found_eq = 0;
   let mut found_ne = 0;
   let mut not_found = 0;
-  let mut t = engine.new_transaction().expect("scan start error");
+  let mut t = engine.new_tx().expect("scan start error");
 
   let mut iter = t.scan_all().expect("scan create error");
   while let Ok(Some(_)) = iter.try_next() {

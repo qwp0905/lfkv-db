@@ -2,7 +2,7 @@
 
 Lock-Free Key-Value Storage Engine implemented in Rust.
 
-A persistent, ACID-compliant key-value store that supports concurrent reads and writes from multiple threads, built on a Blink tree index with MVCC (Multi-Version Concurrency Control) for snapshot isolation.
+A persistent, ACID-compliant embedded key-value store built for **high-concurrency workloads**. Unlike single-writer embedded databases (e.g. BoltDB, LMDB), it supports **concurrent reads and writes from multiple threads simultaneously** — with no writer lock and no reader starvation — through a combination of B-link tree indexing, MVCC snapshot isolation, and a lock-free WAL.
 
 ## Features
 
@@ -26,7 +26,7 @@ let engine = EngineBuilder::new("./data")
     .build()?;
 
 // Start a transaction
-let mut tx = engine.new_transaction()?;
+let mut tx = engine.new_tx()?;
 
 // Insert
 tx.insert(b"key1".to_vec(), b"value1".to_vec())?;
@@ -102,7 +102,7 @@ tx.commit()?;
 
 ### Transaction Lifecycle
 
-1. `Engine::new_transaction()` allocates a transaction ID and registers it as active
+1. `Engine::new_tx()` allocates a transaction ID and registers it as active
 2. All reads check MVCC visibility - only committed versions are visible to other transactions
 3. Writes append version records to data entries; write-write conflicts return `WriteConflict` error
 4. `commit()` writes a commit record to WAL and calls `fsync` via group commit
