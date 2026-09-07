@@ -4,7 +4,7 @@ use std::{
   ops::Deref,
   ptr::{without_provenance_mut, NonNull},
   sync::atomic::{fence, AtomicBool, AtomicPtr, Ordering},
-  thread::{current, park, Thread},
+  thread::{current, park, yield_now, Thread},
 };
 
 use crossbeam::utils::Backoff;
@@ -259,19 +259,16 @@ impl<T> OneshotBehavior<T> {
     }
   }
 
-  const MAX_SPIN: u8 = 6;
+  const MAX_YIELD: u8 = 10;
   pub fn wait(&self) -> Result<T, WaitDisconnectedError> {
     let mut waker = WakerRef::new();
     loop {
-      for i in 0..Self::MAX_SPIN {
+      for _ in 0..Self::MAX_YIELD {
         match self.try_wait() {
           Ok(v) => return Ok(v),
           Err(TryWaitError::Disconnected) => return Err(WaitDisconnectedError),
-          Err(TryWaitError::Empty(_)) => {}
+          Err(TryWaitError::Empty(_)) => yield_now(),
         };
-        for _ in 0..(1 << i) {
-          std::hint::spin_loop();
-        }
       }
       if !self.try_park_with(&mut waker)? {
         return Ok(unsafe { self.read_value() });
