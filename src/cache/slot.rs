@@ -95,7 +95,7 @@ impl<'a> CachedSlot<'a> {
       page: self.block.load_page(),
     }
   }
-  pub fn for_batch<'b>(self) -> WritableSlot<'b>
+  pub fn for_write<'b>(self) -> WritableSlot<'b>
   where
     'a: 'b,
   {

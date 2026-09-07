@@ -101,18 +101,23 @@ pub trait WritablePolicy: ReadonlyPolicy {
    * normal read path. Newly allocated file-end pointers have no meaningful old
    * contents and can be allocated in cache without a disk read.
    */
-  fn alloc_and_log<T: Serializable>(
+  fn alloc_and_log<T: Serializable + Sync>(
     &self,
     data: &T,
     table: &TableHandleRef,
-  ) -> Result<Pointer> {
-    let mut slot = match table.free().alloc() {
+  ) -> Result<Pointer>
+  where
+    Self: Sync,
+  {
+    match table.free().alloc() {
       FreePointer::Reuse(ptr) => self.fetch_slot(ptr, table),
       FreePointer::Alloc(ptr) => self.alloc_slot(ptr, table),
     }?
-    .for_write();
-    self.serialize_and_log(&mut slot, data, table)?;
-    Ok(slot.get_pointer())
+    .for_write()
+    .mutate(|slot| {
+      self.serialize_and_log(slot, data, table)?;
+      Ok(slot.get_pointer())
+    })
   }
 }
 impl<Policy: WritablePolicy> WritablePolicy for &Policy {
