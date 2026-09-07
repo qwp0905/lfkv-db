@@ -88,3 +88,22 @@ fn test_drop_counts() {
 
   assert_eq!(c.load(Ordering::Relaxed), l)
 }
+
+#[test]
+fn test_into_raw_from_raw_drop_counts() {
+  let c = SBox::new(AtomicUsize::new(0));
+  let a = SBox::new(C::new(c.clone()));
+  let mut raw: Vec<_> = (0..4).map(|_| SBox::into_raw(a.clone())).collect();
+
+  drop(a);
+  assert_eq!(c.load(Ordering::Relaxed), 0);
+
+  while let Some(ptr) = raw.pop() {
+    // SAFETY: Each into_raw transfers one owned reference, restored exactly once.
+    let restored = unsafe { SBox::from_raw(ptr) };
+    assert_eq!(c.load(Ordering::Relaxed), 0);
+
+    drop(restored);
+    assert_eq!(c.load(Ordering::Relaxed), usize::from(raw.is_empty()));
+  }
+}
