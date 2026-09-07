@@ -1,15 +1,15 @@
 use std::{
-  cell::UnsafeCell,
+  cell::{OnceCell, UnsafeCell},
   mem::{forget, MaybeUninit},
   ops::Deref,
-  ptr::NonNull,
-  sync::atomic::{fence, AtomicBool, Ordering},
-  thread::{current, park, Thread},
+  ptr::{without_provenance_mut, NonNull},
+  sync::atomic::{fence, AtomicBool, AtomicPtr, Ordering},
+  thread::{current, park, yield_now, Thread},
 };
 
-use crossbeam::atomic::AtomicCell;
+use crossbeam::utils::Backoff;
 
-use crate::utils::Backoff;
+use crate::utils::SBox;
 
 #[repr(C)]
 struct PairInner<T: ?Sized> {
@@ -84,20 +84,77 @@ pub fn oneshot<T>() -> (Oneshot<T>, OneshotFulfill<T>) {
   (Oneshot(inner.0), OneshotFulfill(inner.1))
 }
 
-/**
- * State of a single-use completion slot.
- *
- * `Waiting` is the initial state after creating a oneshot. `Fulfilled` means
- * the fulfiller has written the value and completed its side. `Disconnected`
- * means completion is no longer possible or no longer needed: the fulfiller was
- * dropped without writing a value, the waiter was dropped, or the value has
- * already been consumed/cleaned up.
- */
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum State {
-  Waiting,
-  Fulfilled,
-  Disconnected,
+#[repr(align(4))]
+struct ThreadWaker(Thread);
+impl ThreadWaker {
+  fn new() -> Self {
+    Self(current())
+  }
+
+  fn wake(&self) {
+    self.0.unpark();
+  }
+}
+
+thread_local! {
+  static CURRENT: OnceCell<SBox<ThreadWaker>> = const { OnceCell::new() };
+}
+
+struct WakerRef {
+  moved: bool,
+  ptr: *mut ThreadWaker,
+}
+impl WakerRef {
+  fn new() -> Self {
+    let waker = CURRENT.with(|v| v.get_or_init(|| SBox::new(ThreadWaker::new())).clone());
+    Self {
+      moved: false,
+      ptr: SBox::into_raw(waker),
+    }
+  }
+
+  fn set_moved(&mut self) {
+    self.moved = true;
+  }
+  const fn as_ptr(&self) -> *mut ThreadWaker {
+    self.ptr
+  }
+}
+impl Drop for WakerRef {
+  fn drop(&mut self) {
+    if self.moved {
+      return;
+    }
+    let _ = unsafe { SBox::from_raw(self.ptr) };
+  }
+}
+
+// Tagged pointers
+const STATE_WAITING: *mut ThreadWaker = without_provenance_mut(0);
+const STATE_FULFILLED: *mut ThreadWaker = without_provenance_mut(1);
+const STATE_DISCONNECTED: *mut ThreadWaker = without_provenance_mut(2);
+
+struct Atomic<T>(AtomicPtr<T>);
+impl<T> Atomic<T> {
+  const fn new(ptr: *mut T) -> Self {
+    Self(AtomicPtr::new(ptr))
+  }
+  fn load(&self) -> *mut T {
+    self.0.load(Ordering::Acquire)
+  }
+  fn cas_weak(
+    &self,
+    current: *mut T,
+    new: *mut T,
+  ) -> std::result::Result<*mut T, *mut T> {
+    self
+      .0
+      .compare_exchange_weak(current, new, Ordering::Release, Ordering::Acquire)
+  }
+
+  fn swap(&self, new: *mut T) -> *mut T {
+    self.0.swap(new, Ordering::AcqRel)
+  }
 }
 
 /**
@@ -108,87 +165,146 @@ enum State {
  * dropped handle reclaims the heap allocation.
  */
 pub struct OneshotBehavior<T> {
-  state: AtomicCell<State>,
+  state: Atomic<ThreadWaker>,
   value: UnsafeCell<MaybeUninit<T>>,
-  caller: AtomicCell<Option<Thread>>,
 }
 impl<T> OneshotBehavior<T> {
   pub const fn new() -> Self {
     Self {
-      state: AtomicCell::new(State::Waiting),
       value: UnsafeCell::new(MaybeUninit::uninit()),
-      caller: AtomicCell::new(None),
+      state: Atomic::new(STATE_WAITING),
     }
   }
 
-  pub fn fulfill(&self, result: T) {
-    let value = unsafe { &mut *self.value.get() };
-    value.write(result);
-    match self
-      .state
-      .compare_exchange(State::Waiting, State::Fulfilled)
-      .unwrap_or_else(|s| s)
-    {
-      State::Waiting => {
-        let Some(thread) = self.caller.take() else {
-          return;
-        };
-        thread.unpark();
+  pub unsafe fn fulfill(&self, result: T) {
+    unsafe { (*self.value.get()).write(result) };
+  }
+
+  pub unsafe fn wake(this: *const Self) {
+    let backoff = Backoff::new();
+    let mut state = (*this).state.load();
+    loop {
+      if state == STATE_DISCONNECTED {
+        return unsafe { (*this).drop_value() };
       }
-      State::Disconnected => unsafe { value.assume_init_drop() },
-      State::Fulfilled => unreachable!(),
+
+      if let Err(err) = (*this).state.cas_weak(state, STATE_FULFILLED) {
+        backoff.spin();
+        state = err;
+        continue;
+      }
+
+      return match state {
+        STATE_DISCONNECTED | STATE_FULFILLED => unreachable!(),
+        STATE_WAITING => {}
+        _ => unsafe { SBox::from_raw(state) }.wake(),
+      };
+    }
+  }
+
+  pub fn fulfill_and_wake(this: *const Self, result: T) {
+    unsafe {
+      (*this).fulfill(result);
+      Self::wake(this);
     }
   }
 
   pub fn try_wait(&self) -> std::result::Result<T, TryWaitError<()>> {
-    match self
-      .state
-      .compare_exchange(State::Fulfilled, State::Disconnected)
-      .unwrap_or_else(|s| s)
-    {
-      State::Waiting => Err(TryWaitError::Empty(())),
-      State::Fulfilled => Ok(unsafe { (*self.value.get()).assume_init_read() }),
-      State::Disconnected => Err(TryWaitError::Disconnected),
+    let backoff = Backoff::new();
+    let mut state = self.state.load();
+    loop {
+      match state {
+        STATE_DISCONNECTED => return Err(TryWaitError::Disconnected),
+        STATE_FULFILLED => {}
+        _ => return Err(TryWaitError::Empty(())),
+      }
+      let Err(err) = self.state.cas_weak(state, STATE_DISCONNECTED) else {
+        return Ok(unsafe { self.read_value() });
+      };
+      backoff.spin();
+      state = err;
     }
   }
 
-  pub fn wait(&self) -> Result<T, WaitDisconnectedError> {
-    let backoff = Backoff::new();
-    self.caller.store(Some(current()));
-    loop {
-      match self.try_wait() {
-        Ok(v) => return Ok(v),
-        Err(TryWaitError::Disconnected) => return Err(WaitDisconnectedError),
-        Err(TryWaitError::Empty(_)) => {}
-      };
-      if !backoff.is_complete() {
-        backoff.snooze();
-        continue;
-      }
+  const unsafe fn read_value(&self) -> T {
+    unsafe { (*self.value.get()).assume_init_read() }
+  }
+  unsafe fn drop_value(&self) {
+    unsafe { (*self.value.get()).assume_init_drop() };
+  }
 
+  fn try_park_with(&self, waker: &mut WakerRef) -> Result<bool, WaitDisconnectedError> {
+    let backoff = Backoff::new();
+    let mut state = self.state.load();
+    loop {
+      match state {
+        STATE_FULFILLED => {
+          let Err(err) = self.state.cas_weak(state, STATE_DISCONNECTED) else {
+            return Ok(false);
+          };
+          backoff.spin();
+          state = err;
+        }
+        STATE_DISCONNECTED => return Err(WaitDisconnectedError),
+        STATE_WAITING => {
+          let Err(err) = self.state.cas_weak(state, waker.as_ptr()) else {
+            waker.set_moved();
+            return Ok(true);
+          };
+          backoff.spin();
+          state = err;
+        }
+        _ => return Ok(true),
+      }
+    }
+  }
+
+  const MAX_YIELD: u8 = 10;
+  pub fn wait(&self) -> Result<T, WaitDisconnectedError> {
+    let mut waker = WakerRef::new();
+    loop {
+      for _ in 0..Self::MAX_YIELD {
+        match self.try_wait() {
+          Ok(v) => return Ok(v),
+          Err(TryWaitError::Disconnected) => return Err(WaitDisconnectedError),
+          Err(TryWaitError::Empty(_)) => yield_now(),
+        };
+      }
+      if !self.try_park_with(&mut waker)? {
+        return Ok(unsafe { self.read_value() });
+      };
       park();
-      backoff.reset();
     }
   }
 
   pub fn drop_receiver(&self) {
-    if let State::Fulfilled = self.state.swap(State::Disconnected) {
-      unsafe { (*self.value.get()).assume_init_drop() };
+    match self.state.swap(STATE_DISCONNECTED) {
+      STATE_FULFILLED => unsafe { self.drop_value() },
+      STATE_WAITING | STATE_DISCONNECTED => {}
+      state => {
+        let _ = unsafe { SBox::from_raw(state) };
+      }
     }
   }
 
   pub fn drop_sender(&self) {
-    if self
-      .state
-      .compare_exchange(State::Waiting, State::Disconnected)
-      .is_err()
-    {
+    let backoff = Backoff::new();
+    let mut state = self.state.load();
+    loop {
+      if matches!(state, STATE_FULFILLED | STATE_DISCONNECTED) {
+        return;
+      }
+
+      if let Err(err) = self.state.cas_weak(state, STATE_DISCONNECTED) {
+        backoff.spin();
+        state = err;
+        continue;
+      }
+      if state != STATE_WAITING {
+        unsafe { SBox::from_raw(state) }.wake();
+      }
       return;
     }
-    let Some(thread) = self.caller.take() else {
-      return;
-    };
-    thread.unpark();
   }
 }
 
@@ -231,7 +347,7 @@ impl<T> Drop for Oneshot<T> {
 pub struct OneshotFulfill<T>(Pair<OneshotBehavior<T>>);
 impl<T> OneshotFulfill<T> {
   pub fn fulfill(self, result: T) {
-    self.0.fulfill(result);
+    OneshotBehavior::fulfill_and_wake(&*self.0 as _, result);
   }
 }
 impl<T> Drop for OneshotFulfill<T> {
