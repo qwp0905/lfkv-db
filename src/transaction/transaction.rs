@@ -1,10 +1,11 @@
 use std::time::Instant;
 
-use super::{TxContext, TxOrchestrator, TxSnapshot, TxState};
+use super::{TxContext, TxOrchestrator};
 use crate::{
   background::EventBus,
   cursor::{CompactionCommitted, Cursor, DropTableCommitted},
   metrics::MetricsRegistry,
+  mvcc::{TxSnapshot, TxState},
   table::{TableHandleRef, TableMetadata, TableName},
   Error, Result,
 };

@@ -160,7 +160,7 @@ println!("get p99: {}µs", m.operation_get_latency_micros_p99);
                   │                     │
           ┌───────▼─────────┐  ┌────────▼──────────┐
           │       WAL       │  │     Version       │
-          │    lock-free    │  │    Visibility     │
+          │    lock-free    │  │    Controller     │
           │    CAS append   │  │      (MVCC)       │
           └────────┬────────┘  └───────────────────┘
                    │

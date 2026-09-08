@@ -1,8 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use super::{
-  Checkpoint, PageRecorder, TimeoutThread, TxSnapshot, TxState, VersionVisibility,
-};
+use super::{Checkpoint, PageRecorder, TimeoutThread};
 
 use crate::{
   blob::{BlobAppendGuard, BlobHandle, BlobId, BlobStorage},
@@ -12,6 +10,7 @@ use crate::{
   error::Result,
   info, measure,
   metrics::MetricsRegistry,
+  mvcc::{TxSnapshot, TxState, VersionController},
   objects::Serializable,
   table::{TableHandleRef, TableId, TableMapper, TableMetadata, TableName},
   wal::{TxId, WriteAheadLog},
@@ -32,7 +31,7 @@ pub struct TxOrchestrator {
   tables: Arc<TableMapper>,
   block_cache: Arc<BlockCache>,
   checkpoint: Arc<Checkpoint>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   gc: Arc<GarbageCollector>,
   recorder: Arc<PageRecorder>,
   compactor: Arc<Compactor>,
@@ -48,7 +47,7 @@ impl TxOrchestrator {
     wal: Arc<WriteAheadLog>,
     block_cache: Arc<BlockCache>,
     tables: Arc<TableMapper>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     gc: Arc<GarbageCollector>,
     recorder: Arc<PageRecorder>,
     compactor: Arc<Compactor>,
@@ -57,13 +56,13 @@ impl TxOrchestrator {
     checkpoint: Arc<Checkpoint>,
     metrics: Arc<MetricsRegistry>,
   ) -> Self {
-    let timeout_thread = TimeoutThread::new(version_visibility.clone());
+    let timeout_thread = TimeoutThread::new(version_controller.clone());
     Self {
       wal,
       tables,
       block_cache,
       checkpoint,
-      version_visibility,
+      version_controller,
       gc,
       recorder,
       compactor,
@@ -114,7 +113,7 @@ impl TxOrchestrator {
     &self,
     timeout: Option<Duration>,
   ) -> Option<(TxState<'_>, TxSnapshot<'_>)> {
-    let (snapshot, state) = self.version_visibility.new_transaction()?;
+    let (snapshot, state) = self.version_controller.new_transaction()?;
     self
       .timeout_thread
       .register(state.get_id(), timeout.unwrap_or(self.tx_timeout));
@@ -130,7 +129,7 @@ impl TxOrchestrator {
 
   #[inline]
   pub fn abort_tx(&self, tx_id: TxId) {
-    self.version_visibility.set_abort(tx_id);
+    self.version_controller.set_abort(tx_id);
     self.metrics.transaction_abort_count.inc();
   }
 
@@ -157,7 +156,7 @@ impl TxOrchestrator {
   }
 
   pub fn resolve_conflict(&self, owner: TxId, current: TxId) -> ResolvedConflict {
-    self.version_visibility.resolve_conflict(owner, current)
+    self.version_controller.resolve_conflict(owner, current)
   }
 
   pub fn get_blob_handle(&self, blob_id: BlobId) -> Option<Arc<BlobHandle>> {
