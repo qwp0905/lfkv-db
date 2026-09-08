@@ -14,7 +14,7 @@ use crate::{
   metrics::MetricsRegistry,
   objects::Serializable,
   table::{TableHandleRef, TableId, TableMapper, TableMetadata, TableName},
-  wal::{TxId, WriteAheadLog},
+  wal::{DurabilityGuard, TxId, WriteAheadLog},
 };
 
 pub struct TransactionConfig {
@@ -122,10 +122,9 @@ impl TxOrchestrator {
   }
 
   #[inline]
-  pub fn commit_tx(&self, tx_id: TxId) -> Result {
+  pub fn commit_tx(&self, tx_id: TxId) -> Result<DurabilityGuard<'_>> {
     let metrics = &self.metrics.transaction_commit;
-    measure!(metrics, self.wal.commit_and_flush(tx_id))?;
-    Ok(())
+    measure!(metrics, self.wal.commit_and_flush(tx_id))
   }
 
   #[inline]

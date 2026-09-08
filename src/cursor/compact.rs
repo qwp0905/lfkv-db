@@ -86,11 +86,12 @@ impl<'a> MiniTx<'a> {
     if self.committed.get() {
       return Ok(());
     }
+    let mut _guard = None;
     if self.modified.get() {
-      self.wal.commit_and_flush(self.state.get_id())?;
+      _guard = Some(self.wal.commit_and_flush(self.state.get_id())?);
     }
-    self.committed.set(true);
     self.state.deactive();
+    self.committed.set(true);
     Ok(())
   }
 }

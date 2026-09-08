@@ -45,6 +45,7 @@ impl PageRecorder {
       ptr,
       current_version,
       page.range(0..byte_len),
-    )
+    )?;
+    Ok(())
   }
 }

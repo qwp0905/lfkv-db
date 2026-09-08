@@ -8,7 +8,10 @@ use std::{
 use crossbeam::{queue::SegQueue, utils::Backoff};
 use crossbeam_skiplist::SkipSet;
 
-use super::{BatchedWrite, FsyncResult, LogRecord, SegmentGeneration, WAL_BLOCK_SIZE};
+use super::{
+  AtomicLogId, BatchedWrite, FsyncResult, LogId, LogRecord, SegmentGeneration,
+  WAL_BLOCK_SIZE,
+};
 use crate::{
   disk::Pointer,
   utils::{AtomicBitmap, AtomicSizedBitmap},
@@ -161,6 +164,38 @@ impl SyncCompletion {
       {
         self.frontier.fetch_max(i + 1, Ordering::Release);
       }
+    }
+  }
+}
+
+pub struct LogCompletion {
+  frontier: AtomicLogId,
+  completed: SkipSet<LogId>,
+}
+impl LogCompletion {
+  pub fn new(last_log_id: LogId) -> Self {
+    Self {
+      frontier: AtomicLogId::new(last_log_id),
+      completed: SkipSet::new(),
+    }
+  }
+
+  pub fn get_frontier(&self) -> LogId {
+    self.frontier.load(Ordering::Acquire)
+  }
+
+  pub fn complete(&self, log_id: LogId) {
+    if self
+      .frontier
+      .compare_exchange(log_id, log_id + 1, Ordering::Release, Ordering::Acquire)
+      .is_err()
+    {
+      self.completed.insert(log_id);
+    }
+
+    let current = self.frontier.load(Ordering::Acquire);
+    for i in (current..).take_while(|i| self.completed.remove(i).is_some()) {
+      self.frontier.fetch_max(i + 1, Ordering::Release);
     }
   }
 }
