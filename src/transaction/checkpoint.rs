@@ -1,5 +1,4 @@
 use std::{
-  iter::repeat,
   path::PathBuf,
   sync::Arc,
   time::{Duration, Instant},
@@ -39,17 +38,14 @@ struct CheckpointCycle {
   start: Option<Instant>,
 }
 impl CheckpointCycle {
-  fn new<T>(
-    segments: T,
+  fn new(
+    segments: Vec<WALSegment>,
     flusher: CacheFlusher,
     log_id: LogId,
     start: Option<Instant>,
-  ) -> Self
-  where
-    T: Iterator<Item = WALSegment>,
-  {
+  ) -> Self {
     Self {
-      segments: segments.collect(),
+      segments,
       flusher,
       log_id,
       start,
@@ -94,7 +90,7 @@ impl CheckpointCycle {
 }
 
 pub struct Checkpoint {
-  incoming: Arc<SegQueue<WALSegment>>,
+  incoming: Arc<SegQueue<WALSegmentRotated>>,
   ticker: Box<IntervalWorkThread<()>>,
   /**
    * Shared storage for the active checkpoint cycle.
@@ -207,9 +203,11 @@ impl Checkpoint {
       return Ok(());
     }
 
-    self.worker.run_hard()?;
-    while let Some(segment) = self.incoming.pop() {
-      segment.truncate()?;
+    let id = self.worker.run_hard()?;
+    while let Some(event) = self.incoming.pop() {
+      if id >= event.last_log_id {
+        event.segment.truncate()?;
+      }
     }
 
     if let Some(cycle) = self.cycle.take() {
@@ -223,7 +221,7 @@ impl Checkpoint {
 
 impl OwnedSubscription<WALSegmentRotated> for Checkpoint {
   fn handle(&self, event: WALSegmentRotated) {
-    self.incoming.push(event.into_inner())
+    self.incoming.push(event)
   }
 }
 impl SharedSubscription<WALFailed> for Checkpoint {
@@ -290,24 +288,36 @@ impl CheckpointWorker {
     Ok(())
   }
 
-  fn run_hard(&self) -> Result {
-    let log_id = self.wal.current_log_id();
+  fn run_hard(&self) -> Result<LogId> {
+    let log_id = self.wal.durable_log_id();
     info!("hard checkpoint trigger id {log_id}.");
 
     self.block_cache.create_flusher().flush_hard()?;
     self.finalize_checkpoint(log_id)?;
     info!("hard checkpoint complete id {log_id}");
-    Ok(())
+    Ok(log_id)
   }
 
   fn create_cycle(
     &self,
-    incoming: &SegQueue<WALSegment>,
+    incoming: &SegQueue<WALSegmentRotated>,
     metrics: &MetricsRegistry,
   ) -> CheckpointCycle {
-    let log_id = self.wal.current_log_id();
+    let log_id = self.wal.durable_log_id();
+    let mut non_durable = Vec::new();
+    let mut durable = Vec::new();
+    while let Some(event) = incoming.pop() {
+      if log_id >= event.last_log_id {
+        durable.push(event.segment);
+      } else {
+        non_durable.push(event);
+      }
+    }
+    for event in non_durable {
+      incoming.push(event);
+    }
     CheckpointCycle::new(
-      repeat(()).map_while(|_| incoming.pop()),
+      durable,
       self.block_cache.create_flusher(),
       log_id,
       metrics.checkpoint_cycle.start(),
@@ -316,7 +326,7 @@ impl CheckpointWorker {
 
   fn run_tick<F: Fn(usize) -> usize>(
     &self,
-    incoming: &SegQueue<WALSegment>,
+    incoming: &SegQueue<WALSegmentRotated>,
     event_bus: &EventBus,
     cycle: &AtomicCell<Option<CheckpointCycle>>,
     metrics: &MetricsRegistry,
@@ -380,7 +390,7 @@ impl CheckpointWorker {
  * more cache blocks are flushed.
  */
 fn checkpoint_loop(
-  incoming: Arc<SegQueue<WALSegment>>,
+  incoming: Arc<SegQueue<WALSegmentRotated>>,
   worker: Arc<CheckpointWorker>,
   event_bus: Arc<EventBus>,
   cycle: Arc<AtomicCell<Option<CheckpointCycle>>>,
