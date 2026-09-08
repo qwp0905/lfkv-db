@@ -332,7 +332,7 @@ fn recovery_table(
   }
   info!("{} half split detected at table {name}", half_split.len());
 
-  let index = BTreeIndex::new(RecoveryPolicy {
+  let mut index = BTreeIndex::new(RecoveryPolicy {
     block_cache,
     recorder,
   });

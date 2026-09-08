@@ -1,6 +1,6 @@
 use std::{
   alloc::{alloc, handle_alloc_error, Layout},
-  mem::{ManuallyDrop, MaybeUninit},
+  mem::{forget, offset_of, ManuallyDrop, MaybeUninit},
   ops::Deref,
   ptr::{copy_nonoverlapping, slice_from_raw_parts_mut, NonNull},
   sync::atomic::{fence, AtomicUsize, Ordering},
@@ -44,6 +44,12 @@ impl<T> SBox<T> {
   pub fn new_uninit() -> SBox<MaybeUninit<T>> {
     SBox::new(MaybeUninit::uninit())
   }
+
+  pub unsafe fn from_raw(raw: *mut T) -> Self {
+    let offset = offset_of!(Inner<T>, data);
+    let ptr = (raw as *mut u8).sub(offset) as *mut Inner<T>;
+    Self::from_inner_ptr(ptr)
+  }
 }
 
 impl<T: ?Sized> SBox<T> {
@@ -60,12 +66,18 @@ impl<T: ?Sized> SBox<T> {
       inner: NonNull::new_unchecked(ptr),
     }
   }
+
+  pub fn into_raw(this: SBox<T>) -> *mut T {
+    let ptr = unsafe { &raw mut (*this.inner.as_ptr()).data };
+    std::mem::forget(this);
+    ptr
+  }
 }
 
 impl<T> SBox<MaybeUninit<T>> {
   pub unsafe fn assume_init(self) -> SBox<T> {
     let inner = self.inner;
-    std::mem::forget(self);
+    forget(self);
     SBox {
       inner: inner.cast(),
     }

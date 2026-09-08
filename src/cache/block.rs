@@ -1,30 +1,11 @@
-use std::sync::{Mutex, MutexGuard};
+use std::cell::Cell;
 
 use crate::{
   disk::{Page, PageRef, PendingIO, Pointer, PAGE_SIZE},
   table::TableHandleRef,
-  utils::{create_static_ref, AtomicSBox, SBox, ShortenedMutex},
+  utils::{create_static_ref, AtomicSBox, SBox},
   Result,
 };
-
-/**
- * Exclusive update guard for a cached block.
- *
- * Applying a page installs the new page pointer and advances the block epoch.
- */
-pub struct BlockLatch<'a> {
-  pages: &'a AtomicSBox<PageRef<PAGE_SIZE>>,
-  guard: MutexGuard<'a, u64>,
-}
-impl<'a> BlockLatch<'a> {
-  pub fn apply(&mut self, page: PageRef<PAGE_SIZE>) {
-    self.pages.store(page);
-    *self.guard += 1;
-  }
-  pub fn epoch(&self) -> u64 {
-    *self.guard
-  }
-}
 
 pub struct BlockFlusher<'a> {
   pages: &'a AtomicSBox<PageRef<PAGE_SIZE>>,
@@ -59,30 +40,6 @@ impl<'a> BlockFlusher<'a> {
     }
   }
 }
-pub struct ExclusiveBlockFlusher<'a> {
-  flusher: BlockFlusher<'a>,
-  guard: MutexGuard<'a, u64>,
-}
-impl<'a> ExclusiveBlockFlusher<'a> {
-  const fn new(
-    pages: &'a AtomicSBox<PageRef<PAGE_SIZE>>,
-    handle: &'a TableHandleRef,
-    pointer: Pointer,
-    guard: MutexGuard<'a, u64>,
-  ) -> Self {
-    Self {
-      flusher: BlockFlusher::new(pages, handle, pointer),
-      guard,
-    }
-  }
-  pub fn submit(self) -> ExclusivePendingFlush {
-    let pending = self.flusher.submit();
-    ExclusivePendingFlush {
-      epoch: *self.guard,
-      pending,
-    }
-  }
-}
 
 pub struct PendingFlush {
   handle: Option<PendingIO>,
@@ -101,32 +58,18 @@ impl Drop for PendingFlush {
     let _ = handle.wait();
   }
 }
-pub struct ExclusivePendingFlush {
-  epoch: u64,
-  pending: PendingFlush,
-}
-impl ExclusivePendingFlush {
-  pub const fn epoch(&self) -> u64 {
-    self.epoch
-  }
-  pub fn finalize(self) -> (u64, Result) {
-    (self.epoch, self.pending.finalize())
-  }
-}
 
 /**
  * Cached page for one table block.
  *
  * The page pointer can be atomically swapped when a new page version is
- * installed. `latch` protects the block epoch: every installed page advances the
- * epoch, and a flush records the epoch it submitted so the caller can later tell
- * whether more changes happened after that flush started.
+ * installed. epoch is protected by batch mutation in writable slot.
  */
 pub struct CachedBlock {
   page: AtomicSBox<PageRef<PAGE_SIZE>>,
   pointer: Pointer,
   handle: TableHandleRef,
-  latch: Mutex<u64>,
+  epoch: Cell<u64>,
 }
 impl CachedBlock {
   #[inline]
@@ -135,8 +78,17 @@ impl CachedBlock {
       page: AtomicSBox::new(page),
       pointer,
       handle,
-      latch: Mutex::new(0),
+      epoch: Cell::new(0),
     }
+  }
+
+  pub unsafe fn advance_epoch(&self, page: PageRef<PAGE_SIZE>) {
+    self.page.store(page);
+    self.epoch.set(self.epoch.get() + 1);
+  }
+
+  pub const unsafe fn get_epoch(&self) -> u64 {
+    self.epoch.get()
   }
 
   #[inline]
@@ -150,29 +102,16 @@ impl CachedBlock {
   }
 
   #[inline]
-  pub fn latch(&self) -> BlockLatch<'_> {
-    BlockLatch {
-      pages: &self.page,
-      guard: self.latch.l(),
-    }
-  }
-
-  #[inline]
   pub const fn handle(&self) -> &TableHandleRef {
     &self.handle
   }
 
   /**
-   * Write the current page without taking the block latch.
+   * Write the current page to disk.
    */
   pub const fn flusher(&self) -> BlockFlusher<'_> {
     BlockFlusher::new(&self.page, &self.handle, self.pointer)
   }
-
-  /**
-   * Write the current page with taking the block latch.
-   */
-  pub fn exclusive_flusher(&self) -> ExclusiveBlockFlusher<'_> {
-    ExclusiveBlockFlusher::new(&self.page, &self.handle, self.pointer, self.latch.l())
-  }
 }
+
+unsafe impl Sync for CachedBlock {}

@@ -37,6 +37,9 @@ impl<T, VTable> VObject<T, VTable> {
   pub const fn get_ptr(&mut self) -> VPtr<VTable> {
     VPtr(NonNull::from_mut(self).cast())
   }
+  pub const fn as_inner(&self) -> &T {
+    &self.payload
+  }
 }
 
 pub struct VPtr<VTable: 'static>(NonNull<Header<VTable>>);
@@ -62,9 +65,9 @@ impl<VTable> VPtr<VTable> {
     &raw.as_ref().payload
   }
 
-  pub const unsafe fn get_mut<'a, T>(ptr: NonNull<()>) -> &'a mut T {
-    let mut raw = ptr.cast::<VObject<T, VTable>>();
-    &mut raw.as_mut().payload
+  pub const unsafe fn get_raw<T>(ptr: NonNull<()>) -> *const T {
+    let raw = ptr.cast::<VObject<T, VTable>>();
+    &raw const (*raw.as_ptr()).payload
   }
 }
 impl<VTable> Drop for VPtr<VTable> {

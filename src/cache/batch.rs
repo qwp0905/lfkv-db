@@ -1,14 +1,15 @@
 use std::{
+  cell::UnsafeCell,
   marker::PhantomData,
-  mem::{ManuallyDrop, MaybeUninit},
+  mem::ManuallyDrop,
   pin::Pin,
   ptr::NonNull,
-  sync::atomic::{AtomicBool, Ordering},
+  sync::atomic::{fence, AtomicBool, Ordering},
 };
 
 use crossbeam::queue::SegQueue;
 
-use crate::background::{OneshotFulfill, VObject, VPtr as VPtrRaw};
+use crate::background::{OneshotBehavior, VObject, VPtr as VPtrRaw};
 
 const MAX_BATCH_SIZE: usize = 32;
 
@@ -22,44 +23,41 @@ unsafe fn call<T, R, F>(ptr: NonNull<()>, data: NonNull<()>)
 where
   F: FnOnce(&mut T) -> R + Send,
 {
-  let task = VPtr::get_mut::<BatchPayload<T, R, F>>(ptr);
+  let task = VPtr::get_ref::<BatchPayload<T, R, F>>(ptr);
   task.call(data.cast().as_mut());
 }
 unsafe fn complete<T, R, F>(ptr: NonNull<()>)
 where
   F: FnOnce(&mut T) -> R + Send,
 {
-  let task = VPtr::get_mut::<BatchPayload<T, R, F>>(ptr);
-  task.complete();
+  let task = VPtr::get_raw::<BatchPayload<T, R, F>>(ptr);
+  BatchPayload::complete(task);
 }
 
 struct BatchPayload<T, R, F> {
-  handler: ManuallyDrop<F>,
-  result: MaybeUninit<R>,
-  fulfiller: ManuallyDrop<OneshotFulfill<R>>,
+  handler: UnsafeCell<ManuallyDrop<F>>,
+  behavior: OneshotBehavior<R>,
   _marker: PhantomData<fn(&mut T)>,
 }
 impl<T, R, F> BatchPayload<T, R, F> {
-  const fn new(handler: F, fulfiller: OneshotFulfill<R>) -> Self {
+  const fn new(handler: F) -> Self {
     Self {
-      handler: ManuallyDrop::new(handler),
-      result: MaybeUninit::uninit(),
-      fulfiller: ManuallyDrop::new(fulfiller),
+      handler: UnsafeCell::new(ManuallyDrop::new(handler)),
+      behavior: OneshotBehavior::new(),
       _marker: PhantomData,
     }
   }
 
-  unsafe fn call(&mut self, data: &mut T)
+  unsafe fn call(&self, data: &mut T)
   where
     F: FnOnce(&mut T) -> R,
   {
-    let handler = unsafe { ManuallyDrop::take(&mut self.handler) };
-    self.result.write(handler(data));
+    let handler = unsafe { ManuallyDrop::take(&mut (*self.handler.get())) };
+    self.behavior.fulfill(handler(data));
   }
 
-  unsafe fn complete(&mut self) {
-    let fulfiller = unsafe { ManuallyDrop::take(&mut self.fulfiller) };
-    fulfiller.fulfill(self.result.assume_init_read());
+  unsafe fn complete(this: *const Self) {
+    unsafe { OneshotBehavior::wake(&raw const (*this).behavior) };
   }
 }
 
@@ -74,15 +72,16 @@ where
     complete: complete::<T, R, F>,
   };
 
-  pub const fn new(handler: F, fulfiller: OneshotFulfill<R>) -> Self {
-    Self(VObject::new(
-      BatchPayload::new(handler, fulfiller),
-      &Self::VTABLE,
-    ))
+  pub const fn new(handler: F) -> Self {
+    Self(VObject::new(BatchPayload::new(handler), &Self::VTABLE))
   }
   pub fn task(self: Pin<&mut Self>) -> BatchTask<T> {
     // SAFETY: Only take the pinned object's address; no field is moved.
     BatchTask::new(unsafe { self.get_unchecked_mut() }.0.get_ptr())
+  }
+
+  pub fn wait(&self) -> R {
+    self.0.as_inner().behavior.wait().unwrap()
   }
 }
 pub struct BatchTask<T> {
@@ -132,7 +131,11 @@ impl<T> BatchHandle<T> {
 
   pub fn register(&self, handler: BatchTask<T>) -> bool {
     self.queue.push(handler);
-    !self.occupied.fetch_or(true, Ordering::Release)
+    if self.occupied.fetch_or(true, Ordering::Relaxed) {
+      return false;
+    }
+    fence(Ordering::Acquire);
+    true
   }
 
   pub fn drain_tasks(&self) -> impl Iterator<Item = BatchTask<T>> + '_ {
@@ -147,9 +150,10 @@ impl<T> BatchHandle<T> {
     if self.queue.is_empty() {
       return true;
     }
-    if self.occupied.fetch_or(true, Ordering::AcqRel) {
+    if self.occupied.fetch_or(true, Ordering::Relaxed) {
       return true;
     }
+    fence(Ordering::Acquire);
     false
   }
 }

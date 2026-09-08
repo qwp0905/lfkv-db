@@ -59,7 +59,7 @@ where
 
   unsafe fn run(&self) {
     let func = (*self.function.get()).take().unwrap();
-    self.behavior.fulfill(func());
+    OneshotBehavior::fulfill_and_wake(&raw const self.behavior, func());
   }
 }
 impl<F, R> TaskPayload<F, R> {

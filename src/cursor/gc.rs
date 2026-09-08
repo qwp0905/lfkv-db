@@ -228,7 +228,7 @@ impl GcWorker {
       self
         .block_cache
         .read(ptr, table)?
-        .for_batch()
+        .for_write()
         .mutate(|slot| {
           let mut entry: DataEntry = slot.as_ref().deserialize()?;
           let mut new_versions = VecDeque::new();
@@ -340,7 +340,7 @@ impl GcWorker {
       let targets = self
         .block_cache
         .read(ptr, table)?
-        .for_batch()
+        .for_write()
         .mutate(|slot| {
           let mut targets = Vec::new();
           let mut node = slot.as_ref().deserialize::<BTreeNode>()?;
