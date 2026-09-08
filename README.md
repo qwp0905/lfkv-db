@@ -136,41 +136,21 @@ println!("get p99: {}µs", m.operation_get_latency_micros_p99);
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    engine[Engine] --> tx[Transaction]
+    tx -->|get/insert/remove| tree["B-link Tree"]
+    tx -->|snapshot and visibility| mvcc["MVCC"]
+    tx -->|commit| wal[WAL]
+
+    tree -->|read and modify pages| cache["Block Cache"]
+    tree -->|page images | wal
+    cache -->|read and flush| tables["Table Handle"]
+    tables --> io["Disk I/O"]
+    wal -->|write and sync| io
 ```
-                    ┌──────────────────┐
-                    │      Engine      │
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  TxOrchestrator  │
-                    │  (coordination)  │
-                    └──┬──┬──┬──┬──┬───┘
-                       │  │  │  │  │
-         ┌─────────────┘  │  │  │  └──────────────┐
-         │        ┌───────┘  │  └───────┐         │
-         │        │          │          │         │
-┌────────▼──────┐ │ ┌────────▼───────┐  │ ┌───────▼───────┐
-│  Block Cache  │ │ │  TableMapper   │  │ │    Garbage    │
-│    S3-FIFO    │ │ │  ┌───────────┐ │  │ │   Collector   │
-│  sharded lock │ │ │  │  IO Pool  │ │  │ │               │
-└───────────────┘ │ │  │TableHandle│ │  │ └───────────────┘
-                  │ │  │ IO Handle │ │  │
-                  │ │  └───────────┘ │  │
-                  │ └────────────────┘  │
-                  │                     │
-          ┌───────▼─────────┐  ┌────────▼──────────┐
-          │       WAL       │  │     Version       │
-          │    lock-free    │  │    Controller     │
-          │    CAS append   │  │      (MVCC)       │
-          └────────┬────────┘  └───────────────────┘
-                   │
-          ┌────────▼────────┐
-          │  WAL Segments   │
-          │  + Preloader    │
-          │  + Checkpoint   │
-          └─────────────────┘
-```
-For more details, see the [[architecture.md]](docs/architecture.md).
+
+For more details, see [architecture.md](docs/architecture.md).
 
 
 ### Characteristics
