@@ -13,7 +13,7 @@ use crossbeam::{
 };
 
 use super::{
-  AppendCompletion, AppendTicket, BookingResult, FsyncResult, OffsetBooking,
+  AppendCompletion, AppendTicket, BookingResult, FsyncResult, LogId, OffsetBooking,
   SegmentGeneration, WALSegment, WriteCompletion, WAL_BLOCK_SIZE,
 };
 use crate::{
@@ -195,6 +195,8 @@ pub struct LogBuffer {
   segment_state: SBox<SegmentState>,
 
   batch: LogBufferBatch,
+
+  log_id_offset: LogId,
 }
 impl LogBuffer {
   pub fn init_new(
@@ -202,6 +204,7 @@ impl LogBuffer {
     segment: WALSegment,
     generation: SegmentGeneration,
     max_len: Pointer,
+    log_id_offset: LogId,
   ) -> Self {
     Self::new(
       entry,
@@ -209,18 +212,25 @@ impl LogBuffer {
       SBox::new(SegmentState::new(segment, generation, max_len)),
       0,
       0,
+      log_id_offset,
     )
   }
   /**
    * if segment is not full, then copy pointers and recreate buffer
    */
-  pub fn init_next(&self, entry: PageRef<WAL_BLOCK_SIZE>, offset: usize) -> Self {
+  pub fn init_next(
+    &self,
+    entry: PageRef<WAL_BLOCK_SIZE>,
+    offset: usize,
+    log_id_offset: LogId,
+  ) -> Self {
     Self::new(
       entry,
       self.segment_ptr + 1,
       self.segment_state.clone(),
       offset,
       1,
+      log_id_offset,
     )
   }
 
@@ -230,6 +240,7 @@ impl LogBuffer {
     segment_state: SBox<SegmentState>,
     offset: usize,
     order: u32,
+    log_id_offset: LogId,
   ) -> Self {
     Self {
       offset: OffsetBooking::new(offset, order),
@@ -238,6 +249,7 @@ impl LogBuffer {
       segment_ptr,
       segment_state,
       batch: LogBufferBatch::new(),
+      log_id_offset,
     }
   }
 
@@ -339,6 +351,10 @@ impl LogBuffer {
 
   pub fn drain_batch(&self) {
     self.segment_state.write_completion.drain();
+  }
+
+  pub const fn get_log_id_offset(&self) -> LogId {
+    self.log_id_offset
   }
 }
 
