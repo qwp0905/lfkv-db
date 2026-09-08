@@ -229,12 +229,13 @@ impl<'a> Transaction<'a> {
     }
 
     let id = state.get_id();
-    if let Err(err) = self.orchestrator.commit_tx(id) {
-      state.make_available();
-      return Err(err);
+    match self.orchestrator.commit_tx(id) {
+      Ok(_guard) => state.deactive(),
+      Err(err) => {
+        state.make_available();
+        return Err(err);
+      }
     }
-
-    state.deactive();
     let version = self.context.state().current_version();
 
     let events = self
@@ -248,8 +249,8 @@ impl<'a> Transaction<'a> {
       .drain(..)
       .map(|(old, new, metadata)| CompactionCommitted::new(old, new, metadata, version));
     self.event_bus.batch_publish(events);
-    self.created_tables.clear();
 
+    self.created_tables.clear();
     Ok(())
   }
 
