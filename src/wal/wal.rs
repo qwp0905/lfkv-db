@@ -1,5 +1,5 @@
 use std::{
-  io::ErrorKind,
+  io,
   mem::forget,
   path::PathBuf,
   sync::{atomic::Ordering, Arc, OnceLock},
@@ -22,9 +22,9 @@ use crate::{
 };
 
 use super::{
-  replay, AppendTicket, AtomicLogId, BookingResult, LogBuffer, LogId, LogRecordUninit,
-  RecordEncoding, ReplayResult, SegmentPreload, SyncCompletion, TxId, WALFormatVersion,
-  WALSegment, WAL_BLOCK_SIZE,
+  replay, AppendTicket, AtomicLogId, BookingResult, LogBuffer, LogCompletion, LogId,
+  LogRecordUninit, RecordEncoding, ReplayResult, SegmentPreload, SyncCompletion, TxId,
+  WALFormatVersion, WALSegment, WAL_BLOCK_SIZE,
 };
 
 pub struct WALConfig {
@@ -32,10 +32,16 @@ pub struct WALConfig {
   pub max_buffer_size: usize,
 }
 
-pub struct WALSegmentRotated(WALSegment);
+pub struct WALSegmentRotated {
+  pub last_log_id: LogId,
+  pub segment: WALSegment,
+}
 impl WALSegmentRotated {
-  pub fn into_inner(self) -> WALSegment {
-    self.0
+  const fn new(last_log_id: LogId, segment: WALSegment) -> Self {
+    Self {
+      last_log_id,
+      segment,
+    }
   }
 }
 
@@ -89,6 +95,8 @@ pub struct WriteAheadLog {
   buffer: Atomic<LogBuffer>,
 
   sync_completion: SyncCompletion,
+  log_completion: LogCompletion,
+
   /**
    * wal segment max size
    */
@@ -121,7 +129,8 @@ impl WriteAheadLog {
     let page_pool = PagePool::new(config.max_buffer_size / WAL_BLOCK_SIZE);
     let max_len = max_len as Pointer;
     let preloader = SegmentPreload::new(max_len, io_pool, &event_bus);
-    let buffer = LogBuffer::init_new(page_pool.acquire(), preloader.load()?, 0, max_len);
+    let buffer =
+      LogBuffer::init_new(page_pool.acquire(), preloader.load()?, 0, max_len, 0);
 
     Ok(Self {
       last_log_id: AtomicLogId::new(0),
@@ -129,6 +138,7 @@ impl WriteAheadLog {
       buffer: Atomic::new(buffer),
       page_pool,
       sync_completion: SyncCompletion::new(),
+      log_completion: LogCompletion::new(0),
       state: AtomicCell::new(State::Available),
       max_len,
       event_bus,
@@ -157,7 +167,13 @@ impl WriteAheadLog {
     );
 
     let preloader = SegmentPreload::new(max_len, io_pool, &event_bus);
-    let buffer = LogBuffer::init_new(page_pool.acquire(), preloader.load()?, 0, max_len);
+    let buffer = LogBuffer::init_new(
+      page_pool.acquire(),
+      preloader.load()?,
+      0,
+      max_len,
+      replay_result.last_log_id,
+    );
 
     Ok((
       Self {
@@ -166,6 +182,7 @@ impl WriteAheadLog {
         buffer: Atomic::new(buffer),
         page_pool,
         sync_completion: SyncCompletion::new(),
+        log_completion: LogCompletion::new(replay_result.last_log_id),
         state: AtomicCell::new(State::Available),
         max_len,
         event_bus,
@@ -181,7 +198,7 @@ impl WriteAheadLog {
    * later callers see `WALUnavailable`; the failure event only reports that this
    * transition happened.
    */
-  fn failover(&self, err: ErrorKind) -> Error {
+  fn failover(&self, err: io::ErrorKind) -> Error {
     if !self.state.swap(State::Failed).is_available() {
       return Error::WALUnavailable;
     }
@@ -192,13 +209,16 @@ impl WriteAheadLog {
     self.event_bus.publish(WALFailed);
     Error::WALFailed(err)
   }
+  const fn handle_failover(&self) -> impl FnOnce(io::Error) -> Error + '_ {
+    |err| self.failover(err.kind())
+  }
 
   fn append_in_block(
     &self,
     reserved: ReservedAppend,
     record: LogRecordUninit,
     flush: bool,
-  ) -> Result {
+  ) -> io::Result<LogId> {
     let ReservedAppend {
       buffer_ptr: _buffer_ptr,
       guard: _guard,
@@ -207,29 +227,23 @@ impl WriteAheadLog {
       token,
     } = reserved;
 
-    let log_id = self.last_log_id.fetch_add(1, Ordering::Release);
+    let log_id = buffer.get_log_id_offset() + ticket.get_order() as LogId;
     buffer.append_at(&record.init(log_id), &ticket);
     if !flush {
-      return Ok(());
+      return Ok(log_id);
     }
-
-    if let Err(err) = buffer
-      .flush_block_with(ticket, &self.page_pool)
-      .wait()
-      .and_then(|_| buffer.wait_prev_blocks())
-    {
-      return Err(self.failover(err.kind()));
-    }
-    self.wait_sync(buffer, token)
+    buffer.flush_block_with(ticket, &self.page_pool).wait()?;
+    buffer.wait_prev_blocks()?;
+    self.wait_sync(buffer, token)?;
+    Ok(log_id)
   }
 
-  fn wait_sync(&self, buffer: &LogBuffer, token: SharedToken) -> Result {
+  fn wait_sync(&self, buffer: &LogBuffer, token: SharedToken) -> io::Result<()> {
     let done = buffer.sync_segment();
     drop(token);
-    done
-      .wait()
-      .and_then(|_| self.sync_completion.wait_until(buffer.get_generation()))
-      .map_err(|err| self.failover(err.kind()))
+    done.wait()?;
+    self.sync_completion.wait_until(buffer.get_generation())?;
+    Ok(())
   }
 
   fn rotate_block(
@@ -238,7 +252,7 @@ impl WriteAheadLog {
     overflow: AppendTicket,
     record: LogRecordUninit,
     flush: bool,
-  ) -> Result {
+  ) -> io::Result<LogId> {
     let ReservedAppend {
       buffer_ptr,
       guard,
@@ -247,7 +261,8 @@ impl WriteAheadLog {
       token,
     } = reserved;
 
-    let record = record.init(self.last_log_id.fetch_add(1, Ordering::Release));
+    let log_id = buffer.get_log_id_offset() + ticket.get_order() as LogId;
+    let record = record.init(log_id);
     let (available, remain) = record.split_at(ticket.get_len());
     debug_assert_eq!(available.len(), ticket.get_len());
     debug_assert_eq!(remain.len(), overflow.get_len());
@@ -255,11 +270,13 @@ impl WriteAheadLog {
     buffer.append_at(available, &ticket);
     buffer.flush_and_forget(&self.page_pool, ticket);
 
+    self.last_log_id.fetch_max(log_id + 1, Ordering::Relaxed);
+
     let mut new_page = self.page_pool.acquire();
     new_page.copy_from(remain, 0);
     let Ok(new_buffer_ptr) = self.buffer.compare_exchange(
       buffer_ptr,
-      Owned::new(buffer.init_next(new_page, overflow.get_len())),
+      Owned::new(buffer.init_next(new_page, overflow.get_len(), log_id)),
       Ordering::Release,
       Ordering::Acquire,
       guard,
@@ -269,19 +286,16 @@ impl WriteAheadLog {
 
     unsafe { guard.defer_destroy(buffer_ptr) };
     if !flush {
-      return Ok(());
+      return Ok(log_id);
     }
 
     let new_buffer = unsafe { &*new_buffer_ptr.as_raw() };
-    if let Err(err) = new_buffer
+    new_buffer
       .flush_block_with(overflow, &self.page_pool)
-      .wait()
-      .and_then(|_| new_buffer.wait_prev_blocks())
-    {
-      return Err(self.failover(err.kind()));
-    };
-
-    self.wait_sync(buffer, token)
+      .wait()?;
+    new_buffer.wait_prev_blocks()?;
+    self.wait_sync(buffer, token)?;
+    Ok(log_id)
   }
 
   fn rotate_segment(&self, reserved: ReservedAppend, backoff: &Backoff) -> Result {
@@ -298,13 +312,17 @@ impl WriteAheadLog {
       Err(Error::IO(err)) => return Err(self.failover(err.kind())),
       Err(err) => return Err(err),
     };
+
+    let log_id = buffer.get_log_id_offset() + ticket.get_order() as LogId;
     let replacement = LogBuffer::init_new(
       self.page_pool.acquire(),
       new,
       buffer.get_generation() + 1,
       self.max_len,
+      log_id,
     );
 
+    self.last_log_id.fetch_max(log_id, Ordering::Relaxed);
     self
       .buffer
       .store(Owned::init(replacement), Ordering::Release);
@@ -327,11 +345,13 @@ impl WriteAheadLog {
     self
       .sync_completion
       .register(buffer.get_generation(), segment.fsync());
-    self.event_bus.publish(WALSegmentRotated(segment));
+    self
+      .event_bus
+      .publish(WALSegmentRotated::new(log_id, segment));
     Ok(())
   }
 
-  fn append(&self, record: LogRecordUninit, flush: bool) -> Result {
+  fn append(&self, record: LogRecordUninit, flush: bool) -> Result<DurabilityGuard<'_>> {
     let len = record.len();
     let backoff = Backoff::new();
 
@@ -371,10 +391,16 @@ impl WriteAheadLog {
       };
 
       let Some(overflow) = overflow else {
-        return self.append_in_block(reserved, record, flush);
+        let log_id = self
+          .append_in_block(reserved, record, flush)
+          .map_err(self.handle_failover())?;
+        return Ok(DurabilityGuard::new(&self.log_completion, log_id));
       };
       if buffer.get_pointer() + 1 < self.max_len {
-        return self.rotate_block(reserved, overflow, record, flush);
+        let log_id = self
+          .rotate_block(reserved, overflow, record, flush)
+          .map_err(self.handle_failover())?;
+        return Ok(DurabilityGuard::new(&self.log_completion, log_id));
       }
 
       self.rotate_segment(reserved, &backoff)?;
@@ -382,8 +408,8 @@ impl WriteAheadLog {
     }
   }
 
-  pub fn current_log_id(&self) -> LogId {
-    self.last_log_id.load(Ordering::Acquire)
+  pub fn durable_log_id(&self) -> LogId {
+    self.log_completion.get_frontier()
   }
 
   pub fn append_insert(
@@ -393,20 +419,21 @@ impl WriteAheadLog {
     ptr: Pointer,
     record_version: TxId,
     data: &[u8],
-  ) -> Result {
-    self.append(
-      LogRecordUninit::new_insert(
-        tx_id,
-        table_id,
-        ptr,
-        record_version,
-        DEFAULT_ENCODING,
-        data,
-      ),
-      false,
-    )
+  ) -> Result<DurabilityGuard<'_>> {
+    let record = LogRecordUninit::new_insert(
+      tx_id,
+      table_id,
+      ptr,
+      record_version,
+      DEFAULT_ENCODING,
+      data,
+    );
+    self.append(record, false)
   }
-  pub fn append_blob_created(&self, metadata: BlobMetadata) -> Result {
+  pub fn append_blob_created(
+    &self,
+    metadata: BlobMetadata,
+  ) -> Result<DurabilityGuard<'_>> {
     self.append(LogRecordUninit::new_blob_created(metadata), false)
   }
 
@@ -415,14 +442,14 @@ impl WriteAheadLog {
     last_log_id: LogId,
     current_version: TxId,
     path: PathBuf,
-  ) -> Result {
+  ) -> Result<DurabilityGuard<'_>> {
     self.append(
       LogRecordUninit::new_checkpoint(last_log_id, current_version, path),
       true,
     )
   }
 
-  pub fn commit_and_flush(&self, tx_id: TxId) -> Result {
+  pub fn commit_and_flush(&self, tx_id: TxId) -> Result<DurabilityGuard<'_>> {
     self.append(LogRecordUninit::new_commit(tx_id), true)
   }
 
@@ -452,4 +479,19 @@ struct ReservedAppend<'a> {
   buffer: &'static LogBuffer,
   token: SharedToken<'a>,
   ticket: AppendTicket,
+}
+
+pub struct DurabilityGuard<'a> {
+  completion: &'a LogCompletion,
+  log_id: LogId,
+}
+impl<'a> DurabilityGuard<'a> {
+  const fn new(completion: &'a LogCompletion, log_id: LogId) -> Self {
+    Self { completion, log_id }
+  }
+}
+impl<'a> Drop for DurabilityGuard<'a> {
+  fn drop(&mut self) {
+    self.completion.complete(self.log_id);
+  }
 }
