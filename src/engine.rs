@@ -21,10 +21,11 @@ use crate::{
   error, info,
   manifest::{load_manifest, save_manifest, Manifest},
   metrics::{EngineMetrics, MetricsRegistry},
+  mvcc::VersionController,
   table::{TableFormatVersion, TableId, TableMapper},
   transaction::{
     Checkpoint, CheckpointSnapshot, PageRecorder, SnapshotFormatVersion, Transaction,
-    TransactionConfig, TxOrchestrator, VersionVisibility,
+    TransactionConfig, TxOrchestrator,
   },
   utils::ToArc,
   wal::{WALConfig, WALFormatVersion, WriteAheadLog},
@@ -99,9 +100,9 @@ impl Engine {
         WriteAheadLog::init(&wal_config, event_bus.clone(), io_pool.clone())?.to_arc();
       let blob = BlobStorage::init(io_pool.clone(), wal.clone()).to_arc();
       let recorder = PageRecorder::new(wal.clone()).to_arc();
-      let version_visibility = VersionVisibility::init(&event_bus);
+      let version_controller = VersionController::init(&event_bus);
 
-      initialize(&block_cache, &tables, &recorder, &version_visibility, &blob)?;
+      initialize(&block_cache, &tables, &recorder, &version_controller, &blob)?;
 
       let manifest = Manifest::new(
         PAGE_SIZE as u32,
@@ -115,7 +116,7 @@ impl Engine {
       let checkpoint = Checkpoint::new(
         wal.clone(),
         block_cache.clone(),
-        version_visibility.clone(),
+        version_controller.clone(),
         io_pool.clone(),
         blob.clone(),
         event_bus.clone(),
@@ -125,7 +126,7 @@ impl Engine {
 
       let gc = GarbageCollector::new(
         block_cache.clone(),
-        version_visibility.clone(),
+        version_controller.clone(),
         recorder.clone(),
         tables.clone(),
         event_bus.clone(),
@@ -137,7 +138,7 @@ impl Engine {
         block_cache.clone(),
         tables.clone(),
         recorder.clone(),
-        version_visibility.clone(),
+        version_controller.clone(),
         wal.clone(),
         event_bus.clone(),
         blob.clone(),
@@ -149,7 +150,7 @@ impl Engine {
         wal,
         block_cache,
         tables,
-        version_visibility,
+        version_controller,
         gc,
         recorder,
         compactor,
@@ -196,7 +197,7 @@ impl Engine {
     let blob = BlobStorage::replay(blob_metadata, io_pool.clone(), wal.clone())?.to_arc();
 
     let recorder = PageRecorder::new(wal.clone()).to_arc();
-    let version_visibility = VersionVisibility::replay(
+    let version_controller = VersionController::replay(
       replay.last_tx_id,
       replay.started,
       replay.closed,
@@ -225,7 +226,7 @@ impl Engine {
     }
 
     let mut handles = HashMap::new();
-    let found_handles = open_tables(&block_cache, &tables, &version_visibility, &blob)?;
+    let found_handles = open_tables(&block_cache, &tables, &version_controller, &blob)?;
     for (table, metadata) in found_handles.handles.iter() {
       handles.insert(table.get_id(), (metadata.clone(), table.clone()));
     }
@@ -255,7 +256,7 @@ impl Engine {
     let checkpoint = Checkpoint::initial_checkpoint(
       wal.clone(),
       block_cache.clone(),
-      version_visibility.clone(),
+      version_controller.clone(),
       io_pool.clone(),
       blob.clone(),
       event_bus.clone(),
@@ -284,7 +285,7 @@ impl Engine {
 
     let gc = GarbageCollector::new(
       block_cache.clone(),
-      version_visibility.clone(),
+      version_controller.clone(),
       recorder.clone(),
       tables.clone(),
       event_bus.clone(),
@@ -296,7 +297,7 @@ impl Engine {
       block_cache.clone(),
       tables.clone(),
       recorder.clone(),
-      version_visibility.clone(),
+      version_controller.clone(),
       wal.clone(),
       event_bus.clone(),
       blob.clone(),
@@ -333,7 +334,7 @@ impl Engine {
       wal,
       block_cache,
       tables,
-      version_visibility,
+      version_controller,
       gc,
       recorder,
       compactor,

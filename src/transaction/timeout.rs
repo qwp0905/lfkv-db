@@ -13,11 +13,10 @@ use crossbeam::{
 use crate::{
   background::{ThreadSlot, UnwindSpawner},
   debug,
+  mvcc::VersionController,
   wal::TxId,
   warn,
 };
-
-use super::VersionVisibility;
 
 const TICK_SIZE: Duration = Duration::from_millis(1);
 
@@ -213,12 +212,12 @@ enum Msg {
 }
 
 const fn handle_thread(
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   receiver: Receiver<Msg>,
 ) -> impl FnOnce() {
   move || {
     let mut wheel = TimingWheel::new(move |tx_id: TxId| {
-      let Some(state) = version_visibility.get_active_state(tx_id) else {
+      let Some(state) = version_controller.get_active_state(tx_id) else {
         return;
       };
       if !state.try_timeout() {
@@ -226,7 +225,7 @@ const fn handle_thread(
       }
       warn!("tx {} timeout reached", state.get_id());
 
-      version_visibility.set_abort(state.get_id());
+      version_controller.set_abort(state.get_id());
       state.deactive();
     });
     let ticker = tick(TICK_SIZE);
@@ -262,12 +261,12 @@ pub struct TimeoutThread {
   slot: ThreadSlot,
 }
 impl TimeoutThread {
-  pub fn new(version_visibility: Arc<VersionVisibility>) -> Self {
+  pub fn new(version_controller: Arc<VersionController>) -> Self {
     let (tx, rx) = unbounded();
     let th = Builder::new()
       .name("timeout".to_string())
       .stack_size(2 << 20)
-      .spawn_unwind(handle_thread(version_visibility, rx));
+      .spawn_unwind(handle_thread(version_controller, rx));
 
     Self {
       channel: tx,

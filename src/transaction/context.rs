@@ -4,13 +4,14 @@ use crate::{
   cache::RefedSlot,
   cursor::{CreatablePolicy, ReadonlyPolicy, WritablePolicy},
   disk::Pointer,
+  mvcc::{TxSnapshot, TxState},
   objects::Serializable,
   table::TableHandleRef,
   wal::TxId,
   Result,
 };
 
-use super::{TxOrchestrator, TxSnapshot, TxState};
+use super::TxOrchestrator;
 
 /**
  * B-tree policy for a user transaction.

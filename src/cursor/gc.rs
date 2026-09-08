@@ -17,12 +17,13 @@ use crate::{
   cache::{BlockCache, RefedSlot},
   disk::Pointer,
   error,
+  mvcc::VersionController,
   objects::{
     BTreeNode, BTreeNodeView, DataEntry, DataEntryView, RecordDataView, Serializable,
     StaticKey, TreeHeader, HEADER_POINTER,
   },
   table::{TableHandleRef, TableId, TableMapper},
-  transaction::{PageRecorder, VersionVisibility},
+  transaction::PageRecorder,
   utils::{ChunkQueue, ToArc, ToBox},
   wal::{TxId, WALFailed, RESERVED_TX},
   Result,
@@ -44,7 +45,7 @@ pub struct GarbageCollector {
 impl GarbageCollector {
   pub fn new(
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     recorder: Arc<PageRecorder>,
     mapper: Arc<TableMapper>,
     event_bus: Arc<EventBus>,
@@ -53,7 +54,7 @@ impl GarbageCollector {
   ) -> Arc<Self> {
     let release_queue = SegQueue::new().to_arc();
     let worker =
-      GcWorker::new(block_cache, version_visibility, recorder, mapper, blob).to_arc();
+      GcWorker::new(block_cache, version_controller, recorder, mapper, blob).to_arc();
 
     let main = ThreadBuilder::new()
       .name("gc main")
@@ -116,7 +117,7 @@ impl DropTableCommitted {
 
 struct GcWorker {
   block_cache: Arc<BlockCache>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   recorder: Arc<PageRecorder>,
   mapper: Arc<TableMapper>,
   blob: Arc<BlobStorage>,
@@ -124,14 +125,14 @@ struct GcWorker {
 impl GcWorker {
   const fn new(
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     recorder: Arc<PageRecorder>,
     mapper: Arc<TableMapper>,
     blob: Arc<BlobStorage>,
   ) -> Self {
     Self {
       block_cache,
-      version_visibility,
+      version_controller,
       recorder,
       mapper,
       blob,
@@ -201,7 +202,7 @@ impl GcWorker {
     let mut next = Some(pointer);
     let mut max_found = None;
     let mut blob_refs = Vec::new();
-    let min_version = self.version_visibility.min_version();
+    let min_version = self.version_controller.min_version();
 
     while let Some(ptr) = next.take() {
       if max_found.is_some() {
@@ -281,7 +282,7 @@ impl GcWorker {
 
   fn create_cycle(&self) -> GcCycle {
     let mut cycle = GcCycle::new(
-      self.version_visibility.min_version(),
+      self.version_controller.min_version(),
       self.blob.readonly_handle_ids(),
     );
     for task in self.mapper.get_all().into_iter().map(GcTask::uninit) {
@@ -290,7 +291,7 @@ impl GcWorker {
     cycle
   }
   fn finalize_cycle(&self, cycle: &mut GcCycle) -> Result {
-    self.version_visibility.remove_aborted(&cycle.min_version);
+    self.version_controller.remove_aborted(&cycle.min_version);
     for &id in cycle
       .exists_blobs
       .iter()
@@ -334,7 +335,7 @@ impl GcWorker {
       return Ok(());
     }
 
-    let min_version = self.version_visibility.min_version();
+    let min_version = self.version_controller.min_version();
     let mut next = Some(ptr);
     while let Some(ptr) = next.take() {
       let targets = self
@@ -353,7 +354,7 @@ impl GcWorker {
 
             if table.is_reserved(&entry.key)
               || entry.record.version >= min_version
-              || self.version_visibility.is_aborted(&entry.record.owner)
+              || self.version_controller.is_aborted(&entry.record.owner)
             {
               let task = GcTask::new(TaskType::CheckEntry(ptr), table.clone());
               task_queue.push(task);
@@ -426,7 +427,7 @@ impl GcWorker {
 
       let mut release_candidates = HashSet::new();
       let has_next = {
-        let min_version = self.version_visibility.min_version();
+        let min_version = self.version_controller.min_version();
         let slot = self
           .block_cache
           .read(inner.pointer, table.handle())?
@@ -437,7 +438,7 @@ impl GcWorker {
           current.min_version = current.min_version.min(e.record.version);
           inner.total += 1;
 
-          if self.version_visibility.is_aborted(&e.record.owner) {
+          if self.version_controller.is_aborted(&e.record.owner) {
             inner.dead += 1;
             if let Some(p) = e.next {
               let task = GcTask::new(TaskType::CheckEntry(p), table.handle().clone());
@@ -508,9 +509,9 @@ impl GcWorker {
   ) -> Result {
     steps.ingest(release_queue);
 
-    let min_version = self.version_visibility.min_version();
+    let min_version = self.version_controller.min_version();
     steps.move_unreachable(min_version, |tx_id| {
-      self.version_visibility.is_aborted(tx_id)
+      self.version_controller.is_aborted(tx_id)
     });
     for table in steps.extract_unpinned() {
       table.truncate()?;

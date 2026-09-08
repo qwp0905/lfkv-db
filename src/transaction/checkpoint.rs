@@ -6,7 +6,7 @@ use std::{
 
 use crossbeam::{atomic::AtomicCell, queue::SegQueue};
 
-use super::{CheckpointSnapshot, VersionVisibility};
+use super::CheckpointSnapshot;
 
 use crate::{
   background::{
@@ -20,6 +20,7 @@ use crate::{
   disk::{IOPool, PAGE_SIZE},
   error, info,
   metrics::MetricsRegistry,
+  mvcc::VersionController,
   trace,
   utils::{uuid_simple, ToArc, ToBox},
   wal::{
@@ -140,7 +141,7 @@ impl Checkpoint {
   pub fn new(
     wal: Arc<WriteAheadLog>,
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     io_pool: Arc<IOPool>,
     blob_storage: Arc<BlobStorage>,
     event_bus: Arc<EventBus>,
@@ -148,7 +149,7 @@ impl Checkpoint {
     flush_factor: f64,
   ) -> Arc<Self> {
     let worker =
-      CheckpointWorker::new(wal, block_cache, version_visibility, io_pool, blob_storage)
+      CheckpointWorker::new(wal, block_cache, version_controller, io_pool, blob_storage)
         .to_arc();
     Self::with_worker(worker, event_bus, metrics, flush_factor)
   }
@@ -156,7 +157,7 @@ impl Checkpoint {
   pub fn initial_checkpoint(
     wal: Arc<WriteAheadLog>,
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     io_pool: Arc<IOPool>,
     blob_storage: Arc<BlobStorage>,
     event_bus: Arc<EventBus>,
@@ -164,7 +165,7 @@ impl Checkpoint {
     flush_factor: f64,
   ) -> Result<Arc<Self>> {
     let worker =
-      CheckpointWorker::new(wal, block_cache, version_visibility, io_pool, blob_storage)
+      CheckpointWorker::new(wal, block_cache, version_controller, io_pool, blob_storage)
         .to_arc();
     worker.run_hard()?;
     Ok(Self::with_worker(worker, event_bus, metrics, flush_factor))
@@ -240,7 +241,7 @@ const FILE_EXT: &str = "snap";
 struct CheckpointWorker {
   wal: Arc<WriteAheadLog>,
   block_cache: Arc<BlockCache>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   io_pool: Arc<IOPool>,
   blob_storage: Arc<BlobStorage>,
 }
@@ -248,21 +249,21 @@ impl CheckpointWorker {
   const fn new(
     wal: Arc<WriteAheadLog>,
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     io_pool: Arc<IOPool>,
     blob_storage: Arc<BlobStorage>,
   ) -> Self {
     Self {
       wal,
       block_cache,
-      version_visibility,
+      version_controller,
       io_pool,
       blob_storage,
     }
   }
 
   fn finalize_checkpoint(&self, log_id: LogId) -> Result {
-    let (current_version, active, aborted) = self.version_visibility.snapshot();
+    let (current_version, active, aborted) = self.version_controller.snapshot();
     let blobs = self.blob_storage.metadata_snapshot();
     let snapshot = CheckpointSnapshot::new(active, aborted, blobs);
 

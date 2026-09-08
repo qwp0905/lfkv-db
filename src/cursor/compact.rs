@@ -16,10 +16,11 @@ use crate::{
   cache::{BlockCache, RefedSlot},
   disk::Pointer,
   error, info,
+  mvcc::{TxSnapshot, TxState, VersionController},
   objects::Serializable,
   table::{TableHandleRef, TableMapper, TableMetadata, TableName},
   trace,
-  transaction::{PageRecorder, TxSnapshot, TxState, VersionVisibility},
+  transaction::PageRecorder,
   utils::{ToArc, ToBox},
   wal::{TxId, WALFailed, WriteAheadLog, RESERVED_TX},
   warn, Error, Result,
@@ -38,7 +39,7 @@ struct MiniTx<'a> {
   state: TxState<'a>,
   snapshot: TxSnapshot<'a>,
   block_cache: &'a BlockCache,
-  version_visibility: &'a VersionVisibility,
+  version_controller: &'a VersionController,
   recorder: &'a PageRecorder,
   wal: &'a WriteAheadLog,
   blob: &'a BlobStorage,
@@ -47,13 +48,13 @@ struct MiniTx<'a> {
 }
 impl<'a> MiniTx<'a> {
   fn start(
-    version_visibility: &'a VersionVisibility,
+    version_controller: &'a VersionController,
     wal: &'a WriteAheadLog,
     block_cache: &'a BlockCache,
     recorder: &'a PageRecorder,
     blob: &'a BlobStorage,
   ) -> Result<Self> {
-    let Some((snapshot, state)) = version_visibility.new_transaction() else {
+    let Some((snapshot, state)) = version_controller.new_transaction() else {
       return Err(Error::EngineUnavailable);
     };
     Ok(Self {
@@ -61,7 +62,7 @@ impl<'a> MiniTx<'a> {
       snapshot,
       block_cache,
       recorder,
-      version_visibility,
+      version_controller,
       wal,
       blob,
       committed: Cell::new(false),
@@ -75,7 +76,7 @@ impl<'a> MiniTx<'a> {
     }
 
     if self.modified.get() {
-      self.version_visibility.set_abort(self.state.get_id());
+      self.version_controller.set_abort(self.state.get_id());
     }
     self.committed.set(true);
     self.state.deactive();
@@ -189,11 +190,11 @@ impl<'a> CreatablePolicy for MiniTx<'a> {
  */
 struct CompactionReadPolicy {
   block_cache: Arc<BlockCache>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
 }
 impl ReadonlyPolicy for Arc<CompactionReadPolicy> {
   fn is_aborted(&self, owner: TxId) -> bool {
-    self.version_visibility.is_aborted(&owner)
+    self.version_controller.is_aborted(&owner)
   }
   fn is_owned(&self, _: TxId) -> bool {
     false
@@ -229,7 +230,7 @@ impl ReadonlyPolicy for Arc<CompactionReadPolicy> {
  */
 struct CompactionWritePolicy {
   block_cache: Arc<BlockCache>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   recorder: Arc<PageRecorder>,
 }
 impl ReadonlyPolicy for CompactionWritePolicy {
@@ -241,7 +242,7 @@ impl ReadonlyPolicy for CompactionWritePolicy {
     self.block_cache.read(pointer, table)
   }
   fn is_aborted(&self, owner: TxId) -> bool {
-    self.version_visibility.is_aborted(&owner)
+    self.version_controller.is_aborted(&owner)
   }
   fn is_owned(&self, _: TxId) -> bool {
     false
@@ -360,7 +361,7 @@ pub struct CompactionConfig {
 
 struct CompactionWorker {
   block_cache: Arc<BlockCache>,
-  version_visibility: Arc<VersionVisibility>,
+  version_controller: Arc<VersionController>,
   wal: Arc<WriteAheadLog>,
   recorder: Arc<PageRecorder>,
   blob: Arc<BlobStorage>,
@@ -373,7 +374,7 @@ struct CompactionWorker {
 impl CompactionWorker {
   fn new(
     block_cache: Arc<BlockCache>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     wal: Arc<WriteAheadLog>,
     recorder: Arc<PageRecorder>,
     blob: Arc<BlobStorage>,
@@ -384,18 +385,18 @@ impl CompactionWorker {
     let old_index = BTreeIndex::new(
       CompactionReadPolicy {
         block_cache: block_cache.clone(),
-        version_visibility: version_visibility.clone(),
+        version_controller: version_controller.clone(),
       }
       .to_arc(),
     );
     let new_index = BTreeIndex::new(CompactionWritePolicy {
       block_cache: block_cache.clone(),
-      version_visibility: version_visibility.clone(),
+      version_controller: version_controller.clone(),
       recorder: recorder.clone(),
     });
     Self {
       block_cache,
-      version_visibility,
+      version_controller,
       wal,
       recorder,
       blob,
@@ -409,7 +410,7 @@ impl CompactionWorker {
 
   fn create_tx(&self) -> Result<MiniTx<'_>> {
     MiniTx::start(
-      &self.version_visibility,
+      &self.version_controller,
       &self.wal,
       &self.block_cache,
       &self.recorder,
@@ -621,7 +622,7 @@ impl CompactionWorker {
       }
     }
 
-    let min_version = self.version_visibility.min_version();
+    let min_version = self.version_controller.min_version();
     for (old, new, metadata, _) in
       waiting_publish.extract_if(|(_, _, _, v)| min_version >= *v)
     {
@@ -658,7 +659,7 @@ impl Compactor {
     block_cache: Arc<BlockCache>,
     tables: Arc<TableMapper>,
     recorder: Arc<PageRecorder>,
-    version_visibility: Arc<VersionVisibility>,
+    version_controller: Arc<VersionController>,
     wal: Arc<WriteAheadLog>,
     event_bus: Arc<EventBus>,
     blob: Arc<BlobStorage>,
@@ -670,7 +671,7 @@ impl Compactor {
     let cycle = AtomicCell::new(None).to_arc();
     let worker = CompactionWorker::new(
       block_cache,
-      version_visibility,
+      version_controller,
       wal,
       recorder,
       blob,

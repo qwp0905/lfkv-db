@@ -12,22 +12,23 @@ use crate::{
   debug,
   disk::{AlignedBuf, Pointer},
   info,
+  mvcc::VersionController,
   objects::{BTreeNodeView, DataEntryView, TreeHeader, HEADER_POINTER},
   table::{TableHandleRef, TableId, TableMapper, TableMetadata},
-  transaction::{PageRecorder, VersionVisibility},
+  transaction::PageRecorder,
   wal::{TxId, RESERVED_TX},
   Result,
 };
 
 struct TableOpenPolicy<'a, R> {
   block_cache: &'a BlockCache,
-  version_visibility: &'a VersionVisibility,
+  version_controller: &'a VersionController,
   blob: &'a BlobStorage,
   recorder: R,
 }
 impl<'a, R> ReadonlyPolicy for TableOpenPolicy<'a, R> {
   fn is_aborted(&self, owner: TxId) -> bool {
-    self.version_visibility.is_aborted(&owner)
+    self.version_controller.is_aborted(&owner)
   }
   fn is_owned(&self, _: TxId) -> bool {
     false
@@ -89,12 +90,12 @@ pub fn initialize(
   block_cache: &BlockCache,
   tables: &TableMapper,
   recorder: &PageRecorder,
-  version_visibility: &VersionVisibility,
+  version_controller: &VersionController,
   blob: &BlobStorage,
 ) -> Result {
   let policy = TableOpenPolicy {
     block_cache,
-    version_visibility,
+    version_controller,
     recorder,
     blob,
   };
@@ -112,7 +113,7 @@ pub struct OpenTablesResult {
 pub fn open_tables(
   block_cache: &BlockCache,
   tables: &TableMapper,
-  version_visibility: &VersionVisibility,
+  version_controller: &VersionController,
   blob: &BlobStorage,
 ) -> Result<OpenTablesResult> {
   let mut handles = vec![];
@@ -121,7 +122,7 @@ pub fn open_tables(
 
   let index = BTreeIndex::new(TableOpenPolicy {
     block_cache,
-    version_visibility,
+    version_controller,
     blob,
     recorder: (),
   });
