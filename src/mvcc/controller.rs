@@ -109,13 +109,13 @@ impl WaitGraph {
  * if it is neither aborted nor still active. Committed transactions are not
  * tracked explicitly — committing simply removes the tx from active.
  */
-pub struct VersionVisibility {
+pub struct VersionController {
   aborted: SkipSet<TxId>,
   active: ActiveSet,
   wait_graph: WaitGraph,
   closed: AtomicBool,
 }
-impl VersionVisibility {
+impl VersionController {
   /**
    * Rebuild visibility after replay.
    *
@@ -236,7 +236,7 @@ impl VersionVisibility {
     )
   }
 }
-impl SharedSubscription<WALFailed> for VersionVisibility {
+impl SharedSubscription<WALFailed> for VersionController {
   /**
    * End all currently active transactions as aborted after WAL failure.
    *
@@ -254,6 +254,6 @@ impl SharedSubscription<WALFailed> for VersionVisibility {
     error!("all versions transit to abort since wal failure detected.");
   }
 }
-binding_events!(VersionVisibility {
+binding_events!(VersionController {
   shared: [WALFailed]
 });
