@@ -530,10 +530,11 @@ impl CompactionWorker {
       None => self.old_index.snapshot(old.handle())?,
     };
 
+    let mut snapshots = Vec::new();
     while let Some(snap) = snapshotter.next_snapshot()? {
-      self.new_index.apply_snapshot(snap, new.handle())?;
+      snapshots.push(snap);
     }
-
+    self.new_index.apply_snapshot(snapshots, new.handle())?;
     self.remove_compaction(&cycle.metadata)?;
     Ok(())
   }
@@ -573,15 +574,17 @@ impl CompactionWorker {
       return Ok(true);
     }
 
+    let mut snapshots = Vec::new();
     for _ in 0..batch_size {
       let Some(snap) = snapshotter.next_snapshot()? else {
         break;
       };
-
-      // to protect stale pointer from gc.
-      let _guard = pin();
-      self.new_index.apply_snapshot(snap, new.handle())?;
+      snapshots.push(snap);
     }
+
+    // to protect stale pointer from gc.
+    let _guard = pin();
+    self.new_index.apply_snapshot(snapshots, new.handle())?;
 
     Ok(false)
   }
