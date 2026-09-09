@@ -9,7 +9,7 @@
 use std::ops::{Bound, RangeBounds};
 
 use super::{
-  BTreeIndex, BTreeIter, BTreeRevIter, GetResult, LookupResult, MergeSortable,
+  BTreeIndex, BTreeIter, BTreeRevIter, BulkOp, GetResult, LookupResult, MergeSortable,
   MergeSorted, SortDirection, VecRef, WriteOp, WriteResult,
 };
 use crate::{
@@ -206,6 +206,70 @@ impl<'a> Cursor<'a> {
       range.end_bound().map(|k| k.as_ref().to_vec()),
     )
   }
+
+  pub fn create_bulk(&self) -> Bulk<'_> {
+    let (table, in_compaction) = match &self.compaction {
+      Some(table) => (table, true),
+      None => (&self.table, false),
+    };
+    Bulk::new(&self.index, table, self.metrics, in_compaction)
+  }
+}
+
+pub struct Bulk<'a> {
+  index: &'a BTreeIndex<&'a TxContext<'a>>,
+  table: &'a TableHandleRef,
+  metrics: &'a MetricsRegistry,
+  inner: BulkOp,
+  in_compaction: bool,
+}
+impl<'a> Bulk<'a> {
+  const fn new(
+    index: &'a BTreeIndex<&'a TxContext<'a>>,
+    table: &'a TableHandleRef,
+    metrics: &'a MetricsRegistry,
+    in_compaction: bool,
+  ) -> Self {
+    Self {
+      index,
+      table,
+      metrics,
+      inner: BulkOp::new(),
+      in_compaction,
+    }
+  }
+
+  pub fn insert(&mut self, key: StaticKey, value: Vec<u8>) -> &mut Self {
+    self.inner.append(key, WriteOp::Insert(value), true);
+    self
+  }
+
+  pub fn remove(&mut self, key: StaticKey) -> &mut Self {
+    self.inner.append(key, WriteOp::Remove, self.in_compaction);
+    self
+  }
+
+  pub fn execute(self) -> Result<Vec<BulkResult>> {
+    let mut results = Vec::with_capacity(self.inner.len());
+    let mut executor = self.index.bulk(self.inner, self.table);
+    while let Some((result, is_insert)) = executor.execute_one()? {
+      if result.splitted {
+        self.metrics.btree_split.inc();
+      }
+      let result = if is_insert {
+        BulkResult::Insert(InsertResult {
+          updated: result.updated,
+          inserted: result.inserted,
+        })
+      } else {
+        BulkResult::Remove(RemoveResult {
+          removed: result.updated || result.inserted,
+        })
+      };
+      results.push(result);
+    }
+    Ok(results)
+  }
 }
 
 pub struct CursorIter<'a, Iter> {
@@ -280,4 +344,9 @@ pub struct InsertResult {
 
 pub struct RemoveResult {
   pub removed: bool,
+}
+
+pub enum BulkResult {
+  Insert(InsertResult),
+  Remove(RemoveResult),
 }
