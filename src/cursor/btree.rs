@@ -1,7 +1,8 @@
-use std::{mem::replace, ops::Bound};
+use std::{collections::BinaryHeap, mem::replace, ops::Bound};
 
 use crate::{
   blob::BlobAppendGuard,
+  cache::RefedSlot,
   disk::Pointer,
   objects::{
     BTreeNode, BTreeNodeView, DataEntry, DataEntryView, FindSlotResult, InternalNode,
@@ -33,15 +34,18 @@ impl<Policy> BTreeIndex<Policy> {
   }
 }
 impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
-  pub fn get(&self, key: StaticKeyRef, table: &TableHandleRef) -> Result<GetResult> {
-    let mut ptr = self
+  fn get_root(&self, table: &TableHandleRef) -> Result<Pointer> {
+    let ptr = self
       .0
       .fetch_slot(HEADER_POINTER, table)?
       .for_read()
       .as_ref()
       .deserialize::<TreeHeader>()?
       .get_root();
-
+    Ok(ptr)
+  }
+  pub fn get(&self, key: StaticKeyRef, table: &TableHandleRef) -> Result<GetResult> {
+    let mut ptr = self.get_root(table)?;
     loop {
       let slot = self.0.fetch_slot(ptr, table)?.for_read();
       match slot.as_ref().view::<BTreeNodeView>()? {
@@ -98,14 +102,7 @@ impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
     key: StaticKeyRef,
     table: &TableHandleRef,
   ) -> Result<LookupResult> {
-    let mut ptr = self
-      .0
-      .fetch_slot(HEADER_POINTER, table)?
-      .for_read()
-      .as_ref()
-      .deserialize::<TreeHeader>()?
-      .get_root();
-
+    let mut ptr = self.get_root(table)?;
     loop {
       let slot = self.0.fetch_slot(ptr, table)?.for_read();
       match slot.as_ref().view::<BTreeNodeView>()? {
@@ -152,28 +149,14 @@ impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
     Ok(matches!(self.lookup(key, table)?, LookupResult::Present))
   }
 
-  /**
-   * The stack stores one internal-node anchor per level, not a perfectly stable
-   * parent path. Split propagation rechecks each level and follows B-link right
-   * moves again, so the stack only needs enough information to restart propagation
-   * from the relevant levels.
-   */
-  fn find_leaf_stack(
+  fn fill_stack(
     &self,
     key: StaticKeyRef,
     table: &TableHandleRef,
-  ) -> Result<(Pointer, Vec<Pointer>)> {
-    let (mut ptr, height) = {
-      let header = self
-        .0
-        .fetch_slot(HEADER_POINTER, table)?
-        .for_read()
-        .as_ref()
-        .deserialize::<TreeHeader>()?;
-      (header.get_root(), header.get_height())
-    };
-    let mut stack = vec![];
-
+    start: Pointer,
+    stack: &mut Vec<Pointer>,
+  ) -> Result<Pointer> {
+    let mut ptr = start;
     while let BTreeNodeView::Internal(node) = self
       .0
       .fetch_slot(ptr, table)?
@@ -186,7 +169,31 @@ impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
         Err(i) => ptr = i,
       }
     }
+    Ok(ptr)
+  }
 
+  /**
+   * The stack stores one internal-node anchor per level, not a perfectly stable
+   * parent path. Split propagation rechecks each level and follows B-link right
+   * moves again, so the stack only needs enough information to restart propagation
+   * from the relevant levels.
+   */
+  fn find_leaf_stack(
+    &self,
+    key: StaticKeyRef,
+    table: &TableHandleRef,
+  ) -> Result<(Pointer, Vec<Pointer>)> {
+    let (root, height) = {
+      let header = self
+        .0
+        .fetch_slot(HEADER_POINTER, table)?
+        .for_read()
+        .as_ref()
+        .deserialize::<TreeHeader>()?;
+      (header.get_root(), header.get_height())
+    };
+    let mut stack = vec![];
+    let ptr = self.fill_stack(key, table, root, &mut stack)?;
     debug_assert_eq!(height, stack.len() as u16);
     Ok((ptr, stack))
   }
@@ -441,15 +448,13 @@ impl<Policy: WritablePolicy + Sync> BTreeIndex<Policy> {
     }
   }
 
-  /**
-   * Apply a snapshot record produced by the compaction/snapshot path.
-   *
-   * This is not the normal transaction write path. The caller guarantees that the
-   * snapshot record belongs at the end of the key's version chain, so existing
-   * records are extended with `attach_back` semantics instead of conflict-checked
-   * transaction update semantics.
-   */
-  pub fn apply_snapshot(&self, snapshot: KVSnapshot, table: &TableHandleRef) -> Result {
+  fn apply_snapshot_at_leaf(
+    &self,
+    snapshot: KVSnapshot,
+    table: &TableHandleRef,
+    mut ptr: Pointer,
+    stack: Vec<TxId>,
+  ) -> Result {
     enum State {
       Move(Pointer, VersionRecord),
       Break,
@@ -467,7 +472,6 @@ impl<Policy: WritablePolicy + Sync> BTreeIndex<Policy> {
       },
     );
 
-    let (mut ptr, stack) = self.find_leaf_stack(&key, table)?;
     loop {
       let state = self.0.fetch_slot(ptr, table)?.for_write().mutate(|slot| {
         let leaf = slot.as_ref().view::<BTreeNodeView>()?.into_leaf()?;
@@ -526,6 +530,31 @@ impl<Policy: WritablePolicy + Sync> BTreeIndex<Policy> {
       }
     }
   }
+
+  /**
+   * Apply a snapshot records produced by the compaction/snapshot path.
+   *
+   * This is not the normal transaction write path. The caller guarantees that the
+   * snapshot record belongs at the end of the key's version chain, so existing
+   * records are extended with `attach_back` semantics instead of conflict-checked
+   * transaction update semantics.
+   */
+  pub fn apply_snapshot(
+    &self,
+    snapshot: Vec<KVSnapshot>,
+    table: &TableHandleRef,
+  ) -> Result {
+    let mut stack = Vec::new();
+    for snapshot in snapshot {
+      let start = match stack.pop() {
+        Some(p) => p,
+        None => self.get_root(table)?,
+      };
+      let ptr = self.fill_stack(&snapshot.key, table, start, &mut stack)?;
+      self.apply_snapshot_at_leaf(snapshot, table, ptr, stack.clone())?;
+    }
+    Ok(())
+  }
 }
 impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
   /**
@@ -570,80 +599,26 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     mut op: WriteOp,
     table: &TableHandleRef,
     create: bool,
+    mut ptr: Pointer,
+    stack: Vec<Pointer>,
   ) -> Result<WriteResult> {
-    enum State<'a> {
-      Move(Pointer, WriteOp),
-      Break(WriteResult),
-      Conflict(TxId, WriteOp),
-      Split(StaticKey, Pointer, WriteResult),
-      CopyOld(CopyOld<'a>),
-    }
-
-    let (mut ptr, stack) = self.find_leaf_stack(key, table)?;
     loop {
-      let state = self.0.fetch_slot(ptr, table)?.for_write().mutate(|slot| {
-        let leaf = slot.as_ref().view::<BTreeNodeView>()?.into_leaf()?;
-        let (mut node, pos, found) = match leaf.find(key)? {
-          NodeFindResult::Move(i) => return Ok(State::Move(i, op)),
-          NodeFindResult::Found(pos, old, entry_ptr) => {
-            let writable = self.0.is_owned(old.owner) || self.0.is_aborted(old.owner);
-            let visible = self.0.is_readable(old.version) && !self.0.is_active(old.owner);
-            match (writable, visible) {
-              (true, _) => (leaf.into_owned()?, pos, true),
-              (false, false) => return Ok(State::Conflict(old.owner, op)),
-              (false, true) => {
-                return Ok(match table.reserve(key.to_vec(), self.0.current_owner()) {
-                  Ok(g) => {
-                    let old = old.into_owned_with(slot.as_ref());
-                    State::CopyOld(CopyOld::new(g, entry_ptr, old, op))
-                  }
-                  Err(i) => State::Conflict(i, op),
-                })
-              }
-            }
-          }
-          NodeFindResult::NotFound(pos) => {
-            if !create {
-              return Ok(State::Break(WriteResult::not_matched()));
-            }
-            (leaf.into_owned()?, pos, false)
-          }
-        };
-
-        let (record, _guard) = self.create_record(op)?;
-        let new_record =
-          VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
-        let mut result = if found {
-          node.replace_at(pos, new_record);
-          WriteResult::updated(false)
-        } else {
-          node.insert_at(pos, key.to_vec(), new_record);
-          WriteResult::inserted(false)
-        };
-
-        let Some(split) = node.split_if_needed() else {
-          self.0.serialize_and_log(slot, &node.into_node(), table)?;
-          return Ok(State::Break(result));
-        };
-        result.splitted = true;
-
-        let mid_key = split.top().clone();
-        let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
-
-        node.set_next(mid_key.clone(), split_ptr);
-        self.0.serialize_and_log(slot, &node.into_node(), table)?;
-        Ok(State::Split(mid_key, split_ptr, result))
-      })?;
-
+      let state = self
+        .0
+        .fetch_slot(ptr, table)?
+        .for_write()
+        .mutate(|slot| self.insert_at_leaf(slot, key, op, table, create))?;
       match state {
-        State::Move(p, o) => (ptr, op) = (p, o),
-        State::Break(result) => return Ok(result),
-        State::Split(k, p, result) => {
+        InsertState::Move(p, o) => (ptr, op) = (p, o),
+        InsertState::Break(result) => return Ok(result),
+        InsertState::Split(k, p, result) => {
           self.propagate_split(k, p, stack, table)?;
           return Ok(result);
         }
-        State::CopyOld(cmd) => return self.copy_and_update(key, ptr, table, stack, cmd),
-        State::Conflict(i, o) => {
+        InsertState::CopyOld(cmd) => {
+          return self.copy_and_update(key, ptr, table, stack, cmd)
+        }
+        InsertState::Conflict(i, o) => {
           match self.0.resolve_conflict(i) {
             ResolvedConflict::DeadLock => return Err(Error::WriteConflict),
             ResolvedConflict::Closed => {
@@ -656,6 +631,76 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
           };
         }
       };
+    }
+  }
+
+  fn insert_at_leaf<'a>(
+    &'a self,
+    slot: &mut RefedSlot,
+    key: StaticKeyRef,
+    op: WriteOp,
+    table: &'a TableHandleRef,
+    create: bool,
+  ) -> Result<InsertState<'a>> {
+    let leaf = slot.as_ref().view::<BTreeNodeView>()?.into_leaf()?;
+    let (mut node, pos, found) = match leaf.find(key)? {
+      NodeFindResult::Move(i) => return Ok(InsertState::Move(i, op)),
+      NodeFindResult::Found(pos, old, entry_ptr) => {
+        let writable = self.0.is_owned(old.owner) || self.0.is_aborted(old.owner);
+        let visible = self.0.is_readable(old.version) && !self.0.is_active(old.owner);
+        match (writable, visible) {
+          (true, _) => (leaf.into_owned()?, pos, true),
+          (false, false) => return Ok(InsertState::Conflict(old.owner, op)),
+          (false, true) => {
+            return Ok(match table.reserve(key.to_vec(), self.0.current_owner()) {
+              Ok(g) => {
+                let old = old.into_owned_with(slot.as_ref());
+                InsertState::CopyOld(CopyOld::new(g, entry_ptr, old, op))
+              }
+              Err(i) => InsertState::Conflict(i, op),
+            })
+          }
+        }
+      }
+      NodeFindResult::NotFound(pos) => {
+        if !create {
+          return Ok(InsertState::Break(WriteResult::not_matched()));
+        }
+        (leaf.into_owned()?, pos, false)
+      }
+    };
+
+    let (record, _guard) = self.create_record(op)?;
+    let new_record =
+      VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
+    let mut result = if found {
+      node.replace_at(pos, new_record);
+      WriteResult::updated(false)
+    } else {
+      node.insert_at(pos, key.to_vec(), new_record);
+      WriteResult::inserted(false)
+    };
+
+    let Some(split) = node.split_if_needed() else {
+      self.0.serialize_and_log(slot, &node.into_node(), table)?;
+      return Ok(InsertState::Break(result));
+    };
+    result.splitted = true;
+
+    let mid_key = split.top().clone();
+    let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
+
+    node.set_next(mid_key.clone(), split_ptr);
+    self.0.serialize_and_log(slot, &node.into_node(), table)?;
+    Ok(InsertState::Split(mid_key, split_ptr, result))
+  }
+
+  pub fn bulk(&self, bulk: BulkOp, table: &TableHandleRef) -> BulkExecutor<'_, Policy> {
+    BulkExecutor {
+      index: self,
+      records: bulk,
+      stack: Vec::new(),
+      table: table.clone(),
     }
   }
 
@@ -742,7 +787,8 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     op: WriteOp,
     table: &TableHandleRef,
   ) -> Result<WriteResult> {
-    self.__insert(&key, op, table, true)
+    let (ptr, stack) = self.find_leaf_stack(&key, table)?;
+    self.__insert(&key, op, table, true, ptr, stack)
   }
   pub fn insert(
     &self,
@@ -766,7 +812,8 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     op: WriteOp,
     table: &TableHandleRef,
   ) -> Result<WriteResult> {
-    self.__insert(key, op, table, false)
+    let (ptr, stack) = self.find_leaf_stack(key, table)?;
+    self.__insert(key, op, table, false, ptr, stack)
   }
 }
 
@@ -834,5 +881,81 @@ impl<'a> CopyOld<'a> {
       old_record,
       operation,
     }
+  }
+}
+
+enum InsertState<'a> {
+  Move(Pointer, WriteOp),
+  Break(WriteResult),
+  Conflict(TxId, WriteOp),
+  Split(StaticKey, Pointer, WriteResult),
+  CopyOld(CopyOld<'a>),
+}
+
+struct KeyPair(StaticKey, WriteOp, bool);
+impl PartialEq for KeyPair {
+  fn eq(&self, other: &Self) -> bool {
+    self.0.eq(&other.0)
+  }
+}
+impl Eq for KeyPair {}
+impl PartialOrd for KeyPair {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+impl Ord for KeyPair {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.0.cmp(&other.0)
+  }
+}
+pub struct BulkOp(BinaryHeap<KeyPair>);
+impl BulkOp {
+  pub const fn new() -> Self {
+    Self(BinaryHeap::new())
+  }
+
+  pub fn append(&mut self, key: StaticKey, value: WriteOp, create: bool) {
+    self.0.push(KeyPair(key, value, create));
+  }
+
+  pub fn len(&self) -> usize {
+    self.0.len()
+  }
+  fn pop(&mut self) -> Option<KeyPair> {
+    self.0.pop()
+  }
+}
+
+pub struct BulkExecutor<'a, Policy> {
+  index: &'a BTreeIndex<Policy>,
+  records: BulkOp,
+  stack: Vec<Pointer>,
+  table: TableHandleRef,
+}
+impl<'a, Policy: ReadonlyPolicy> BulkExecutor<'a, Policy> {
+  fn get_start(&mut self) -> Result<TxId> {
+    if let Some(ptr) = self.stack.pop() {
+      return Ok(ptr);
+    }
+    self.index.get_root(&self.table)
+  }
+}
+impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
+  pub fn execute_one(&mut self) -> Result<Option<(WriteResult, bool)>> {
+    let Some(KeyPair(key, op, create)) = self.records.pop() else {
+      return Ok(None);
+    };
+
+    let is_insert = matches!(op, WriteOp::Insert(_));
+    let start = self.get_start()?;
+    let ptr = self
+      .index
+      .fill_stack(&key, &self.table, start, &mut self.stack)?;
+    let result =
+      self
+        .index
+        .__insert(&key, op, &self.table, create, ptr, self.stack.clone())?;
+    Ok(Some((result, is_insert)))
   }
 }
