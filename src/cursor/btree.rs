@@ -2,7 +2,6 @@ use std::{collections::BinaryHeap, mem::replace, ops::Bound};
 
 use crate::{
   blob::BlobAppendGuard,
-  cache::RefedSlot,
   disk::Pointer,
   objects::{
     BTreeNode, BTreeNodeView, DataEntry, DataEntryView, FindSlotResult, InternalNode,
@@ -602,23 +601,78 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     mut ptr: Pointer,
     stack: Vec<Pointer>,
   ) -> Result<WriteResult> {
+    enum State<'a> {
+      Move(Pointer, WriteOp),
+      Break(WriteResult),
+      Conflict(TxId, WriteOp),
+      Split(StaticKey, Pointer, WriteResult),
+      CopyOld(CopyOld<'a>),
+    }
+
     loop {
-      let state = self
-        .0
-        .fetch_slot(ptr, table)?
-        .for_write()
-        .mutate(|slot| self.insert_at_leaf(slot, key, op, table, create))?;
+      let state = self.0.fetch_slot(ptr, table)?.for_write().mutate(|slot| {
+        let leaf = slot.as_ref().view::<BTreeNodeView>()?.into_leaf()?;
+        let (mut node, pos, found) = match leaf.find(key)? {
+          NodeFindResult::Move(i) => return Ok(State::Move(i, op)),
+          NodeFindResult::Found(pos, old, entry_ptr) => {
+            let writable = self.0.is_owned(old.owner) || self.0.is_aborted(old.owner);
+            let visible = self.0.is_readable(old.version) && !self.0.is_active(old.owner);
+            match (writable, visible) {
+              (true, _) => (leaf.into_owned()?, pos, true),
+              (false, false) => return Ok(State::Conflict(old.owner, op)),
+              (false, true) => {
+                return Ok(match table.reserve(key.to_vec(), self.0.current_owner()) {
+                  Ok(g) => {
+                    let old = old.into_owned_with(slot.as_ref());
+                    State::CopyOld(CopyOld::new(g, entry_ptr, old, op))
+                  }
+                  Err(i) => State::Conflict(i, op),
+                })
+              }
+            }
+          }
+          NodeFindResult::NotFound(pos) => {
+            if !create {
+              return Ok(State::Break(WriteResult::not_matched()));
+            }
+            (leaf.into_owned()?, pos, false)
+          }
+        };
+
+        let (record, _guard) = self.create_record(op)?;
+        let new_record =
+          VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
+        let mut result = if found {
+          node.replace_at(pos, new_record);
+          WriteResult::updated(false)
+        } else {
+          node.insert_at(pos, key.to_vec(), new_record);
+          WriteResult::inserted(false)
+        };
+
+        let Some(split) = node.split_if_needed() else {
+          self.0.serialize_and_log(slot, &node.into_node(), table)?;
+          return Ok(State::Break(result));
+        };
+        result.splitted = true;
+
+        let mid_key = split.top().clone();
+        let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
+
+        node.set_next(mid_key.clone(), split_ptr);
+        self.0.serialize_and_log(slot, &node.into_node(), table)?;
+        Ok(State::Split(mid_key, split_ptr, result))
+      })?;
+
       match state {
-        InsertState::Move(p, o) => (ptr, op) = (p, o),
-        InsertState::Break(result) => return Ok(result),
-        InsertState::Split(k, p, result) => {
+        State::Move(p, o) => (ptr, op) = (p, o),
+        State::Break(result) => return Ok(result),
+        State::Split(k, p, result) => {
           self.propagate_split(k, p, stack, table)?;
           return Ok(result);
         }
-        InsertState::CopyOld(cmd) => {
-          return self.copy_and_update(key, ptr, table, stack, cmd)
-        }
-        InsertState::Conflict(i, o) => {
+        State::CopyOld(cmd) => return self.copy_and_update(key, ptr, table, stack, cmd),
+        State::Conflict(i, o) => {
           match self.0.resolve_conflict(i) {
             ResolvedConflict::DeadLock => return Err(Error::WriteConflict),
             ResolvedConflict::Closed => {
@@ -632,67 +686,6 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
         }
       };
     }
-  }
-
-  fn insert_at_leaf<'a>(
-    &'a self,
-    slot: &mut RefedSlot,
-    key: StaticKeyRef,
-    op: WriteOp,
-    table: &'a TableHandleRef,
-    create: bool,
-  ) -> Result<InsertState<'a>> {
-    let leaf = slot.as_ref().view::<BTreeNodeView>()?.into_leaf()?;
-    let (mut node, pos, found) = match leaf.find(key)? {
-      NodeFindResult::Move(i) => return Ok(InsertState::Move(i, op)),
-      NodeFindResult::Found(pos, old, entry_ptr) => {
-        let writable = self.0.is_owned(old.owner) || self.0.is_aborted(old.owner);
-        let visible = self.0.is_readable(old.version) && !self.0.is_active(old.owner);
-        match (writable, visible) {
-          (true, _) => (leaf.into_owned()?, pos, true),
-          (false, false) => return Ok(InsertState::Conflict(old.owner, op)),
-          (false, true) => {
-            return Ok(match table.reserve(key.to_vec(), self.0.current_owner()) {
-              Ok(g) => {
-                let old = old.into_owned_with(slot.as_ref());
-                InsertState::CopyOld(CopyOld::new(g, entry_ptr, old, op))
-              }
-              Err(i) => InsertState::Conflict(i, op),
-            })
-          }
-        }
-      }
-      NodeFindResult::NotFound(pos) => {
-        if !create {
-          return Ok(InsertState::Break(WriteResult::not_matched()));
-        }
-        (leaf.into_owned()?, pos, false)
-      }
-    };
-
-    let (record, _guard) = self.create_record(op)?;
-    let new_record =
-      VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
-    let mut result = if found {
-      node.replace_at(pos, new_record);
-      WriteResult::updated(false)
-    } else {
-      node.insert_at(pos, key.to_vec(), new_record);
-      WriteResult::inserted(false)
-    };
-
-    let Some(split) = node.split_if_needed() else {
-      self.0.serialize_and_log(slot, &node.into_node(), table)?;
-      return Ok(InsertState::Break(result));
-    };
-    result.splitted = true;
-
-    let mid_key = split.top().clone();
-    let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
-
-    node.set_next(mid_key.clone(), split_ptr);
-    self.0.serialize_and_log(slot, &node.into_node(), table)?;
-    Ok(InsertState::Split(mid_key, split_ptr, result))
   }
 
   pub fn bulk(&self, bulk: BulkOp, table: &TableHandleRef) -> BulkExecutor<'_, Policy> {
@@ -882,14 +875,6 @@ impl<'a> CopyOld<'a> {
       operation,
     }
   }
-}
-
-enum InsertState<'a> {
-  Move(Pointer, WriteOp),
-  Break(WriteResult),
-  Conflict(TxId, WriteOp),
-  Split(StaticKey, Pointer, WriteResult),
-  CopyOld(CopyOld<'a>),
 }
 
 struct KeyPair(StaticKey, WriteOp, bool);
