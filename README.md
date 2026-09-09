@@ -67,6 +67,38 @@ while let Some((key, value)) = iter.try_next()? {
 }
 ```
 
+### Bulk Insert/Remove
+
+```rust
+let tx = engine.new_tx()?;
+let table = tx.table("some_table")?;
+
+let mut bulk = table.create_bulk();
+// Bulk insert
+for (key, value) in some_insert {
+    bulk.insert(key, value);
+}
+// Bulk remove
+for key in some_remove {
+    bulk.remove(key);
+}
+
+// Result of each operations.
+for result in bulk.execute()? {
+    match BulkResult {
+        Insert(result) => { .. },
+        Remove(result) => { .. },
+    };
+}
+
+tx.commit()?;
+```
+
+> `Notice`  
+> Bulk execution does not guarantee "all-or-nothing" behavior. If a failure occurs—such as due to a write conflict—some records may still be visible within the transaction. It merely improves the efficiency of B-tree index lookups by reducing the overhead of repeated calls.  
+> Therefore, to achieve "all-or-nothing" semantics, you should abort the transaction and restart it.
+
+
 ### Compact Table
 
 ```rust
