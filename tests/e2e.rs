@@ -1907,3 +1907,82 @@ fn test_repeated_reopen() {
     );
   }
 }
+
+/**
+ * 34. Test bulk api.
+ */
+#[test]
+fn test_bulk_insert() {
+  let dir = tempdir_in(".").unwrap();
+
+  let count = 1000;
+  let keys = (0..count)
+    .map(|i| format!("{i:0>width$}", width = 16))
+    .map(|b| b.as_bytes().to_vec())
+    .collect::<Vec<_>>();
+  let values = (0..count)
+    .map(|i| format!("{i:0>width$}", width = 100))
+    .map(|b| b.as_bytes().to_vec())
+    .map(|mut b| {
+      b.resize(100, b'x');
+      b
+    })
+    .collect::<Vec<_>>();
+  {
+    let engine = build_engine(&dir);
+    {
+      let mut tx = engine.new_tx().unwrap();
+      tx.open_table(TEST_TABLE).unwrap();
+      tx.commit().unwrap();
+    }
+    {
+      let mut tx = engine.new_tx().unwrap();
+      let table = tx.table(TEST_TABLE).unwrap();
+      let mut bulk = table.create_bulk();
+      for i in 0..count {
+        bulk.insert(keys[i].clone(), values[i].clone());
+      }
+      bulk.execute().unwrap();
+      tx.commit().unwrap();
+    }
+
+    let tx = engine.new_tx().unwrap();
+    let table = tx.table(TEST_TABLE).unwrap();
+    for i in 0..count {
+      assert_eq!(table.get(&keys[i]).unwrap().as_deref(), Some(&*values[i]));
+    }
+  }
+  {
+    let engine = build_engine(&dir);
+    {
+      let tx = engine.new_tx().unwrap();
+      let table = tx.table(TEST_TABLE).unwrap();
+      for i in 0..count {
+        assert_eq!(table.get(&keys[i]).unwrap().as_deref(), Some(&*values[i]));
+      }
+    }
+
+    {
+      let mut tx = engine.new_tx().unwrap();
+      let table = tx.table(TEST_TABLE).unwrap();
+      let mut bulk = table.create_bulk();
+      for key in keys.iter().cloned() {
+        bulk.remove(key);
+      }
+      bulk.execute().unwrap();
+      tx.commit().unwrap();
+    }
+    let tx = engine.new_tx().unwrap();
+    let table = tx.table(TEST_TABLE).unwrap();
+    for key in keys.iter() {
+      assert_eq!(table.get(key).unwrap(), None);
+    }
+  }
+
+  let engine = build_engine(&dir);
+  let tx = engine.new_tx().unwrap();
+  let table = tx.table(TEST_TABLE).unwrap();
+  for key in keys.iter() {
+    assert_eq!(table.get(key).unwrap(), None);
+  }
+}
