@@ -67,11 +67,13 @@ impl BenchmarkDB for Engine {
   fn bulk(&self, table: &str, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let mut tx = self.new_tx_timeout(Duration::from_mins(10)).unwrap();
     let table = tx.table(table).unwrap();
-    let mut bulk = table.create_bulk();
-    for (k, v) in kvs {
-      bulk.insert(k.to_vec(), v.to_vec());
+    for chunk in kvs.chunks(1000) {
+      let mut bulk = table.create_bulk();
+      for (k, v) in chunk {
+        bulk.insert(k.to_vec(), v.to_vec());
+      }
+      bulk.execute().unwrap();
     }
-    bulk.execute().unwrap();
     tx.commit().unwrap();
   }
 
