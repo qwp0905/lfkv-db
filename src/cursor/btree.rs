@@ -672,7 +672,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       }
       FindSlotResult::Insert(pos) => {
         if !create {
-          return Ok(InsertState::Break(WriteResult::new(false)));
+          return Ok(InsertState::Break);
         }
         (pos, false, op)
       }
@@ -687,17 +687,15 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     } else {
       leaf.insert_at(pos, key.to_vec(), new_record);
     };
-    let mut result = WriteResult::new(false);
 
     let Some(split) = leaf.split_if_needed() else {
-      return Ok(InsertState::Break(result));
+      return Ok(InsertState::Break);
     };
 
-    result.splitted = true;
     let mid_key = split.top().clone();
     let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
     leaf.set_next(mid_key.clone(), split_ptr);
-    Ok(InsertState::Split(mid_key, split_ptr, result))
+    Ok(InsertState::Split(mid_key, split_ptr))
   }
 
   fn drain_bulk_once(
@@ -707,7 +705,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     mut must_apply: KeyPair,
     bulk: &mut BulkOp,
     stack: Vec<Pointer>,
-  ) -> Result<Vec<WriteResult>> {
+  ) -> Result<BulkResult> {
     let mut states = Vec::new();
     let mut ptr = leaf_ptr;
     let mut guards = Vec::new();
@@ -721,13 +719,11 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
           InsertState::Move(p, op) => {
             return Ok(BulkApply::Move(p, KeyPair(key, op, create)))
           }
-          InsertState::Break(result) => states.push(ApplyState::Ok(result)),
+          InsertState::Break => states.push(ApplyState::Ok),
           InsertState::Conflict(i, op) => {
             return Ok(BulkApply::Conflict(i, KeyPair(key, op, create)))
           }
-          InsertState::Split(k, p, result) => {
-            states.push(ApplyState::Split(k, p, result))
-          }
+          InsertState::Split(k, p) => states.push(ApplyState::Split(k, p)),
           InsertState::CopyOld(copy_old) => {
             states.push(ApplyState::CopyOld(key, copy_old))
           }
@@ -738,14 +734,12 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
         {
           match self.bulk_apply_at_leaf(table, &key, op, create, leaf, &mut guards)? {
             InsertState::Move(_, _) => unreachable!(),
-            InsertState::Break(result) => states.push(ApplyState::Ok(result)),
+            InsertState::Break => states.push(ApplyState::Ok),
             InsertState::Conflict(i, op) => {
               self.0.serialize_and_log(slot, &node, table)?;
               return Ok(BulkApply::Conflict(i, KeyPair(key, op, create)));
             }
-            InsertState::Split(k, p, result) => {
-              states.push(ApplyState::Split(k, p, result))
-            }
+            InsertState::Split(k, p) => states.push(ApplyState::Split(k, p)),
             InsertState::CopyOld(copy_old) => {
               states.push(ApplyState::CopyOld(key, copy_old))
             }
@@ -774,36 +768,24 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
         BulkApply::Ok => {}
       };
 
-      let len = states.len();
-      let mut results = Vec::with_capacity(len);
-      let sparse = results.spare_capacity_mut();
+      let mut result = BulkResult::new();
       let mut copy = Vec::new();
-      let mut copy_i = Vec::new();
-      for (i, state) in states.into_iter().enumerate() {
+      for state in states {
         match state {
-          ApplyState::Ok(result) => {
-            sparse[i].write(result);
-          }
-          ApplyState::Split(k, p, result) => {
+          ApplyState::Ok => {}
+          ApplyState::Split(k, p) => {
             self.propagate_split(k, p, stack.clone(), table)?;
-            sparse[i].write(result);
+            result.splitted += 1;
           }
           ApplyState::CopyOld(key, copy_old) => {
             copy.push((key, copy_old));
-            copy_i.push(i);
           }
         }
       }
 
-      for (i, result) in self
-        .copy_and_update(leaf_ptr, table, stack, copy.into_iter())?
-        .into_iter()
-        .enumerate()
-      {
-        sparse[copy_i[i]].write(result);
-      }
-      unsafe { results.set_len(len) };
-      return Ok(results);
+      result.splitted +=
+        self.copy_and_update(leaf_ptr, table, stack, copy.into_iter())?;
+      return Ok(result);
     }
   }
 
@@ -837,7 +819,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       }
       NodeFindResult::NotFound(pos) => {
         if !create {
-          return Ok(InsertState::Break(WriteResult::new(false)));
+          return Ok(InsertState::Break);
         }
         (leaf.into_owned()?, pos, false)
       }
@@ -851,20 +833,18 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     } else {
       node.insert_at(pos, key.to_vec(), new_record);
     };
-    let mut result = WriteResult::new(false);
 
     let Some(split) = node.split_if_needed() else {
       self.0.serialize_and_log(slot, &node.into_node(), table)?;
-      return Ok(InsertState::Break(result));
+      return Ok(InsertState::Break);
     };
-    result.splitted = true;
 
     let mid_key = split.top().clone();
     let split_ptr = self.0.alloc_and_log(&split.into_node(), table)?;
 
     node.set_next(mid_key.clone(), split_ptr);
     self.0.serialize_and_log(slot, &node.into_node(), table)?;
-    Ok(InsertState::Split(mid_key, split_ptr, result))
+    Ok(InsertState::Split(mid_key, split_ptr))
   }
 
   /**
@@ -894,15 +874,15 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
 
       match state {
         InsertState::Move(p, o) => (ptr, op) = (p, o),
-        InsertState::Break(result) => return Ok(result),
-        InsertState::Split(k, p, result) => {
+        InsertState::Break => return Ok(WriteResult::new(false)),
+        InsertState::Split(k, p) => {
           self.propagate_split(k.clone(), p, stack, table)?;
-          return Ok(result);
+          return Ok(WriteResult::new(true));
         }
         InsertState::CopyOld(cmd) => {
           return self
             .copy_and_update(ptr, table, stack, Some((key.to_vec(), cmd)).into_iter())
-            .map(|mut v| v.pop().unwrap_or_else(|| unreachable!()))
+            .map(|c| WriteResult::new(c > 0))
         }
         InsertState::Conflict(i, o) => {
           match self.0.resolve_conflict(i) {
@@ -926,11 +906,11 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     table: &TableHandleRef,
     stack: Vec<Pointer>,
     bulk: impl ExactSizeIterator<Item = (StaticKey, CopyOld<'a>)>,
-  ) -> Result<Vec<WriteResult>> {
+  ) -> Result<usize> {
     enum State<'a> {
       Move(Pointer, WriteOp),
-      Break(WriteResult, Option<BlobAppendGuard<'a>>),
-      Split(StaticKey, Pointer, WriteResult, Option<BlobAppendGuard<'a>>),
+      Break(Option<BlobAppendGuard<'a>>),
+      Split(StaticKey, Pointer, Option<BlobAppendGuard<'a>>),
     }
 
     fn complete_leaf_once<'a, Policy: CreatablePolicy + Sync>(
@@ -955,24 +935,17 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       leaf.alloc_entry_at(pos, entry_ptr);
 
       let Some(split) = leaf.split_if_needed() else {
-        return Ok(State::Break(WriteResult::new(false), guard));
+        return Ok(State::Break(guard));
       };
 
       let mid_key = split.top().clone();
       let split_ptr = index.0.alloc_and_log(&split.into_node(), table)?;
 
       leaf.set_next(mid_key.clone(), split_ptr);
-      Ok(State::Split(
-        mid_key,
-        split_ptr,
-        WriteResult::new(true),
-        guard,
-      ))
+      Ok(State::Split(mid_key, split_ptr, guard))
     }
 
     let mut records = VecDeque::with_capacity(bulk.len());
-    let mut results = Vec::with_capacity(bulk.len());
-
     for (
       key,
       CopyOld {
@@ -1005,14 +978,12 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
             let leaf = node.as_leaf_mut()?;
             match complete_leaf_once(self, leaf, &key, operation, entry_ptr, table)? {
               State::Move(p, op) => return Result::Ok(Err((p, op, insert_guard))),
-              State::Break(result, guard) => {
+              State::Break(guard) => {
                 guards.push((insert_guard, guard));
-                results.push(result);
               }
-              State::Split(k, p, result, guard) => {
+              State::Split(k, p, guard) => {
                 guards.push((insert_guard, guard));
                 splits.push((k, p));
-                results.push(result);
               }
             };
 
@@ -1021,14 +992,12 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
             {
               match complete_leaf_once(self, leaf, &key, operation, entry_ptr, table)? {
                 State::Move(_, _) => unreachable!(),
-                State::Break(result, guard) => {
+                State::Break(guard) => {
                   guards.push((insert_guard, guard));
-                  results.push(result);
                 }
-                State::Split(k, p, result, guard) => {
+                State::Split(k, p, guard) => {
                   guards.push((insert_guard, guard));
                   splits.push((k, p));
-                  results.push(result);
                 }
               };
             }
@@ -1043,10 +1012,11 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       }
     }
     drop(guards);
+    let splitted_count = splits.len();
     for (k, p) in splits {
       self.propagate_split(k, p, stack.clone(), table)?;
     }
-    Ok(results)
+    Ok(splitted_count)
   }
 
   /**
@@ -1124,7 +1094,7 @@ impl<'a, Policy> BulkExecutor<'a, Policy> {
   }
 }
 impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
-  pub fn drain_once(&mut self) -> Result<Option<Vec<WriteResult>>> {
+  pub fn drain_once(&mut self) -> Result<Option<BulkResult>> {
     if self.bulk.is_empty() {
       return Ok(None);
     }
@@ -1178,6 +1148,15 @@ impl WriteResult {
   }
 }
 
+pub struct BulkResult {
+  pub splitted: usize,
+}
+impl BulkResult {
+  const fn new() -> Self {
+    Self { splitted: 0 }
+  }
+}
+
 pub enum WriteOp {
   Insert(Vec<u8>),
   Remove,
@@ -1207,15 +1186,15 @@ impl<'a> CopyOld<'a> {
 
 enum InsertState<'a> {
   Move(Pointer, WriteOp),
-  Break(WriteResult),
+  Break,
   Conflict(TxId, WriteOp),
-  Split(StaticKey, Pointer, WriteResult),
+  Split(StaticKey, Pointer),
   CopyOld(CopyOld<'a>),
 }
 
 enum ApplyState<'a> {
-  Ok(WriteResult),
-  Split(StaticKey, Pointer, WriteResult),
+  Ok,
+  Split(StaticKey, Pointer),
   CopyOld(StaticKey, CopyOld<'a>),
 }
 

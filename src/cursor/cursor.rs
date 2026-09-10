@@ -305,7 +305,7 @@ impl<'a> Bulk<'a> {
   pub fn execute(self) -> Result {
     let mut executor = self.index.bulk_executor(self.inner, self.table);
     while let Some(result) = executor.drain_once()? {
-      for _ in result.into_iter().filter(|r| r.splitted) {
+      for _ in 0..result.splitted {
         self.metrics.btree_split.inc();
       }
     }
