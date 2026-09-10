@@ -1,5 +1,5 @@
 use std::{
-  collections::{BinaryHeap, VecDeque},
+  collections::{BTreeSet, VecDeque},
   mem::replace,
   ops::Bound,
 };
@@ -1280,17 +1280,17 @@ impl PartialOrd for KeyPair {
 }
 impl Ord for KeyPair {
   fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-    other.0.cmp(&self.0)
+    Ord::cmp(&self.0, &other.0)
   }
 }
-pub struct BulkOp(BinaryHeap<KeyPair>);
+pub struct BulkOp(BTreeSet<KeyPair>);
 impl BulkOp {
   pub const fn new() -> Self {
-    Self(BinaryHeap::new())
+    Self(BTreeSet::new())
   }
 
   pub fn append(&mut self, key: StaticKey, op: WriteOp, create: bool) {
-    self.0.push(KeyPair(key, op, create));
+    self.0.replace(KeyPair(key, op, create));
   }
 
   pub fn len(&self) -> usize {
@@ -1301,14 +1301,14 @@ impl BulkOp {
   }
 
   fn pop_if(&mut self, f: impl FnOnce(StaticKeyRef) -> bool) -> Option<KeyPair> {
-    f(self.peek_key()?).then(|| self.0.pop().unwrap_or_else(|| unreachable!()))
+    f(self.peek_key()?).then(|| self.pop().unwrap_or_else(|| unreachable!()))
   }
   fn pop(&mut self) -> Option<KeyPair> {
-    self.0.pop()
+    self.0.pop_first()
   }
 
   fn peek_key(&self) -> Option<StaticKeyRef<'_>> {
-    let KeyPair(k, _, _) = self.0.peek()?;
+    let KeyPair(k, _, _) = self.0.first()?;
     Some(k)
   }
 }
