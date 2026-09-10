@@ -330,11 +330,17 @@ impl<'a> InternalNodeView<'a> {
   pub const fn len(&self) -> usize {
     self.len
   }
-  pub fn get_right(&self) -> Option<(StaticKey, Pointer)> {
+  pub fn get_right(&self) -> Option<(StaticKeyRef<'_>, Pointer)> {
     self
       .right
       .as_ref()
-      .map(|(p, range)| (self.page.copy_range(range.clone()), *p))
+      .map(|(p, range)| (self.page.range(range.clone()), *p))
+  }
+  pub fn get_right_key(&self) -> Option<StaticKeyRef<'_>> {
+    self
+      .right
+      .as_ref()
+      .map(|(_, range)| self.page.range(range.clone()))
   }
 
   pub fn get_all_child(&self) -> Result<Vec<Pointer>> {

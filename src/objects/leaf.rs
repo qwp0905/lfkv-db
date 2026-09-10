@@ -222,6 +222,9 @@ impl LeafNode {
       Err(i) => FindSlotResult::Insert(i),
     }
   }
+  pub fn clone_next_key(&self) -> Option<StaticKey> {
+    self.next.as_ref().map(|(_, k)| k).cloned()
+  }
 }
 
 pub enum FindSlotResult {
@@ -372,6 +375,10 @@ impl<'a> LeafNodeView<'a> {
       return None;
     };
     Some((*p, self.page.range(range.clone())))
+  }
+  pub fn clone_next_key(&self) -> Option<StaticKey> {
+    let (_, range) = self.next.as_ref()?;
+    Some(self.page.copy_range(range.clone()))
   }
 }
 
