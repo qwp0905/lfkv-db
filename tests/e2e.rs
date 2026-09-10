@@ -10,7 +10,7 @@ use std::{
 };
 
 use crossbeam::channel::{unbounded, Sender};
-use lfdb::{Engine, EngineBuilder, Error, VecRef};
+use lfdb::{BulkResult, Engine, EngineBuilder, Error, VecRef};
 use log::Log;
 use rand::rngs::StdRng;
 use rand::{rng, seq::IteratorRandom};
@@ -1942,7 +1942,9 @@ fn test_bulk_insert() {
       for i in 0..count {
         bulk.insert(keys[i].clone(), values[i].clone());
       }
-      bulk.execute().unwrap();
+      for result in bulk.execute().unwrap() {
+        matches!(result, BulkResult::Insert(r) if r.inserted);
+      }
       tx.commit().unwrap();
     }
 
