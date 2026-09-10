@@ -38,25 +38,16 @@ impl<Policy> BTreeIndex<Policy> {
   }
 }
 impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
-  fn get_root(&self, table: &TableHandleRef) -> Result<Pointer> {
-    let root = self
+  fn read_header(&self, table: &TableHandleRef) -> Result<TreeHeader> {
+    self
       .0
       .fetch_slot(HEADER_POINTER, table)?
       .for_read()
       .as_ref()
-      .deserialize::<TreeHeader>()?
-      .get_root();
-    Ok(root)
+      .deserialize()
   }
   pub fn get(&self, key: StaticKeyRef, table: &TableHandleRef) -> Result<GetResult> {
-    let mut ptr = self
-      .0
-      .fetch_slot(HEADER_POINTER, table)?
-      .for_read()
-      .as_ref()
-      .deserialize::<TreeHeader>()?
-      .get_root();
-
+    let mut ptr = self.read_header(table)?.get_root();
     loop {
       let slot = self.0.fetch_slot(ptr, table)?.for_read();
       match slot.as_ref().view::<BTreeNodeView>()? {
@@ -113,14 +104,7 @@ impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
     key: StaticKeyRef,
     table: &TableHandleRef,
   ) -> Result<LookupResult> {
-    let mut ptr = self
-      .0
-      .fetch_slot(HEADER_POINTER, table)?
-      .for_read()
-      .as_ref()
-      .deserialize::<TreeHeader>()?
-      .get_root();
-
+    let mut ptr = self.read_header(table)?.get_root();
     loop {
       let slot = self.0.fetch_slot(ptr, table)?.for_read();
       match slot.as_ref().view::<BTreeNodeView>()? {
@@ -204,15 +188,9 @@ impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
     key: StaticKeyRef,
     table: &TableHandleRef,
   ) -> Result<(Pointer, Vec<Pointer>)> {
-    let (mut ptr, height) = {
-      let header = self
-        .0
-        .fetch_slot(HEADER_POINTER, table)?
-        .for_read()
-        .as_ref()
-        .deserialize::<TreeHeader>()?;
-      (header.get_root(), header.get_height())
-    };
+    let header = self.read_header(table)?;
+    let mut ptr = header.get_root();
+    let height = header.get_height();
     let mut stack = vec![];
 
     while let BTreeNodeView::Internal(node) = self
@@ -596,7 +574,7 @@ impl<Policy: WritablePolicy + Sync> BTreeIndex<Policy> {
 
       let start = match stack.pop() {
         Some((_, p)) => p,
-        None => self.get_root(table)?,
+        None => self.read_header(table)?.get_root(),
       };
       let ptr = self.fill_stack_from(current, table, start, &mut stack)?;
 
@@ -937,7 +915,7 @@ impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
 
     let start = match self.stack.pop() {
       Some((_, p)) => p,
-      None => self.index.get_root(&self.table)?,
+      None => self.index.read_header(&self.table)?.get_root(),
     };
 
     let leaf_ptr =
