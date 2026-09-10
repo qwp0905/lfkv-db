@@ -1225,10 +1225,6 @@ impl BulkOp {
     self.0.replace(KeyPair(key, op, create));
   }
 
-  pub fn len(&self) -> usize {
-    self.0.len()
-  }
-
   fn drain_all(self) -> BulkDrain {
     BulkDrain(self.0.into_iter().peekable())
   }
