@@ -209,7 +209,7 @@ impl LeafNode {
   pub fn top(&self) -> &StaticKey {
     &self.entries[0].key
   }
-  pub fn find_slot(&self, key: StaticKeyRef) -> FindSlotResult {
+  pub fn find_slot(&self, key: StaticKeyRef) -> FindSlotResult<'_> {
     if let Some((next, high)) = &self.next {
       // B-link right move: the caller may have reached a node whose high key no
       // longer covers this key. In that case the insert belongs to the right sibling.
@@ -218,16 +218,18 @@ impl LeafNode {
       }
     }
     match self.entries.binary_search_by(|r| (*r.key).cmp(key)) {
-      Ok(i) => FindSlotResult::Replace(i),
+      Ok(i) => FindSlotResult::Replace(i, &self.entries[i].record, self.entries[i].next),
       Err(i) => FindSlotResult::Insert(i),
     }
   }
+  pub fn get_next_key(&self) -> Option<StaticKeyRef<'_>> {
+    self.next.as_ref().map(|(_, k)| &**k)
+  }
 }
 
-pub enum FindSlotResult {
-  Replace(usize),
+pub enum FindSlotResult<'a> {
+  Replace(usize, &'a VersionRecord, Option<Pointer>),
   Move(Pointer),
-  #[allow(unused)]
   Insert(usize),
 }
 

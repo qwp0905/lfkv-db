@@ -111,6 +111,19 @@ impl VersionRecord {
     Ok(Self::new(owner, version, data))
   }
 }
+impl Clone for VersionRecord {
+  fn clone(&self) -> Self {
+    Self {
+      owner: self.owner,
+      version: self.version,
+      data: match &self.data {
+        RecordData::Data(data) => RecordData::Data(data.clone()),
+        RecordData::Blob(id, offset, len) => RecordData::Blob(*id, *offset, *len),
+        RecordData::Tombstone => RecordData::Tombstone,
+      },
+    }
+  }
+}
 
 #[derive(Debug)]
 pub enum RecordDataView {

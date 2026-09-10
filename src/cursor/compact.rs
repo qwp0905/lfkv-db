@@ -530,10 +530,16 @@ impl CompactionWorker {
       None => self.old_index.snapshot(old.handle())?,
     };
 
+    const CAP: usize = 1000;
+    let mut bulk = Vec::with_capacity(CAP);
     while let Some(snap) = snapshotter.next_snapshot()? {
-      self.new_index.apply_snapshot(snap, new.handle())?;
+      bulk.push(snap);
+      if bulk.len() >= CAP {
+        self.new_index.apply_snapshot_bulk(bulk, new.handle())?;
+        bulk = Vec::with_capacity(CAP);
+      }
     }
-
+    self.new_index.apply_snapshot_bulk(bulk, new.handle())?;
     self.remove_compaction(&cycle.metadata)?;
     Ok(())
   }
@@ -573,16 +579,17 @@ impl CompactionWorker {
       return Ok(true);
     }
 
+    let mut bulk = Vec::new();
     for _ in 0..batch_size {
       let Some(snap) = snapshotter.next_snapshot()? else {
         break;
       };
 
-      // to protect stale pointer from gc.
-      let _guard = pin();
-      self.new_index.apply_snapshot(snap, new.handle())?;
+      bulk.push(snap);
     }
 
+    let _guard = pin();
+    self.new_index.apply_snapshot_bulk(bulk, new.handle())?;
     Ok(false)
   }
 

@@ -274,7 +274,7 @@ fn recovery_table(
     {
       BTreeNodeView::Internal(node) => {
         if let Some((k, p)) = node.get_right() {
-          half_split.insert(p, (Some(k), level));
+          half_split.insert(p, (Some(k.to_vec()), level));
           node_stack.push((p, level));
         }
         for c in node.get_all_child()? {
