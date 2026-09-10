@@ -83,14 +83,7 @@ for key in some_remove {
     bulk.remove(key);
 }
 
-// Result of each operations.
-for result in bulk.execute()? {
-    match BulkResult {
-        Insert(result) => { .. },
-        Remove(result) => { .. },
-    };
-}
-
+bulk.execute()?
 tx.commit()?;
 ```
 

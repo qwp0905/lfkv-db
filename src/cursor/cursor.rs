@@ -9,8 +9,8 @@
 use std::ops::{Bound, RangeBounds};
 
 use super::{
-  BTreeIndex, BTreeIter, BTreeRevIter, BulkExecResult, BulkOp, GetResult, LookupResult,
-  MergeSortable, MergeSorted, SortDirection, VecRef, WriteOp, WriteResult,
+  BTreeIndex, BTreeIter, BTreeRevIter, BulkOp, GetResult, LookupResult, MergeSortable,
+  MergeSorted, SortDirection, VecRef, WriteOp, WriteResult,
 };
 use crate::{
   measure,
@@ -107,7 +107,7 @@ impl<'a> Cursor<'a> {
     let table = self.compaction.as_ref().unwrap_or(&self.table);
     self.index.insert(key, value, table)
   }
-  pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result<InsertResult> {
+  pub fn insert(&self, key: Vec<u8>, value: Vec<u8>) -> Result {
     if !self.context.is_available() {
       return Err(Error::TransactionClosed);
     }
@@ -123,10 +123,7 @@ impl<'a> Cursor<'a> {
     if result.splitted {
       self.metrics.btree_split.inc();
     }
-    Ok(InsertResult {
-      updated: result.updated,
-      inserted: result.inserted,
-    })
+    Ok(())
   }
 
   /**
@@ -144,7 +141,7 @@ impl<'a> Cursor<'a> {
     }
     self.index.remove(key, &self.table)
   }
-  pub fn remove<K: AsRef<[u8]>>(&self, key: &K) -> Result<RemoveResult> {
+  pub fn remove<K: AsRef<[u8]>>(&self, key: &K) -> Result {
     if !self.context.is_available() {
       return Err(Error::TransactionClosed);
     }
@@ -157,9 +154,7 @@ impl<'a> Cursor<'a> {
     if result.splitted {
       self.metrics.btree_split.inc();
     }
-    Ok(RemoveResult {
-      removed: result.updated || result.inserted,
-    })
+    Ok(())
   }
 
   pub fn range<'b, K>(
@@ -274,22 +269,6 @@ impl<'a, Iter: MergeSortable> CursorIter<'a, Iter> {
   }
 }
 
-/**
- * Result of an insert operation.
- *
- * `updated` and `inserted` are logically exclusive; both are exposed so callers
- * can tell whether the write replaced an existing logical key or created a new
- * one.
- */
-pub struct InsertResult {
-  pub updated: bool,
-  pub inserted: bool,
-}
-
-pub struct RemoveResult {
-  pub removed: bool,
-}
-
 pub struct Bulk<'a> {
   index: &'a BTreeIndex<&'a TxContext<'a>>,
   table: &'a TableHandleRef,
@@ -323,38 +302,13 @@ impl<'a> Bulk<'a> {
     self
   }
 
-  pub fn execute(self) -> Result<Vec<BulkResult>> {
-    let mut results = Vec::with_capacity(self.inner.len());
+  pub fn execute(self) -> Result {
     let mut executor = self.index.bulk_executor(self.inner, self.table);
     while let Some(result) = executor.drain_once()? {
-      for result in result {
-        let result = match result {
-          BulkExecResult::Insert(r) => {
-            if r.splitted {
-              self.metrics.btree_split.inc();
-            }
-            BulkResult::Insert(InsertResult {
-              updated: r.updated,
-              inserted: r.inserted,
-            })
-          }
-          BulkExecResult::Remove(r) => {
-            if r.splitted {
-              self.metrics.btree_split.inc();
-            }
-            BulkResult::Remove(RemoveResult {
-              removed: r.updated || r.inserted,
-            })
-          }
-        };
-        results.push(result);
+      for _ in result.into_iter().filter(|r| r.splitted) {
+        self.metrics.btree_split.inc();
       }
     }
-    Ok(results)
+    Ok(())
   }
-}
-
-pub enum BulkResult {
-  Insert(InsertResult),
-  Remove(RemoveResult),
 }

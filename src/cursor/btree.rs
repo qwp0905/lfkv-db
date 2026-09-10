@@ -672,7 +672,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       }
       FindSlotResult::Insert(pos) => {
         if !create {
-          return Ok(InsertState::Break(WriteResult::not_matched()));
+          return Ok(InsertState::Break(WriteResult::new(false)));
         }
         (pos, false, op)
       }
@@ -682,13 +682,12 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     guards.push(guard);
     let new_record =
       VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
-    let mut result = if found {
+    if found {
       leaf.replace_at(pos, new_record);
-      WriteResult::updated(false)
     } else {
       leaf.insert_at(pos, key.to_vec(), new_record);
-      WriteResult::inserted(false)
     };
+    let mut result = WriteResult::new(false);
 
     let Some(split) = leaf.split_if_needed() else {
       return Ok(InsertState::Break(result));
@@ -708,7 +707,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     mut must_apply: KeyPair,
     bulk: &mut BulkOp,
     stack: Vec<Pointer>,
-  ) -> Result<Vec<BulkExecResult>> {
+  ) -> Result<Vec<WriteResult>> {
     let mut states = Vec::new();
     let mut ptr = leaf_ptr;
     let mut guards = Vec::new();
@@ -718,41 +717,37 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
         let leaf = node.as_leaf_mut()?;
 
         let KeyPair(key, op, create) = must_apply;
-        let is_insert = matches!(op, WriteOp::Insert(_));
         match self.bulk_apply_at_leaf(table, &key, op, create, leaf, &mut guards)? {
           InsertState::Move(p, op) => {
             return Ok(BulkApply::Move(p, KeyPair(key, op, create)))
           }
-          InsertState::Break(result) => states.push((ApplyState::Ok(result), is_insert)),
+          InsertState::Break(result) => states.push(ApplyState::Ok(result)),
           InsertState::Conflict(i, op) => {
             return Ok(BulkApply::Conflict(i, KeyPair(key, op, create)))
           }
           InsertState::Split(k, p, result) => {
-            states.push((ApplyState::Split(k, p, result), is_insert))
+            states.push(ApplyState::Split(k, p, result))
           }
           InsertState::CopyOld(copy_old) => {
-            states.push((ApplyState::CopyOld(key, copy_old), is_insert))
+            states.push(ApplyState::CopyOld(key, copy_old))
           }
         }
 
         while let Some(KeyPair(key, op, create)) =
           bulk.pop_if(|k| leaf.get_next_key().is_none_or(|r| k < r))
         {
-          let is_insert = matches!(op, WriteOp::Insert(_));
           match self.bulk_apply_at_leaf(table, &key, op, create, leaf, &mut guards)? {
             InsertState::Move(_, _) => unreachable!(),
-            InsertState::Break(result) => {
-              states.push((ApplyState::Ok(result), is_insert))
-            }
+            InsertState::Break(result) => states.push(ApplyState::Ok(result)),
             InsertState::Conflict(i, op) => {
               self.0.serialize_and_log(slot, &node, table)?;
               return Ok(BulkApply::Conflict(i, KeyPair(key, op, create)));
             }
             InsertState::Split(k, p, result) => {
-              states.push((ApplyState::Split(k, p, result), is_insert))
+              states.push(ApplyState::Split(k, p, result))
             }
             InsertState::CopyOld(copy_old) => {
-              states.push((ApplyState::CopyOld(key, copy_old), is_insert))
+              states.push(ApplyState::CopyOld(key, copy_old))
             }
           }
         }
@@ -784,18 +779,18 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       let sparse = results.spare_capacity_mut();
       let mut copy = Vec::new();
       let mut copy_i = Vec::new();
-      for (i, (state, is_insert)) in states.into_iter().enumerate() {
+      for (i, state) in states.into_iter().enumerate() {
         match state {
           ApplyState::Ok(result) => {
-            sparse[i].write(BulkExecResult::new(result, is_insert));
+            sparse[i].write(result);
           }
           ApplyState::Split(k, p, result) => {
             self.propagate_split(k, p, stack.clone(), table)?;
-            sparse[i].write(BulkExecResult::new(result, is_insert));
+            sparse[i].write(result);
           }
           ApplyState::CopyOld(key, copy_old) => {
             copy.push((key, copy_old));
-            copy_i.push((i, is_insert));
+            copy_i.push(i);
           }
         }
       }
@@ -805,8 +800,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
         .into_iter()
         .enumerate()
       {
-        let (i, is_insert) = copy_i[i];
-        sparse[i].write(BulkExecResult::new(result, is_insert));
+        sparse[copy_i[i]].write(result);
       }
       unsafe { results.set_len(len) };
       return Ok(results);
@@ -843,7 +837,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       }
       NodeFindResult::NotFound(pos) => {
         if !create {
-          return Ok(InsertState::Break(WriteResult::not_matched()));
+          return Ok(InsertState::Break(WriteResult::new(false)));
         }
         (leaf.into_owned()?, pos, false)
       }
@@ -852,13 +846,12 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     let (record, _guard) = self.create_record(op)?;
     let new_record =
       VersionRecord::new(self.0.current_owner(), self.0.current_version(), record);
-    let mut result = if found {
+    if found {
       node.replace_at(pos, new_record);
-      WriteResult::updated(false)
     } else {
       node.insert_at(pos, key.to_vec(), new_record);
-      WriteResult::inserted(false)
     };
+    let mut result = WriteResult::new(false);
 
     let Some(split) = node.split_if_needed() else {
       self.0.serialize_and_log(slot, &node.into_node(), table)?;
@@ -962,7 +955,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       leaf.alloc_entry_at(pos, entry_ptr);
 
       let Some(split) = leaf.split_if_needed() else {
-        return Ok(State::Break(WriteResult::updated(false), guard));
+        return Ok(State::Break(WriteResult::new(false), guard));
       };
 
       let mid_key = split.top().clone();
@@ -972,7 +965,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
       Ok(State::Split(
         mid_key,
         split_ptr,
-        WriteResult::updated(true),
+        WriteResult::new(true),
         guard,
       ))
     }
@@ -1131,7 +1124,7 @@ impl<'a, Policy> BulkExecutor<'a, Policy> {
   }
 }
 impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
-  pub fn drain_once(&mut self) -> Result<Option<Vec<BulkExecResult>>> {
+  pub fn drain_once(&mut self) -> Result<Option<Vec<WriteResult>>> {
     if self.bulk.is_empty() {
       return Ok(None);
     }
@@ -1165,20 +1158,6 @@ impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
   }
 }
 
-pub enum BulkExecResult {
-  Insert(WriteResult),
-  Remove(WriteResult),
-}
-impl BulkExecResult {
-  const fn new(result: WriteResult, is_insert: bool) -> Self {
-    if is_insert {
-      Self::Insert(result)
-    } else {
-      Self::Remove(result)
-    }
-  }
-}
-
 pub enum LookupResult {
   Absent,
   Deleted,
@@ -1191,31 +1170,11 @@ pub enum GetResult {
 }
 
 pub struct WriteResult {
-  pub inserted: bool,
-  pub updated: bool,
   pub splitted: bool,
 }
 impl WriteResult {
-  const fn inserted(splitted: bool) -> Self {
-    Self {
-      inserted: true,
-      updated: false,
-      splitted,
-    }
-  }
-  const fn updated(splitted: bool) -> Self {
-    Self {
-      inserted: false,
-      updated: true,
-      splitted,
-    }
-  }
-  const fn not_matched() -> Self {
-    Self {
-      inserted: false,
-      updated: false,
-      splitted: false,
-    }
+  const fn new(splitted: bool) -> Self {
+    Self { splitted }
   }
 }
 
