@@ -1915,7 +1915,7 @@ fn test_repeated_reopen() {
 fn test_bulk_insert() {
   let dir = tempdir_in(".").unwrap();
 
-  let count = 1000;
+  let count = 10000;
   let keys = (0..count)
     .map(|i| format!("{i:0>width$}", width = 16))
     .map(|b| b.as_bytes().to_vec())
