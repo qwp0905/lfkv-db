@@ -323,10 +323,6 @@ impl<'a> Bulk<'a> {
     self
   }
 
-  pub fn keys(&self) -> impl Iterator<Item = StaticKeyRef<'_>> + '_ {
-    self.inner.keys()
-  }
-
   pub fn execute(self) -> Result<Vec<BulkResult>> {
     let mut results = Vec::with_capacity(self.inner.len());
     let mut executor = self.index.bulk_executor(self.inner, self.table);

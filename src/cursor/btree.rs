@@ -1311,8 +1311,4 @@ impl BulkOp {
     let KeyPair(k, _, _) = self.0.first()?;
     Some(k)
   }
-
-  pub fn keys(&self) -> impl Iterator<Item = StaticKeyRef<'_>> + '_ {
-    self.0.iter().map(|KeyPair(k, _, _)| &**k)
-  }
 }
