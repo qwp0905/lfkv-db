@@ -39,15 +39,14 @@ impl<Policy> BTreeIndex<Policy> {
 }
 impl<Policy: ReadonlyPolicy> BTreeIndex<Policy> {
   fn get_root(&self, table: &TableHandleRef) -> Result<Pointer> {
-    Ok(
-      self
-        .0
-        .fetch_slot(HEADER_POINTER, table)?
-        .for_read()
-        .as_ref()
-        .deserialize::<TreeHeader>()?
-        .get_root(),
-    )
+    let root = self
+      .0
+      .fetch_slot(HEADER_POINTER, table)?
+      .for_read()
+      .as_ref()
+      .deserialize::<TreeHeader>()?
+      .get_root();
+    Ok(root)
   }
   pub fn get(&self, key: StaticKeyRef, table: &TableHandleRef) -> Result<GetResult> {
     let mut ptr = self
