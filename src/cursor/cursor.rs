@@ -326,27 +326,29 @@ impl<'a> Bulk<'a> {
   pub fn execute(self) -> Result<Vec<BulkResult>> {
     let mut results = Vec::with_capacity(self.inner.len());
     let mut executor = self.index.bulk_executor(self.inner, self.table);
-    while let Some(result) = executor.exec_one()? {
-      let result = match result {
-        BulkExecResult::Insert(r) => {
-          if r.splitted {
-            self.metrics.btree_split.inc();
+    while let Some(result) = executor.drain_once()? {
+      for result in result {
+        let result = match result {
+          BulkExecResult::Insert(r) => {
+            if r.splitted {
+              self.metrics.btree_split.inc();
+            }
+            BulkResult::Insert(InsertResult {
+              updated: r.updated,
+              inserted: r.inserted,
+            })
           }
-          BulkResult::Insert(InsertResult {
-            updated: r.updated,
-            inserted: r.inserted,
-          })
-        }
-        BulkExecResult::Remove(r) => {
-          if r.splitted {
-            self.metrics.btree_split.inc();
+          BulkExecResult::Remove(r) => {
+            if r.splitted {
+              self.metrics.btree_split.inc();
+            }
+            BulkResult::Remove(RemoveResult {
+              removed: r.updated || r.inserted,
+            })
           }
-          BulkResult::Remove(RemoveResult {
-            removed: r.updated || r.inserted,
-          })
-        }
-      };
-      results.push(result);
+        };
+        results.push(result);
+      }
     }
     Ok(results)
   }
