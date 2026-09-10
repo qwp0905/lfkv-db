@@ -1,8 +1,4 @@
-use std::{
-  collections::{BTreeSet, VecDeque},
-  mem::replace,
-  ops::Bound,
-};
+use std::{collections::VecDeque, iter::Peekable, mem::replace, ops::Bound};
 
 use crate::{
   blob::BlobAppendGuard,
@@ -703,7 +699,7 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     leaf_ptr: Pointer,
     table: &TableHandleRef,
     mut must_apply: KeyPair,
-    bulk: &mut BulkOp,
+    bulk: &mut BulkDrain,
     stack: Vec<Pointer>,
   ) -> Result<BulkResult> {
     let mut states = Vec::new();
@@ -1065,20 +1061,20 @@ impl<Policy: CreatablePolicy + Sync> BTreeIndex<Policy> {
     bulk: BulkOp,
     table: &TableHandleRef,
   ) -> BulkExecutor<'_, Policy> {
-    BulkExecutor::new(self, bulk, table.clone())
+    BulkExecutor::new(self, bulk.drain_all(), table.clone())
   }
 }
 
 pub struct BulkExecutor<'a, Policy> {
   index: &'a BTreeIndex<Policy>,
-  bulk: BulkOp,
+  bulk: BulkDrain,
   table: TableHandleRef,
   stack: Vec<(Option<StaticKey>, Pointer)>,
 }
 impl<'a, Policy> BulkExecutor<'a, Policy> {
   const fn new(
     index: &'a BTreeIndex<Policy>,
-    bulk: BulkOp,
+    bulk: BulkDrain,
     table: TableHandleRef,
   ) -> Self {
     Self {
@@ -1095,11 +1091,9 @@ impl<'a, Policy> BulkExecutor<'a, Policy> {
 }
 impl<'a, Policy: CreatablePolicy + Sync> BulkExecutor<'a, Policy> {
   pub fn drain_once(&mut self) -> Result<Option<BulkResult>> {
-    if self.bulk.is_empty() {
+    let Some(KeyPair(current, op, create)) = self.bulk.pop() else {
       return Ok(None);
-    }
-
-    let KeyPair(current, op, create) = self.bulk.pop().unwrap_or_else(|| unreachable!());
+    };
     while self
       .stack
       .pop_if(|(k, _)| k.as_deref().is_some_and(|k| k <= &current))
@@ -1221,10 +1215,10 @@ impl Ord for KeyPair {
     Ord::cmp(&self.0, &other.0)
   }
 }
-pub struct BulkOp(BTreeSet<KeyPair>);
+pub struct BulkOp(std::collections::BTreeSet<KeyPair>);
 impl BulkOp {
   pub const fn new() -> Self {
-    Self(BTreeSet::new())
+    Self(std::collections::BTreeSet::new())
   }
 
   pub fn append(&mut self, key: StaticKey, op: WriteOp, create: bool) {
@@ -1234,19 +1228,17 @@ impl BulkOp {
   pub fn len(&self) -> usize {
     self.0.len()
   }
-  fn is_empty(&self) -> bool {
-    self.0.is_empty()
-  }
 
+  fn drain_all(self) -> BulkDrain {
+    BulkDrain(self.0.into_iter().peekable())
+  }
+}
+struct BulkDrain(Peekable<std::collections::btree_set::IntoIter<KeyPair>>);
+impl BulkDrain {
   fn pop_if(&mut self, f: impl FnOnce(StaticKeyRef) -> bool) -> Option<KeyPair> {
-    f(self.peek_key()?).then(|| self.pop().unwrap_or_else(|| unreachable!()))
+    self.0.next_if(|KeyPair(k, _, _)| f(k))
   }
   fn pop(&mut self) -> Option<KeyPair> {
-    self.0.pop_first()
-  }
-
-  fn peek_key(&self) -> Option<StaticKeyRef<'_>> {
-    let KeyPair(k, _, _) = self.0.first()?;
-    Some(k)
+    self.0.next()
   }
 }
