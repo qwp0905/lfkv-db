@@ -1,14 +1,11 @@
-use std::{
-  sync::Arc,
-  thread::{park, Builder, Thread},
-};
+use std::thread::Builder;
 
 use super::{
   oneshot, Close, Dispatch, ExecutableContext, Execute, OneshotFulfill, SingleFn,
   ThreadSlot, UnwindSpawner,
 };
 
-use crossbeam::{queue::SegQueue, utils::Backoff};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
 type Buffered<T, R> = Vec<(T, Option<OneshotFulfill<R>>)>;
 
@@ -21,14 +18,14 @@ type Buffered<T, R> = Vec<(T, Option<OneshotFulfill<R>>)>;
  */
 const fn make_flush<'a, T, R>(
   mut when_buffered: SingleFn<'a, Vec<T>, R>,
-) -> impl FnMut(&mut Buffered<T, R>) -> bool + 'a
+) -> impl FnMut(&mut Buffered<T, R>) + 'a
 where
   T: Send + 'a,
   R: Send + Clone + 'a,
 {
   move |buffered| {
     if buffered.is_empty() {
-      return false;
+      return;
     }
 
     let (values, waiting): (Vec<_>, Vec<_>) = buffered.drain(..).unzip();
@@ -37,12 +34,11 @@ where
       .into_iter()
       .flatten()
       .for_each(|done| done.fulfill(result.clone()));
-    true
   }
 }
 
 const fn worker_loop<T, R>(
-  queue: Arc<SegQueue<ExecutableContext<T, R>>>,
+  recv: Receiver<ExecutableContext<T, R>>,
   count: usize,
   when_buffered: SingleFn<'static, Vec<T>, R>,
 ) -> impl FnOnce()
@@ -51,33 +47,28 @@ where
   R: Send + Clone,
 {
   move || {
-    let backoff = Backoff::new();
     let mut buffered = Vec::with_capacity(count);
     let mut flush = make_flush(when_buffered);
-
-    loop {
-      while !backoff.is_completed() {
-        for ctx in (0..count).map_while(|_| queue.pop()) {
-          match ctx {
-            ExecutableContext::Work(v, done) => buffered.push((v, Some(done))),
-            ExecutableContext::Dispatch(v) => buffered.push((v, None)),
-            ExecutableContext::Term => {
-              flush(&mut buffered);
-              return;
-            }
-          }
-        }
-
-        if flush(&mut buffered) {
-          backoff.reset();
-          continue;
-        };
-        backoff.snooze();
+    'outer: while let Ok(ctx) = recv.recv() {
+      match ctx {
+        ExecutableContext::Work(v, done) => buffered.push((v, Some(done))),
+        ExecutableContext::Dispatch(v) => buffered.push((v, None)),
+        ExecutableContext::Term => break 'outer,
       }
+      debug_assert_eq!(buffered.len(), 1);
 
-      park();
-      backoff.reset();
+      for ctx in recv.try_iter().take(count - 1) {
+        match ctx {
+          ExecutableContext::Work(v, done) => buffered.push((v, Some(done))),
+          ExecutableContext::Dispatch(v) => buffered.push((v, None)),
+          ExecutableContext::Term => break 'outer,
+        }
+      }
+      debug_assert!(buffered.len() <= count);
+      flush(&mut buffered);
     }
+
+    flush(&mut buffered)
   }
 }
 
@@ -90,8 +81,7 @@ where
  * the queue; after the flush, the worker immediately drains the next batch.
  */
 pub struct BufferingThread<T, R> {
-  queue: Arc<SegQueue<ExecutableContext<T, R>>>,
-  waker: Thread,
+  queue: Sender<ExecutableContext<T, R>>,
   slot: ThreadSlot,
 }
 impl<T, R> BufferingThread<T, R> {
@@ -105,29 +95,25 @@ impl<T, R> BufferingThread<T, R> {
     T: Send + 'static,
     R: Send + Clone + 'static,
   {
-    let queue = Arc::new(SegQueue::new());
+    let (queue, recv) = unbounded();
     let handle = Builder::new()
       .name(name.to_string())
       .stack_size(size)
-      .spawn_unwind(worker_loop(queue.clone(), count, when_buffered));
-    let waker = handle.thread().clone();
+      .spawn_unwind(worker_loop(recv, count, when_buffered));
     Self {
       queue,
-      waker,
       slot: ThreadSlot::new(handle),
     }
   }
 
   fn register(&self, ctx: ExecutableContext<T, R>) {
-    self.queue.push(ctx);
-    self.waker.unpark();
+    self.queue.send(ctx).unwrap();
   }
 }
 impl<T: Send, R: Send> Close for BufferingThread<T, R> {
   fn close(&self) {
     if let Some(th) = self.slot.close() {
-      self.queue.push(ExecutableContext::Term);
-      self.waker.unpark();
+      self.register(ExecutableContext::Term);
       th.join().unwrap();
     }
   }
@@ -147,4 +133,4 @@ impl<T: Send, R: Send> Execute<T, R> for BufferingThread<T, R> {
 
 #[cfg(test)]
 #[path = "tests/buffering.rs"]
-mod buffering;
+mod tests;
