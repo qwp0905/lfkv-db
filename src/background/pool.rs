@@ -7,8 +7,9 @@ use crossbeam::{
   atomic::AtomicCell,
   deque::{Injector, Stealer, Worker},
   queue::SegQueue,
-  utils::Backoff,
 };
+
+use crate::utils::SpinBackoff;
 
 use super::{
   into_task, Close, PendingTask, SharedFn, TaskRef, ThreadSlot, UnwindSpawner,
@@ -51,14 +52,14 @@ const fn worker_loop(
   id: ThreadId,
 ) -> impl FnOnce() {
   move || {
-    let backoff = Backoff::new();
+    let backoff = SpinBackoff::new();
     let size = core.size() - 1;
     let mut cycle = core.create_cycle(id);
 
     loop {
       while !backoff.is_completed() {
         let Some(ctx) = core.pop_or_steal(&local, (&mut cycle).take(size)) else {
-          backoff.snooze();
+          backoff.spin();
           continue;
         };
 
@@ -69,7 +70,6 @@ const fn worker_loop(
         backoff.reset();
       }
 
-      backoff.reset();
       core.try_enqueue_idle(id);
       let Some(ctx) = core.pop_or_steal(&local, (&mut cycle).take(size)) else {
         core.try_park(id);
@@ -81,6 +81,7 @@ const fn worker_loop(
         Context::Task(task_ref) => task_ref.run(),
         Context::Term => return core.drain_task(&local),
       }
+      backoff.reset();
     }
   }
 }
